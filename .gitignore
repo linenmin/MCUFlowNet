@@ -1,0 +1,30 @@
+# Python 缓存与编译产物
+__pycache__/
+*.py[cod]
+*.so
+
+# 虚拟环境与依赖目录
+.venv/
+venv/
+env/
+.env/
+
+# IDE 与编辑器配置
+.vscode/
+.idea/
+
+# 日志与运行输出
+*.log
+proxy_TransNAS/full_run_logs/
+
+# 大型模型或权重文件
+*.pth
+*.pt
+*.ckpt
+*.bin
+
+# 数据集或缓存目录
+NASLib/naslib/data/
+
+
+
