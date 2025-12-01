@@ -222,7 +222,7 @@ def get_loss_fn(task: str):
 # 
 # 
 # 
-def load_transbench_classes():
+def sample_architectures(ss, dataset_api, num_samples: int, seed: int):
     """随机采样若干架构并解析成可前向的模型。"""
     random.seed(seed)  # 控制随机
     torch.manual_seed(seed)  # 控制随机
