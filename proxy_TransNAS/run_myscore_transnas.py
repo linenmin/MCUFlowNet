@@ -1,15 +1,15 @@
 ################################################################################
-# FILE: zico_correlation_sampler.py (Suggested Filename)
-# PURPOSE: Evaluate the correlation between ZiCo (Zero-Shot Proxy) and Ground 
-#          Truth performance on TransNAS-Bench-101.
+# FILE: run_myscore_transnas.py
+# PURPOSE: Evaluate the correlation between C-SWAG Proxy and Ground Truth 
+#          performance on TransNAS-Bench-101.
 #          
 # MODE: This script operates in a **Sampling and Correlation Printing** mode. 
-#       It randomly samples a small number of architectures, computes their ZiCo 
+#       It randomly samples a small number of architectures, computes their C-SWAG 
 #       scores, retrieves their GT scores, and prints the resulting Kendall Tau 
 #       and Spearman correlation coefficients.
 # 
-# AUTHOR: Enmin Lin/ KU Leuven
-# CREATION DATE: November 26, 2025
+# AUTHOR: Your Name / (fill in your affiliation)
+# CREATION DATE: November 30, 2025
 # VERSION: 1.0
 ################################################################################
 
@@ -38,7 +38,9 @@ NASLIB_ROOT = ROOT_DIR / "NASLib"  # NASLib 代码根目录
 sys.path.insert(0, str(ZICO_ROOT))  # 优先导入 ZiCo
 sys.path.insert(0, str(NASLIB_ROOT))  # 再导入 NASLib
 
-from ZeroShotProxy import compute_zico  # ZiCo 核心函数
+# === 关键修改：导入自定义的 C-SWAG Proxy ===
+from compute_myscore import compute_myscore_score as compute_proxy_score
+
 from naslib import utils  # 统一从 utils 取函数
 # 必须导入 ops，因为我们会用到 GenerativeDecoder
 from naslib.search_spaces.core import primitives as ops
@@ -172,87 +174,8 @@ def sample_architectures(ss, dataset_api, num_samples: int, seed: int):
     return samples  # 返回列表
 
 
-# === 新增：自定义的 ZiCo 计算逻辑，修复梯度为 None 的问题 ===
-def getgrad_safe(model: torch.nn.Module, grad_dict: dict, step_iter=0):
-    if step_iter == 0:
-        for name, mod in model.named_modules():
-            if isinstance(mod, torch.nn.Conv2d) or isinstance(mod, torch.nn.Linear):
-                # 关键修复：检查 grad 是否为 None
-                if mod.weight.grad is not None:
-                    grad_dict[name] = [mod.weight.grad.data.cpu().reshape(-1).numpy()]
-    else:
-        for name, mod in model.named_modules():
-            if isinstance(mod, torch.nn.Conv2d) or isinstance(mod, torch.nn.Linear):
-                if mod.weight.grad is not None:
-                    if name in grad_dict: # 确保 key 存在
-                        grad_dict[name].append(mod.weight.grad.data.cpu().reshape(-1).numpy())
-    return grad_dict
-
-def caculate_zico_safe(grad_dict):
-    allgrad_array = None
-    # 如果 grad_dict 为空（比如所有层都没梯度），返回 0
-    if not grad_dict:
-        return 0.0
-        
-    for i, modname in enumerate(grad_dict.keys()):
-        grad_dict[modname] = np.array(grad_dict[modname])
-    
-    nsr_mean_sum_abs = 0
-    
-    for j, modname in enumerate(grad_dict.keys()):
-        nsr_std = np.std(grad_dict[modname], axis=0)
-        if np.sum(nsr_std) == 0: # 避免全0导致的除0警告
-            continue
-            
-        nonzero_idx = np.nonzero(nsr_std)[0]
-        if len(nonzero_idx) == 0:
-            continue
-            
-        nsr_mean_abs = np.mean(np.abs(grad_dict[modname]), axis=0)
-        tmpsum = np.sum(nsr_mean_abs[nonzero_idx] / nsr_std[nonzero_idx])
-        
-        if tmpsum == 0:
-            pass
-        else:
-            nsr_mean_sum_abs += np.log(tmpsum)
-            
-    return nsr_mean_sum_abs
-
-def compute_zico_score(model, train_batches, loss_fn, device: torch.device):
-    """使用安全的 ZiCo 计算实现，替代原始库函数。"""
-    grad_dict = {}
-    model.train()
-    model.to(device)
-    
-    # 确保 loss_fn 在设备上
-    if isinstance(loss_fn, torch.nn.Module):
-        loss_fn.to(device)
-    
-    for i, batch in enumerate(train_batches):
-        model.zero_grad()
-        data, label = batch
-        data = data.to(device)
-        label = label.to(device)
-        
-        # 前向传播
-        logits = model(data)
-        # 计算损失
-        loss = loss_fn(logits, label)
-        # 反向传播
-        loss.backward()
-        
-        # 获取梯度（使用安全版本）
-        grad_dict = getgrad_safe(model, grad_dict, i)
-        
-    # 计算分数
-    res = caculate_zico_safe(grad_dict)
-    return res
-
-# === 新增：自定义的 ZiCo 计算逻辑，修复梯度为 None 的问题 ===
-
-
 def evaluate_task(task: str, ss_name: str, args):
-    """在单个任务上评估 ZiCo 与真值的相关性。"""
+    """在单个任务上评估 C-SWAG 与真值的相关性。"""
     # 动态取 Metric 与搜索空间类
     TransBench101SearchSpaceMicro, TransBench101SearchSpaceMacro, graph_module = load_transbench_classes()  # 取类和模块
     Metric = graph_module.Metric  # 直接使用模块中的 Metric，避免类型不一致
@@ -286,7 +209,7 @@ def evaluate_task(task: str, ss_name: str, args):
     samples = sample_architectures(ss, dataset_api, args.num_samples, args.seed)  # 采样架构
 
     gt_scores = []  # 存储真值
-    zico_scores = []  # 存储 ZiCo
+    proxy_scores = []  # 存储 C-SWAG
     arch_hashes = []  # 存储每个架构的哈希（op_indices）
     start = time.time()  # 计时开始
     for graph in samples:
@@ -301,32 +224,35 @@ def evaluate_task(task: str, ss_name: str, args):
         gt = graph.query(metric=Metric.VAL_ACCURACY, dataset=task, dataset_api=dataset_api)  # 取真值
         gt_scores.append(gt)  # 记录真值
         if args.dry_run:
-            zico_scores.append(0.0)  # 仅占位
+            proxy_scores.append(0.0)  # 仅占位
             continue  # 跳过计算
         model = graph.to(args.device)  # 取具体模型并放设备
         model.train()  # 训练模式
-        zc = compute_zico_score(model, train_batches, loss_fn, args.device)  # 计算 ZiCo
-        zico_scores.append(zc)  # 记录分数
+        
+        # === 关键修改：调用 C-SWAG Proxy ===
+        zc = compute_proxy_score(model, train_batches, loss_fn, args.device)  # 计算 Proxy 分数
+        
+        proxy_scores.append(zc)  # 记录分数
         del model  # 释放模型
         torch.cuda.empty_cache()  # 清理显存
 
     elapsed = time.time() - start  # 总耗时
     # 相关性评估
-    corr = compute_scores(ytest=gt_scores, test_pred=zico_scores)  # 计算相关性
+    corr = compute_scores(ytest=gt_scores, test_pred=proxy_scores)  # 计算相关性
     return {
         "task": task,  # 任务名
         "kendalltau": corr.get("kendalltau"),  # Kendall Tau
         "spearman": corr.get("spearman"),  # Spearman
         "time": elapsed,  # 用时
         "gt": gt_scores,  # 真值列表（与架构顺序一致）
-        "pred": zico_scores,  # 预测列表（与架构顺序一致）
+        "pred": proxy_scores,  # 预测列表（与架构顺序一致）
         "arch_hash": arch_hashes,  # 架构哈希列表（每个元素通常是长度为 6 的 op_indices 列表）
     }  # 返回结果字典
 
-
+#python run_myscore_transnas.py --tasks autoencoder --search_space micro --num_samples 5 --batch_size 8
 def parse_args():
     """解析命令行参数。"""
-    parser = argparse.ArgumentParser(description="Run ZiCo on TransNAS-Bench-101")  # 创建解析器
+    parser = argparse.ArgumentParser(description="Run C-SWAG on TransNAS-Bench-101")  # 创建解析器
     parser.add_argument("--tasks", nargs="+", default=["autoencoder", "segmentsemantic", "normal"], help="任务列表")  # 任务参数
     parser.add_argument("--search_space", choices=["micro", "macro"], default="micro", help="搜索空间类型")  # 空间选择
     parser.add_argument("--data_root", type=str, default=str(NASLIB_ROOT / "data"), help="数据根路径")  # 数据路径
@@ -335,7 +261,7 @@ def parse_args():
     parser.add_argument("--maxbatch", type=int, default=2, help="截断的 batch 数")  # 截断 batch 数
     parser.add_argument("--seed", type=int, default=42, help="随机种子")  # 种子
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="设备")  # 设备选择
-    parser.add_argument("--dry_run", action="store_true", help="仅跑数据管线，不计算 ZiCo")  # dry run
+    parser.add_argument("--dry_run", action="store_true", help="仅跑数据管线，不计算 Proxy")  # dry run
     return parser.parse_args()  # 返回参数
 
 
@@ -364,3 +290,4 @@ def main():
 
 if __name__ == "__main__":
     main()  # 运行主函数
+

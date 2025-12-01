@@ -1,6 +1,6 @@
 """
 full_run_transnas.py  # 文件说明
-批量运行 run_zico_transnas 的脚本，支持大采样或全空间评估，并记录日志。  # 功能描述
+批量运行 run_zico_transnas 或 run_myscore_transnas 的脚本，支持多搜索空间、多代理方法顺序评估。  # 功能描述
 """
 
 import argparse  # 解析命令行参数
@@ -18,12 +18,23 @@ import numpy as np  # 预留可能的数值操作
 # 常量：路径与模块加载
 # -----------------------------------------------------------------------------
 CURRENT_DIR = Path(__file__).resolve().parent  # 当前脚本目录
-RUN_ZICO_PATH = CURRENT_DIR / "run_zico_transnas.py"  # run_zico 脚本路径
 
-spec = importlib.util.spec_from_file_location("run_zico_module", RUN_ZICO_PATH)  # 构造模块规范
-run_zico = importlib.util.module_from_spec(spec)  # 创建模块对象
-spec.loader.exec_module(run_zico)  # 加载 run_zico_transnas.py
-evaluate_task = run_zico.evaluate_task  # 引用 evaluate_task 函数
+# 定义不同 Proxy 对应的脚本路径
+PROXY_SCRIPTS = {
+    "zico": CURRENT_DIR / "run_zico_transnas.py",  # ZiCo 脚本路径
+    "myscore": CURRENT_DIR / "run_myscore_transnas.py",  # MyScore (C-SWAG) 脚本路径
+}
+
+def load_proxy_module(proxy_name):
+    """动态加载指定 Proxy 的评估模块"""  # 函数说明
+    script_path = PROXY_SCRIPTS.get(proxy_name)
+    if not script_path or not script_path.exists():
+        raise ValueError(f"未找到 Proxy 脚本: {proxy_name}")
+        
+    spec = importlib.util.spec_from_file_location(f"run_{proxy_name}_module", script_path)  # 构造模块规范
+    module = importlib.util.module_from_spec(spec)  # 创建模块对象
+    spec.loader.exec_module(module)  # 加载脚本
+    return module.evaluate_task, module  # 返回评估函数和模块对象
 
 # -----------------------------------------------------------------------------
 # 工具函数
@@ -33,9 +44,24 @@ def ensure_dir(path: Path):
     return path  # 返回路径对象
 
 
+# 新增：自定义 JSON Encoder 以处理 NumPy 类型 (如 int32)
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, (np.int_, np.intc, np.intp, np.int8,
+                            np.int16, np.int32, np.int64, np.uint8,
+                            np.uint16, np.uint32, np.uint64)):
+            return int(obj)
+        elif isinstance(obj, (np.float_, np.float16, np.float32, np.float64)):
+            return float(obj)
+        elif isinstance(obj, (np.ndarray,)):
+            return obj.tolist()
+        return json.JSONEncoder.default(self, obj)
+
+
 def save_json(obj, path: Path):
     with path.open("w", encoding="utf-8") as f:  # 打开文件写入
-        json.dump(obj, f, indent=2, ensure_ascii=False)  # 序列化为 JSON
+        # 使用 cls=NumpyEncoder 解决 "Object of type int32 is not JSON serializable" 问题
+        json.dump(obj, f, indent=2, ensure_ascii=False, cls=NumpyEncoder)  # 序列化为 JSON
 
 
 def make_args_namespace(base_args, num_samples, seed):
@@ -56,13 +82,21 @@ def make_args_namespace(base_args, num_samples, seed):
 # -----------------------------------------------------------------------------
 def run_full_experiment(args):
     """执行完整批量实验"""  # 函数注释
+    # 加载当前指定的 Proxy 评估函数
+    evaluate_task_func, proxy_module = load_proxy_module(args.proxy)  # 动态加载
+    compute_scores = proxy_module.compute_scores  # 获取该模块的相关性计算函数
+
     log_root = ensure_dir(Path(args.log_root))  # 确保日志根目录存在
-    exp_name = args.exp_name or datetime.now().strftime("%Y%m%d_%H%M%S")  # 生成实验名
-    exp_dir = ensure_dir(log_root / exp_name)  # 创建实验目录
+    
+    # 实验名增加 Proxy 和 Search Space 标识，避免覆盖
+    base_exp_name = args.exp_name or datetime.now().strftime("%Y%m%d_%H%M%S")
+    exp_sub_name = f"{base_exp_name}_{args.proxy}_{args.search_space}"
+    exp_dir = ensure_dir(log_root / exp_sub_name)  # 创建实验目录
 
     config = {  # 记录实验配置
+        "proxy": args.proxy,  # 当前使用的 Proxy 方法
         "tasks": args.tasks,  # 任务列表
-        "search_space": args.search_space,  # 搜索空间
+        "search_space": args.search_space,  # 搜索空间（当前这一次运行所用的空间）
         "total_samples": args.total_samples,  # 总评估数量
         "chunk_size": args.chunk_size,  # 分块大小
         "batch_size": args.batch_size,  # batch 大小
@@ -91,7 +125,7 @@ def run_full_experiment(args):
 
         start = time.time()  # 记录分块开始时间
         for task in args.tasks:  # 依次评估每个任务
-            res = evaluate_task(task, args.search_space, chunk_args)  # 调用 run_zico 评估
+            res = evaluate_task_func(task, args.search_space, chunk_args)  # 调用对应的 Proxy 评估函数
             chunk_results.append(res)  # 保存结果
         elapsed = time.time() - start  # 计算分块耗时
 
@@ -108,12 +142,12 @@ def run_full_experiment(args):
         save_json(chunk_log, chunk_path)  # 写出分块日志
 
         remaining -= num_samples  # 更新剩余数量
-        print(f"[Chunk {chunk_id}] 完成：num_samples={num_samples}, 用时={elapsed:.1f}s")  # 打印状态
+        print(f"[{args.proxy}][{args.search_space}] [Chunk {chunk_id}] 完成：num_samples={num_samples}, 用时={elapsed:.1f}s")  # 打印状态
 
     # --------------------- 聚合与总结输出 ---------------------
     aggregate_mode = (args.aggregate_task or "all").lower()  # 聚合任务模式
     all_gt_scores = []  # 聚合后的 GT 列表
-    all_zico_scores = []  # 聚合后的 ZiCo 列表
+    all_proxy_scores = []  # 聚合后的 Proxy 分数列表
     total_elapsed = 0.0  # 总耗时累积
 
     for chunk in all_chunks:  # 遍历所有分块
@@ -122,10 +156,10 @@ def run_full_experiment(args):
             should_aggregate = aggregate_mode == "all" or task_res["task"].lower() == aggregate_mode  # 判断是否聚合
             if should_aggregate:  # 满足条件则聚合
                 all_gt_scores.extend(task_res["gt"])  # 汇总 GT
-                all_zico_scores.extend(task_res["pred"])  # 汇总 ZiCo
+                all_proxy_scores.extend(task_res["pred"])  # 汇总 Proxy 分数
 
     if all_gt_scores and not args.dry_run:  # 若有数据且不是 dry run
-        final_corr = run_zico.compute_scores(ytest=all_gt_scores, test_pred=all_zico_scores)  # 计算最终相关性
+        final_corr = compute_scores(ytest=all_gt_scores, test_pred=all_proxy_scores)  # 计算最终相关性
     else:
         final_corr = {"kendalltau": None, "spearman": None}  # 无法计算则返回空值
 
@@ -144,7 +178,7 @@ def run_full_experiment(args):
     }
     save_json(summary, exp_dir / "summary.json")  # 写入 summary
 
-    print(f"\n[SUMMARY] 聚合 {len(all_gt_scores)} 个样本的最终相关性：")  # 打印标题
+    print(f"\n[SUMMARY] [{args.proxy}] [{args.search_space}] 聚合 {len(all_gt_scores)} 个样本的最终相关性：")  # 打印标题
     print(f"KendallTau: {kt_str}, Spearman: {sp_str}")  # 打印相关性
     print(f"总耗时：{total_elapsed:.1f}s")  # 打印耗时
     print(f"=== 全部完成，日志位于 {exp_dir} ===")  # 完成提示
@@ -154,16 +188,24 @@ def run_full_experiment(args):
 # -----------------------------------------------------------------------------
 def parse_args():
     """解析命令行参数"""  # 函数注释
-    parser = argparse.ArgumentParser(description="Full runner for TransNAS ZiCo experiments")  # 创建解析器
+    parser = argparse.ArgumentParser(description="Full runner for TransNAS Proxy experiments")  # 创建解析器
     parser.add_argument("--tasks", nargs="+", default=["autoencoder", "segmentsemantic", "normal"], help="任务列表")  # 任务参数
-    parser.add_argument("--search_space", choices=["micro", "macro"], default="micro", help="搜索空间类型")  # 搜索空间
+    
+    # Proxy 选择：支持单选或多选列表
+    parser.add_argument("--proxies", nargs="+", choices=["zico", "myscore"], default=None, help="要顺序运行的 Proxy 列表，例如: zico myscore")
+    parser.add_argument("--proxy", choices=["zico", "myscore"], default=None, help="单个 Proxy（兼容旧用法，建议使用 --proxies）")
+    
+    # Search Space 选择：支持单选或多选列表
+    parser.add_argument("--search_spaces", nargs="+", choices=["micro", "macro"], default=None, help="要顺序运行的搜索空间列表，例如: micro macro")
+    parser.add_argument("--search_space", choices=["micro", "macro"], default=None, help="单个搜索空间（兼容旧用法，建议使用 --search_spaces）")
+    
     parser.add_argument("--total_samples", type=int, default=200, help="总共要评估多少个架构（分块执行）")  # 总采样数
     parser.add_argument("--chunk_size", type=int, default=20, help="每个分块一次评估多少个架构")  # 分块大小
     parser.add_argument("--batch_size", type=int, default=128, help="DataLoader 的 batch 大小")  # batch 大小
     parser.add_argument("--maxbatch", type=int, default=2, help="截断的 batch 数")  # 截断 batch 数
     parser.add_argument("--seed", type=int, default=42, help="基础随机种子")  # 随机种子
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="运行设备")  # 设备
-    parser.add_argument("--dry_run", action="store_true", help="仅跑数据管线，不计算 ZiCo")  # dry run 开关
+    parser.add_argument("--dry_run", action="store_true", help="仅跑数据管线，不计算 Proxy")  # dry run 开关
     parser.add_argument("--data_root", type=str, default=str(CURRENT_DIR.parent / "NASLib" / "data"), help="数据根目录")  # 数据路径
     parser.add_argument("--log_root", type=str, default=str(CURRENT_DIR / "full_run_logs"), help="日志根目录（自动创建）")  # 日志目录
     parser.add_argument("--exp_name", type=str, default=None, help="自定义实验子目录名称，不填则用时间戳")  # 实验名
@@ -179,4 +221,35 @@ if __name__ == "__main__":  # 入口判断
     if args.chunk_size <= 0:  # 检查分块大小
         raise ValueError("chunk_size 必须 > 0")  # 抛出错误
 
-    run_full_experiment(args)  # 运行主流程
+    # 解析需要顺序运行的 Search Space 列表
+    if args.search_spaces is not None:
+        search_spaces = args.search_spaces
+    elif args.search_space is not None:
+        search_spaces = [args.search_space]
+    else:
+        search_spaces = ["micro"]  # 默认
+
+    # 解析需要顺序运行的 Proxy 列表
+    if args.proxies is not None:
+        proxies = args.proxies
+    elif args.proxy is not None:
+        proxies = [args.proxy]
+    else:
+        proxies = ["zico"]  # 默认只跑 zico，兼容旧行为
+
+    # 双重循环：依次运行每个 Proxy 和每个搜索空间
+    for proxy in proxies:
+        for ss in search_spaces:
+            # 构造子参数对象
+            sub_args_dict = vars(args).copy()
+            sub_args_dict["proxy"] = proxy  # 设置当前 Proxy
+            sub_args_dict["search_space"] = ss  # 设置当前 Search Space
+            sub_args = argparse.Namespace(**sub_args_dict)
+
+            print(f"\n===== 开始运行: Proxy={proxy}, Space={ss} =====")  # 打印信息
+            try:
+                run_full_experiment(sub_args)  # 运行主流程
+            except Exception as e:
+                print(f"!!! 运行出错 Proxy={proxy}, Space={ss}: {e}")
+                import traceback
+                traceback.print_exc()
