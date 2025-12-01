@@ -104,12 +104,13 @@ def run_full_experiment(args):
         "device": args.device,  # 运行设备
         "data_root": args.data_root,  # 数据目录
         "dry_run": args.dry_run,  # 是否 dry run
-        "aggregate_task": args.aggregate_task,  # 聚合任务
         "created_at": datetime.now().isoformat(),  # 创建时间
     }
     save_json(config, exp_dir / "config.json")  # 保存配置文件
 
-    all_chunks = []  # 存储所有分块日志
+    # 为每个任务初始化分块存储字典 {task_name: [chunk_logs]}
+    task_chunks = {task: [] for task in args.tasks}  # 每个任务的分块列表
+    
     remaining = args.total_samples  # 剩余待评估数量
     chunk_id = 0  # 分块计数器
     global_seed = args.seed  # 基础随机种子
@@ -120,66 +121,72 @@ def run_full_experiment(args):
         chunk_seed = global_seed + chunk_id  # 为分块生成新种子
 
         chunk_args = make_args_namespace(args, num_samples=num_samples, seed=chunk_seed)  # 生成分块参数
-        chunk_results = []  # 存储分块内各任务结果
+        chunk_start = time.time()  # 记录分块开始时间
 
-        start = time.time()  # 记录分块开始时间
         for task in args.tasks:  # 依次评估每个任务
+            task_start = time.time()  # 记录任务开始时间
             res = evaluate_task_func(task, args.search_space, chunk_args)  # 调用对应的 Proxy 评估函数
-            chunk_results.append(res)  # 保存结果
-        elapsed = time.time() - start  # 计算分块耗时
+            task_elapsed = time.time() - task_start  # 计算任务耗时
+            
+            # 为每个任务单独构造分块日志
+            task_chunk_log = {  # 构造任务分块日志
+                "chunk_id": chunk_id,  # 分块编号
+                "task": task,  # 任务名称
+                "num_samples": num_samples,  # 本块采样数
+                "seed": chunk_seed,  # 本块随机种子
+                "elapsed_sec": task_elapsed,  # 本任务耗时
+                "result": res,  # 本任务结果（单个任务的结果）
+            }
+            task_chunks[task].append(task_chunk_log)  # 添加到对应任务的分块列表
+            
+            # 为每个任务单独保存 chunk 文件
+            task_chunk_path = exp_dir / f"chunk_{chunk_id:03d}_{task}.json"  # 任务分块日志路径（文件名包含任务名）
+            save_json(task_chunk_log, task_chunk_path)  # 写出任务分块日志
 
-        chunk_log = {  # 构造分块日志
-            "chunk_id": chunk_id,  # 分块编号
-            "num_samples": num_samples,  # 本块采样数
-            "seed": chunk_seed,  # 本块随机种子
-            "elapsed_sec": elapsed,  # 本块耗时
-            "results": chunk_results,  # 本块结果
-        }
-        all_chunks.append(chunk_log)  # 汇总到总列表
-
-        chunk_path = exp_dir / f"chunk_{chunk_id:03d}.json"  # 分块日志路径
-        save_json(chunk_log, chunk_path)  # 写出分块日志
-
+        chunk_elapsed = time.time() - chunk_start  # 计算整个分块耗时
         remaining -= num_samples  # 更新剩余数量
-        print(f"[{args.proxy}][{args.search_space}] [Chunk {chunk_id}] 完成：num_samples={num_samples}, 用时={elapsed:.1f}s")  # 打印状态
+        print(f"[{args.proxy}][{args.search_space}] [Chunk {chunk_id}] 完成：num_samples={num_samples}, 用时={chunk_elapsed:.1f}s")  # 打印状态
 
-    # --------------------- 聚合与总结输出 ---------------------
-    aggregate_mode = (args.aggregate_task or "all").lower()  # 聚合任务模式
-    all_gt_scores = []  # 聚合后的 GT 列表
-    all_proxy_scores = []  # 聚合后的 Proxy 分数列表
-    total_elapsed = 0.0  # 总耗时累积
+    # --------------------- 为每个任务单独聚合与总结输出 ---------------------
+    for task in args.tasks:  # 遍历每个任务
+        all_gt_scores = []  # 当前任务的 GT 列表
+        all_proxy_scores = []  # 当前任务的 Proxy 分数列表
+        total_elapsed = 0.0  # 当前任务总耗时累积
+        chunk_file_list = []  # 当前任务的分块文件列表
 
-    for chunk in all_chunks:  # 遍历所有分块
-        total_elapsed += chunk["elapsed_sec"]  # 累加耗时
-        for task_res in chunk["results"]:  # 遍历分块内各任务
-            should_aggregate = aggregate_mode == "all" or task_res["task"].lower() == aggregate_mode  # 判断是否聚合
-            if should_aggregate:  # 满足条件则聚合
-                all_gt_scores.extend(task_res["gt"])  # 汇总 GT
-                all_proxy_scores.extend(task_res["pred"])  # 汇总 Proxy 分数
+        for task_chunk in task_chunks[task]:  # 遍历当前任务的所有分块
+            total_elapsed += task_chunk["elapsed_sec"]  # 累加耗时
+            task_res = task_chunk["result"]  # 获取任务结果
+            all_gt_scores.extend(task_res["gt"])  # 汇总 GT
+            all_proxy_scores.extend(task_res["pred"])  # 汇总 Proxy 分数
+            chunk_file_list.append(f"chunk_{task_chunk['chunk_id']:03d}_{task}.json")  # 记录分块文件名
 
-    if all_gt_scores and not args.dry_run:  # 若有数据且不是 dry run
-        final_corr = compute_scores(ytest=all_gt_scores, test_pred=all_proxy_scores)  # 计算最终相关性
-    else:
-        final_corr = {"kendalltau": None, "spearman": None}  # 无法计算则返回空值
+        if all_gt_scores and not args.dry_run:  # 若有数据且不是 dry run
+            final_corr = compute_scores(ytest=all_gt_scores, test_pred=all_proxy_scores)  # 计算当前任务的最终相关性
+        else:
+            final_corr = {"kendalltau": None, "spearman": None}  # 无法计算则返回空值
 
-    kt = final_corr.get("kendalltau")  # 取 KendallTau
-    sp = final_corr.get("spearman")  # 取 Spearman
-    kt_str = f"{kt:.4f}" if isinstance(kt, (int, float)) else "N/A"  # 格式化显示
-    sp_str = f"{sp:.4f}" if isinstance(sp, (int, float)) else "N/A"  # 格式化显示
+        kt = final_corr.get("kendalltau")  # 取 KendallTau
+        sp = final_corr.get("spearman")  # 取 Spearman
+        kt_str = f"{kt:.4f}" if isinstance(kt, (int, float)) else "N/A"  # 格式化显示
+        sp_str = f"{sp:.4f}" if isinstance(sp, (int, float)) else "N/A"  # 格式化显示
 
-    summary = {  # 构造汇总信息
-        "config": config,  # 记录配置
-        "num_chunks": len(all_chunks),  # 分块数量
-        "chunks": [f"chunk_{c['chunk_id']:03d}.json" for c in all_chunks],  # 分块文件列表
-        "total_samples_evaluated": len(all_gt_scores),  # 聚合的样本数量
-        "total_elapsed_sec": total_elapsed,  # 总耗时
-        "final_aggregated_corr": final_corr,  # 聚合相关性
-    }
-    save_json(summary, exp_dir / "summary.json")  # 写入 summary
+        task_summary = {  # 构造当前任务的汇总信息
+            "config": config,  # 记录配置
+            "task": task,  # 任务名称
+            "num_chunks": len(task_chunks[task]),  # 分块数量
+            "chunks": chunk_file_list,  # 分块文件列表
+            "total_samples_evaluated": len(all_gt_scores),  # 聚合的样本数量
+            "total_elapsed_sec": total_elapsed,  # 总耗时
+            "final_aggregated_corr": final_corr,  # 聚合相关性
+        }
+        task_summary_path = exp_dir / f"summary_{task}.json"  # 任务 summary 路径（文件名包含任务名）
+        save_json(task_summary, task_summary_path)  # 写入任务 summary
 
-    print(f"\n[SUMMARY] [{args.proxy}] [{args.search_space}] 聚合 {len(all_gt_scores)} 个样本的最终相关性：")  # 打印标题
-    print(f"KendallTau: {kt_str}, Spearman: {sp_str}")  # 打印相关性
-    print(f"总耗时：{total_elapsed:.1f}s")  # 打印耗时
+        print(f"\n[SUMMARY] [{args.proxy}] [{args.search_space}] [{task}] 聚合 {len(all_gt_scores)} 个样本的最终相关性：")  # 打印标题
+        print(f"KendallTau: {kt_str}, Spearman: {sp_str}")  # 打印相关性
+        print(f"总耗时：{total_elapsed:.1f}s")  # 打印耗时
+
     print(f"=== 全部完成，日志位于 {exp_dir} ===")  # 完成提示
 
 # -----------------------------------------------------------------------------
@@ -208,7 +215,6 @@ def parse_args():
     parser.add_argument("--data_root", type=str, default=str(CURRENT_DIR.parent / "NASLib" / "data"), help="数据根目录")  # 数据路径
     parser.add_argument("--log_root", type=str, default=str(CURRENT_DIR / "full_run_logs"), help="日志根目录（自动创建）")  # 日志目录
     parser.add_argument("--exp_name", type=str, default=None, help="自定义实验子目录名称，不填则用时间戳")  # 实验名
-    parser.add_argument("--aggregate_task", type=str, default="all", help="聚合相关性所使用的任务名，all 表示全部")  # 聚合任务
     return parser.parse_args()  # 返回解析结果
 
 
