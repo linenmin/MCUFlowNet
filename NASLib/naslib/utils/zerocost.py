@@ -87,9 +87,8 @@ def compute_scores(ytest, test_pred):
             metrics_dict[f'br_at_{k}'] = min_at_k
 
         metrics_dict["mae"] = np.mean(abs(test_pred - ytest))
-        metrics_dict["rmse"] = metrics.mean_squared_error(
-            ytest, test_pred, squared=False
-        )
+        mse = np.mean((test_pred - ytest) ** 2) #修复hpc上运行的bug
+        metrics_dict["rmse"] = float(np.sqrt(mse)) #修复hpc上运行的bug
         metrics_dict["pearson"] = np.abs(np.corrcoef(ytest, test_pred)[1, 0])
         metrics_dict["spearman"] = stats.spearmanr(ytest, test_pred)[0]
         metrics_dict["kendalltau"] = stats.kendalltau(ytest, test_pred)[0]

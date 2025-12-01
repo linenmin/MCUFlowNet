@@ -48,6 +48,7 @@ get_train_val_loaders = utils.get_train_val_loaders  # 数据加载
 compute_scores = utils.compute_scores  # 相关性计算
 
 
+
 def load_transbench_classes():
     """动态加载 transbench101 的搜索空间，避免触发顶层 __init__ 依赖。"""
     graph_path = NASLIB_ROOT / "naslib" / "search_spaces" / "transbench101" / "graph.py"  # 路径
@@ -309,6 +310,10 @@ def evaluate_task(task: str, ss_name: str, args):
         zico_scores.append(zc)  # 记录分数
         del model  # 释放模型
         torch.cuda.empty_cache()  # 清理显存
+
+        # === 新增：强制 GC ===
+        import gc
+        gc.collect()
 
     elapsed = time.time() - start  # 总耗时
     # 相关性评估
