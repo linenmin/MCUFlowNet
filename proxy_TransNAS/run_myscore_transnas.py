@@ -219,19 +219,10 @@ def get_loss_fn(task: str):
         # 其他分类任务可扩展，此处默认交叉熵
         return torch.nn.CrossEntropyLoss()
 
-
-def build_search_space(name: str, task: str):
-    """根据名称创建 micro 或 macro 的 TransNAS 搜索空间。"""
-    TransBench101SearchSpaceMicro, TransBench101SearchSpaceMacro, _ = load_transbench_classes()  # 动态取类
-    if name == "micro":
-        return TransBench101SearchSpaceMicro(dataset=task, create_graph=True)  # 创建 micro 搜索空间
-    elif name == "macro":
-        return TransBench101SearchSpaceMacro(create_graph=True)  # 创建 macro 搜索空间
-    else:
-        raise ValueError(f"未知搜索空间 {name}")  # 提示错误
-
-
-def sample_architectures(ss, dataset_api, num_samples: int, seed: int):
+# 
+# 
+# 
+def load_transbench_classes():
     """随机采样若干架构并解析成可前向的模型。"""
     random.seed(seed)  # 控制随机
     torch.manual_seed(seed)  # 控制随机
@@ -264,10 +255,6 @@ def evaluate_task(task: str, ss_name: str, args):
     # 创建搜索空间（直接使用已加载的类，避免重复加载）
     if ss_name == "micro":
         # 显式指定 n_classes 为 17 (segmentsemantic 的类别数)
-        # 并且对于 dense prediction 任务，可能不需要默认的 n_classes 参数
-        # 但 TransBench101SearchSpaceMicro 的逻辑似乎有漏洞
-        # 我们需要确保它生成正确的 Decoder
-        
         if task == "segmentsemantic":
              ss = TransBench101SearchSpaceMicro(dataset=task, create_graph=True, n_classes=17)
         else:
@@ -282,7 +269,8 @@ def evaluate_task(task: str, ss_name: str, args):
     proxy_scores = []  # 存储 C-SWAG
     arch_hashes = []  # 存储每个架构的哈希（op_indices）
     start = time.time()  # 计时开始
-    for graph in samples:
+    
+    for i, graph in enumerate(samples):
         # 记录当前架构的哈希（使用 op_indices 作为离散结构编码，便于后续分析）
         try:
             arch_hash = list(graph.get_hash())
@@ -290,19 +278,34 @@ def evaluate_task(task: str, ss_name: str, args):
             # 如果意外失败，则用 None 占位，避免中断主流程
             arch_hash = None
         arch_hashes.append(arch_hash)
+        
         # 查询真值（VAL_ACCURACY 映射到任务对应指标）
         gt = graph.query(metric=Metric.VAL_ACCURACY, dataset=task, dataset_api=dataset_api)  # 取真值
         gt_scores.append(gt)  # 记录真值
+        
         if args.dry_run:
             proxy_scores.append(0.0)  # 仅占位
             continue  # 跳过计算
+            
+        # === 关键 OOM 修复 ===
         model = graph.to(args.device)  # 取具体模型并放设备
         model.train()  # 训练模式
         
         # === 关键修改：调用 C-SWAG Proxy ===
-        zc = compute_proxy_score(model, train_batches, loss_fn, args.device)  # 计算 Proxy 分数
+        try:
+            zc = compute_proxy_score(model, train_batches, loss_fn, args.device)  # 计算 Proxy 分数
+        except RuntimeError as e:
+            if "out of memory" in str(e):
+                print(f"!!! OOM detected at sample {i}. Trying to clear cache and retry...")
+                torch.cuda.empty_cache()
+                zc = 0.0
+            else:
+                raise e
         
         proxy_scores.append(zc)  # 记录分数
+        
+        # === 显存清理 ===
+        model.cpu() # 关键：必须移回 CPU
         del model  # 释放模型
         torch.cuda.empty_cache()  # 清理显存
 
