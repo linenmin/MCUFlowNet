@@ -47,11 +47,10 @@ def ensure_dir(path: Path):
 # 新增：自定义 JSON Encoder 以处理 NumPy 类型 (如 int32)
 class NumpyEncoder(json.JSONEncoder):
     def default(self, obj):
-        if isinstance(obj, (np.int_, np.intc, np.intp, np.int8,
-                            np.int16, np.int32, np.int64, np.uint8,
-                            np.uint16, np.uint32, np.uint64)):
+        # 使用抽象基类检查，兼容 NumPy 1.x 和 2.x
+        if isinstance(obj, np.integer):
             return int(obj)
-        elif isinstance(obj, (np.float_, np.float16, np.float32, np.float64)):
+        elif isinstance(obj, np.floating):
             return float(obj)
         elif isinstance(obj, (np.ndarray,)):
             return obj.tolist()
