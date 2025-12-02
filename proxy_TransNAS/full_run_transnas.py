@@ -10,6 +10,7 @@ import time  # 统计用时
 from pathlib import Path  # 处理路径
 from datetime import datetime  # 生成时间戳
 import importlib.util  # 动态加载模块
+import gc  # 垃圾回收
 
 import torch  # 判断设备
 import numpy as np  # 预留可能的数值操作
@@ -144,6 +145,12 @@ def run_full_experiment(args):
             save_json(task_chunk_log, task_chunk_path)  # 写出任务分块日志
 
         chunk_elapsed = time.time() - chunk_start  # 计算整个分块耗时
+
+        # === 新增：分块结束后的显存和垃圾回收清理 ===
+        if torch.cuda.is_available():  # 如果有 GPU 设备
+            torch.cuda.empty_cache()  # 主动清理 CUDA 缓存，减少显存碎片
+        gc.collect()  # 强制 Python 垃圾回收，释放临时对象引用
+
         remaining -= num_samples  # 更新剩余数量
         print(f"[{args.proxy}][{args.search_space}] [Chunk {chunk_id}] 完成：num_samples={num_samples}, 用时={chunk_elapsed:.1f}s")  # 打印状态
 

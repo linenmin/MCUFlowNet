@@ -38,6 +38,9 @@ NASLIB_ROOT = ROOT_DIR / "NASLib"  # NASLib 代码根目录
 sys.path.insert(0, str(ZICO_ROOT))  # 优先导入 ZiCo
 sys.path.insert(0, str(NASLIB_ROOT))  # 再导入 NASLib
 
+# === 新增：全局缓存 TransNASBenchAPI，避免重复从磁盘加载巨大 .pth 文件 ===
+_GLOBAL_TRANSNASBENCH_API = None  # 全局缓存变量，初始为 None
+
 # === 关键修改：导入自定义的 C-SWAG Proxy ===
 from compute_myscore import compute_myscore_score as compute_proxy_score
 
@@ -61,19 +64,28 @@ def load_transbench_classes():
 
 
 def load_transbench_api(data_root: Path, task: str):
-    """直接加载 TransNASBenchAPI，避免 naslib.search_spaces 顶层依赖。"""
+    """直接加载 TransNASBenchAPI，并增加全局缓存，防止 full_run 循环中重复加载导致 RAM 爆掉。"""
+    global _GLOBAL_TRANSNASBENCH_API  # 引用全局变量
+
+    # 1. 动态加载模块定义（只负责拿到类定义，开销很小）
     api_path = NASLIB_ROOT / "naslib" / "search_spaces" / "transbench101" / "api.py"  # API 路径
     spec = importlib.util.spec_from_file_location("transbench_api", api_path)  # 创建规范
     module = importlib.util.module_from_spec(spec)  # 创建模块
     spec.loader.exec_module(module)  # 执行模块
     TransNASBenchAPI = module.TransNASBenchAPI  # 取类
-    # 默认查找 data_root 下的 pth，否则回落 NASLib 自带路径
-    candidate = data_root / "transnas-bench_v10141024.pth"  # 用户指定路径
-    if not candidate.exists():
-        candidate = NASLIB_ROOT / "naslib" / "data" / "transnas-bench_v10141024.pth"  # 回落默认
-    assert candidate.exists(), f"缺少 transnas-bench_v10141024.pth，检查 {candidate}"  # 断言存在
-    api = TransNASBenchAPI(str(candidate))  # 实例化
-    return {"api": api, "task": task}  # 返回与 NASLib 一致的字典
+
+    # 2. 如果全局缓存还没有实例，则从磁盘加载一次巨大的 .pth
+    if _GLOBAL_TRANSNASBENCH_API is None:  # 只有第一次会进来
+        # 默认查找 data_root 下的 pth，否则回落 NASLib 自带路径
+        candidate = data_root / "transnas-bench_v10141024.pth"  # 用户指定路径
+        if not candidate.exists():  # 如果用户路径不存在
+            candidate = NASLIB_ROOT / "naslib" / "data" / "transnas-bench_v10141024.pth"  # 回落默认
+        assert candidate.exists(), f"缺少 transnas-bench_v10141024.pth，检查 {candidate}"  # 断言存在
+        # 实例化并缓存在全局变量中
+        _GLOBAL_TRANSNASBENCH_API = TransNASBenchAPI(str(candidate))  # 只在第一次从磁盘读取
+
+    # 3. 返回缓存的 API 对象（后续调用全部走内存，不再读盘）
+    return {"api": _GLOBAL_TRANSNASBENCH_API, "task": task}  # 返回与 NASLib 一致的字典
 
 
 def build_config(data_root: Path, dataset: str, batch_size: int, seed: int):
