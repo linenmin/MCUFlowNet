@@ -109,20 +109,24 @@ def run_full_experiment(args):
     }
     save_json(config, exp_dir / "config.json")  # 保存配置文件
 
-    remaining = args.total_samples  # 剩余待评估数量
-    chunk_id = 0  # 分块计数器
     global_seed = args.seed  # 基础随机种子
-    total_chunks = 0  # 记录总分块数（用于后续聚合）
+    total_chunks = (args.total_samples + args.chunk_size - 1) // args.chunk_size  # 计算总分块数（向上取整）
 
-    while remaining > 0:  # 逐块执行直到完成
-        chunk_id += 1  # 当前分块编号
-        num_samples = min(args.chunk_size, remaining)  # 当前分块采样数
-        chunk_seed = global_seed + chunk_id  # 为分块生成新种子
+    # === 关键修改：按任务分组，而不是按 chunk 分组 ===
+    # 先完成所有 chunk 的 task1，再完成所有 chunk 的 task2，最后完成所有 chunk 的 task3
+    for task in args.tasks:  # 外层循环：遍历每个任务
+        print(f"\n===== 开始评估任务: {task} =====")  # 打印任务开始
+        
+        remaining = args.total_samples  # 重置剩余待评估数量
+        chunk_id = 0  # 重置分块计数器
 
-        chunk_args = make_args_namespace(args, num_samples=num_samples, seed=chunk_seed)  # 生成分块参数
-        chunk_start = time.time()  # 记录分块开始时间
+        while remaining > 0:  # 逐块执行当前任务
+            chunk_id += 1  # 当前分块编号
+            num_samples = min(args.chunk_size, remaining)  # 当前分块采样数
+            chunk_seed = global_seed + chunk_id  # 为分块生成新种子
 
-        for task in args.tasks:  # 依次评估每个任务
+            chunk_args = make_args_namespace(args, num_samples=num_samples, seed=chunk_seed)  # 生成分块参数
+            
             task_start = time.time()  # 记录任务开始时间
             res = evaluate_task_func(task, args.search_space, chunk_args)  # 调用对应的 Proxy 评估函数
             task_elapsed = time.time() - task_start  # 计算任务耗时
@@ -145,21 +149,19 @@ def run_full_experiment(args):
             del res  # 删除 res 引用，释放可能持有的 Tensor / DataLoader 引用
             del task_chunk_log  # 删除 log 引用（已保存到文件）
             
-            # 每个任务结束后立即清理
+            # 每个 chunk 结束后立即清理
             if torch.cuda.is_available():  # 如果有 GPU
                 torch.cuda.empty_cache()  # 清理 CUDA 缓存
             gc.collect()  # 强制垃圾回收
 
-        chunk_elapsed = time.time() - chunk_start  # 计算整个分块耗时
-        total_chunks = chunk_id  # 更新总分块数
-
-        # === 分块结束后的显存和垃圾回收清理 ===
+            remaining -= num_samples  # 更新剩余数量
+            print(f"[{args.proxy}][{args.search_space}][{task}] [Chunk {chunk_id}/{total_chunks}] 完成：num_samples={num_samples}, 用时={task_elapsed:.1f}s")  # 打印状态
+        
+        # === 当前任务的所有 chunk 完成后，做一次彻底清理 ===
+        print(f"===== 任务 {task} 全部完成，开始清理... =====")
         if torch.cuda.is_available():  # 如果有 GPU 设备
             torch.cuda.empty_cache()  # 主动清理 CUDA 缓存，减少显存碎片
         gc.collect()  # 强制 Python 垃圾回收，释放临时对象引用
-
-        remaining -= num_samples  # 更新剩余数量
-        print(f"[{args.proxy}][{args.search_space}] [Chunk {chunk_id}] 完成：num_samples={num_samples}, 用时={chunk_elapsed:.1f}s")  # 打印状态
 
     # --------------------- 为每个任务单独聚合与总结输出 ---------------------
     # 关键修复：从文件重新读取，而不是从内存中的 task_chunks 读取
