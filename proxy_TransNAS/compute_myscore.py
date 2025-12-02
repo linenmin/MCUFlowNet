@@ -167,7 +167,7 @@ def compute_myscore_score(model, train_batches, loss_fn, device, top_k_percent, 
         top_k_s = sorted_s[:k_count]
         top_k_indices = sorted_indices[:k_count]
         
-        base_score_l = torch.sum(top_k_s).item() # 基础稳定性得分
+        base_score_l = torch.mean(top_k_s).item() # 基础稳定性得分
 
         # 4.2 计算 Top-K 通道的表达能力 (Psi)
         # 注意：参数索引是展平后的 (Out, In, K, K)。
@@ -208,10 +208,13 @@ def compute_myscore_score(model, train_batches, loss_fn, device, top_k_percent, 
                 # 二值化
                 bin_map = (selected_fmap > 0).float()
                 
+                
                 # 展平计算唯一编码
                 B = bin_map.size(0)
                 flat_codes = bin_map.view(B, -1)
-                unique_codes = torch.unique(flat_codes, dim=0)
+                # 每一行代表一个神经元在整个 Batch 上的行为向量 (长度为 B 的 0/1 序列)
+                neuron_codes = flat_codes.t()
+                unique_codes = torch.unique(neuron_codes, dim=0)
                 psi_sum += float(unique_codes.size(0))
                 valid_batches += 1
             
