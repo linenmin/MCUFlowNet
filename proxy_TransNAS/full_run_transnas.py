@@ -14,6 +14,7 @@ import gc  # 垃圾回收
 
 import torch  # 判断设备
 import numpy as np  # 预留可能的数值操作
+from tqdm import tqdm  # 进度条显示
 
 # -----------------------------------------------------------------------------
 # 常量：路径与模块加载
@@ -66,6 +67,10 @@ def save_json(obj, path: Path):
 
 def make_args_namespace(base_args, num_samples, seed):
     """构造传给 evaluate_task 的 Namespace"""  # 函数说明
+    # 获取可选参数（如果 base_args 中有的话，否则使用默认值）
+    top_k_percent = getattr(base_args, 'top_k_percent', 0.50)  # Top-K 截断比例（默认 0.50）
+    alpha_threshold = getattr(base_args, 'alpha_threshold', 0.0)  # 关键层筛选阈值（默认 0.0）
+    
     return argparse.Namespace(  # 返回新的参数对象
         data_root=base_args.data_root,  # 数据根目录
         batch_size=base_args.batch_size,  # batch 大小
@@ -75,6 +80,8 @@ def make_args_namespace(base_args, num_samples, seed):
         num_samples=num_samples,  # 当前分块采样数
         seed=seed,  # 当前分块种子
         search_space=base_args.search_space,  # 使用的搜索空间
+        top_k_percent=top_k_percent,  # Top-K 截断比例（仅 myscore 需要）
+        alpha_threshold=alpha_threshold,  # 关键层筛选阈值（仅 myscore 需要）
     )
 
 # -----------------------------------------------------------------------------
@@ -120,6 +127,9 @@ def run_full_experiment(args):
         remaining = args.total_samples  # 重置剩余待评估数量
         chunk_id = 0  # 重置分块计数器
 
+        # 使用 tqdm 显示 chunk 进度条
+        pbar = tqdm(total=total_chunks, desc=f"[{args.proxy}][{args.search_space}][{task}] Chunks", unit="chunk")
+        
         while remaining > 0:  # 逐块执行当前任务
             chunk_id += 1  # 当前分块编号
             num_samples = min(args.chunk_size, remaining)  # 当前分块采样数
@@ -155,7 +165,10 @@ def run_full_experiment(args):
             gc.collect()  # 强制垃圾回收
 
             remaining -= num_samples  # 更新剩余数量
-            print(f"[{args.proxy}][{args.search_space}][{task}] [Chunk {chunk_id}/{total_chunks}] 完成：num_samples={num_samples}, 用时={task_elapsed:.1f}s")  # 打印状态
+            pbar.update(1)  # 更新进度条
+            pbar.set_postfix({"samples": num_samples, "time": f"{task_elapsed:.1f}s"})  # 显示额外信息
+        
+        pbar.close()  # 关闭进度条
         
         # === 当前任务的所有 chunk 完成后，做一次彻底清理 ===
         print(f"===== 任务 {task} 全部完成，开始清理... =====")

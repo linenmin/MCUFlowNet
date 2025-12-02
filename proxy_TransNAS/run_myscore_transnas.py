@@ -25,6 +25,7 @@ import importlib.util  # 动态加载模块
 import torch  # 张量与设备管理
 import numpy as np # 确保导入 numpy
 import warnings # 警告控制
+from tqdm import tqdm  # 进度条显示
 
 # 忽略特定的 FutureWarning，保持输出整洁
 warnings.filterwarnings("ignore", category=FutureWarning, message=".*weights_only.*")
@@ -212,7 +213,8 @@ def evaluate_task(task: str, ss_name: str, args):
     arch_hashes = []  # 存储每个架构的哈希（op_indices）
     start = time.time()  # 计时开始
     
-    for i, graph in enumerate(samples):
+    # 使用 tqdm 显示进度条
+    for i, graph in enumerate(tqdm(samples, desc=f"[{task}] 评估架构", unit="arch")):
         # 记录当前架构的哈希（使用 op_indices 作为离散结构编码，便于后续分析）
         try:
             arch_hash = list(graph.get_hash())
