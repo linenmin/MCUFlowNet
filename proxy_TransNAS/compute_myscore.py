@@ -38,11 +38,16 @@ def compute_myscore_score(model, train_batches, loss_fn, device):
     batch_features = {} # 存放每层的特征图列表 {层名: [Tensor(B, C, H, W), ...]}
 
     # 注册 Forward Hook 用于捕获特征图
-    features_dict = {}
+    features_dict = {}  # 存放每层的特征图 {层名: Tensor}
     def get_feature_hook(name):
+        """返回一个带有下采样逻辑的 Hook 函数，先压缩再存特征图。"""  # 函数说明
         def hook(module, inputs_hook, output_hook):
-            features_dict[name] = output_hook.detach() # 捕获特征图，detached
-        return hook
+            out = output_hook.detach()  # 先 detach，切断计算图，避免额外梯度
+            # 如果是卷积特征图 (B, C, H, W) 且空间尺寸大于 16x16，则先做自适应平均池化
+            if out.dim() == 4 and (out.shape[2] > 16 or out.shape[3] > 16):  # 仅在大图时缩放
+                out = torch.nn.functional.adaptive_avg_pool2d(out, (16, 16))  # 下采样到 16x16，显存友好
+            features_dict[name] = out  # 把（可能已下采样的）特征图缓存起来
+        return hook  # 返回真正注册给模块的 hook
 
     hooks = []
     for name, mod in model.named_modules():
@@ -189,18 +194,12 @@ def compute_myscore_score(model, train_batches, loss_fn, device):
             valid_batches = 0
             
             for fmap in fmaps: # 遍历每个 Batch
-                fmap = fmap.to(device) # (B, C, H, W)
+                fmap = fmap.to(device) # (B, C, H, W) 或 (B, C, H', W')，此时已经在 Hook 中下采样
                 
                 # 只选出 Top-K Channels
                 # fmap index select
-                selected_fmap = torch.index_select(fmap, 1, top_k_channel_indices)
+                selected_fmap = torch.index_select(fmap, 1, top_k_channel_indices)  # 按通道索引选择 Top-K 特征图
                 
-                if selected_fmap.dim() == 4:  # 只有 Conv2d 特征图才做空间池化
-                    H, W = selected_fmap.shape[2], selected_fmap.shape[3]
-                    if H > 16 or W > 16:  # 只有当尺寸大于 16x16 时才缩放
-                        selected_fmap = torch.nn.functional.adaptive_avg_pool2d(selected_fmap, (16, 16))
-                
-
                 # 二值化
                 bin_map = (selected_fmap > 0).float()
                 

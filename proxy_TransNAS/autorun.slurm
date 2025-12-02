@@ -17,7 +17,7 @@ cd /vsc-hard-mounts/leuven-data/379/vsc37996/test/MCUFlowNet/proxy_TransNAS
 # module load CUDA/xx.xx 之类的，看你环境（如果你用的是纯 conda 就可以不写）
 
 # 3. 激活你的 conda 环境
-source ~/miniconda3/etc/profile.d/conda.sh
+eval "$(${VSC_DATA}/miniconda3/bin/conda shell.bash hook)"
 conda activate nas
 
 # 4. （可选）打印一下环境信息
@@ -29,7 +29,7 @@ nvidia-smi
 python full_run_transnas.py \
   --proxies zico myscore \
   --search_spaces micro macro \
-  --total_samples 2000 \
+  --total_samples 200 \
   --chunk_size 100 \
   --batch_size 16
 
