@@ -109,12 +109,10 @@ def run_full_experiment(args):
     }
     save_json(config, exp_dir / "config.json")  # 保存配置文件
 
-    # 为每个任务初始化分块存储字典 {task_name: [chunk_logs]}
-    task_chunks = {task: [] for task in args.tasks}  # 每个任务的分块列表
-    
     remaining = args.total_samples  # 剩余待评估数量
     chunk_id = 0  # 分块计数器
     global_seed = args.seed  # 基础随机种子
+    total_chunks = 0  # 记录总分块数（用于后续聚合）
 
     while remaining > 0:  # 逐块执行直到完成
         chunk_id += 1  # 当前分块编号
@@ -138,15 +136,24 @@ def run_full_experiment(args):
                 "elapsed_sec": task_elapsed,  # 本任务耗时
                 "result": res,  # 本任务结果（单个任务的结果）
             }
-            task_chunks[task].append(task_chunk_log)  # 添加到对应任务的分块列表
             
             # 为每个任务单独保存 chunk 文件
             task_chunk_path = exp_dir / f"chunk_{chunk_id:03d}_{task}.json"  # 任务分块日志路径（文件名包含任务名）
             save_json(task_chunk_log, task_chunk_path)  # 写出任务分块日志
+            
+            # === 关键修复：立即释放内存引用，避免累积 ===
+            del res  # 删除 res 引用，释放可能持有的 Tensor / DataLoader 引用
+            del task_chunk_log  # 删除 log 引用（已保存到文件）
+            
+            # 每个任务结束后立即清理
+            if torch.cuda.is_available():  # 如果有 GPU
+                torch.cuda.empty_cache()  # 清理 CUDA 缓存
+            gc.collect()  # 强制垃圾回收
 
         chunk_elapsed = time.time() - chunk_start  # 计算整个分块耗时
+        total_chunks = chunk_id  # 更新总分块数
 
-        # === 新增：分块结束后的显存和垃圾回收清理 ===
+        # === 分块结束后的显存和垃圾回收清理 ===
         if torch.cuda.is_available():  # 如果有 GPU 设备
             torch.cuda.empty_cache()  # 主动清理 CUDA 缓存，减少显存碎片
         gc.collect()  # 强制 Python 垃圾回收，释放临时对象引用
@@ -155,18 +162,27 @@ def run_full_experiment(args):
         print(f"[{args.proxy}][{args.search_space}] [Chunk {chunk_id}] 完成：num_samples={num_samples}, 用时={chunk_elapsed:.1f}s")  # 打印状态
 
     # --------------------- 为每个任务单独聚合与总结输出 ---------------------
+    # 关键修复：从文件重新读取，而不是从内存中的 task_chunks 读取
     for task in args.tasks:  # 遍历每个任务
         all_gt_scores = []  # 当前任务的 GT 列表
         all_proxy_scores = []  # 当前任务的 Proxy 分数列表
         total_elapsed = 0.0  # 当前任务总耗时累积
         chunk_file_list = []  # 当前任务的分块文件列表
 
-        for task_chunk in task_chunks[task]:  # 遍历当前任务的所有分块
+        # 从文件系统重新读取所有 chunk（避免内存累积）
+        for cid in range(1, total_chunks + 1):  # 遍历所有分块 ID
+            chunk_file = exp_dir / f"chunk_{cid:03d}_{task}.json"  # 构造文件路径
+            if not chunk_file.exists():  # 如果文件不存在（理论上不应该发生）
+                continue  # 跳过
+            
+            with chunk_file.open("r", encoding="utf-8") as f:  # 打开文件
+                task_chunk = json.load(f)  # 读取 JSON
+            
             total_elapsed += task_chunk["elapsed_sec"]  # 累加耗时
             task_res = task_chunk["result"]  # 获取任务结果
             all_gt_scores.extend(task_res["gt"])  # 汇总 GT
             all_proxy_scores.extend(task_res["pred"])  # 汇总 Proxy 分数
-            chunk_file_list.append(f"chunk_{task_chunk['chunk_id']:03d}_{task}.json")  # 记录分块文件名
+            chunk_file_list.append(f"chunk_{cid:03d}_{task}.json")  # 记录分块文件名
 
         if all_gt_scores and not args.dry_run:  # 若有数据且不是 dry run
             final_corr = compute_scores(ytest=all_gt_scores, test_pred=all_proxy_scores)  # 计算当前任务的最终相关性
@@ -181,7 +197,7 @@ def run_full_experiment(args):
         task_summary = {  # 构造当前任务的汇总信息
             "config": config,  # 记录配置
             "task": task,  # 任务名称
-            "num_chunks": len(task_chunks[task]),  # 分块数量
+            "num_chunks": total_chunks,  # 分块数量（使用实际分块数）
             "chunks": chunk_file_list,  # 分块文件列表
             "total_samples_evaluated": len(all_gt_scores),  # 聚合的样本数量
             "total_elapsed_sec": total_elapsed,  # 总耗时
