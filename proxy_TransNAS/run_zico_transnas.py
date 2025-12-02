@@ -164,16 +164,16 @@ def get_loss_fn(task: str):
 # 
 # 
 def sample_architectures(ss, dataset_api, num_samples: int, seed: int):
-    """随机采样若干架构并解析成可前向的模型。"""
+    """随机采样若干架构，但不立即实例化模型（延迟到使用时）。"""
     random.seed(seed)  # 控制随机
     torch.manual_seed(seed)  # 控制随机
-    samples = []  # 存储图与哈希
+    samples = []  # 存储图（只保存架构描述，不实例化模型）
     for _ in range(num_samples):
         graph = ss.clone()  # 复制搜索空间
         graph.sample_random_architecture(dataset_api=dataset_api)  # 随机采样架构
-        graph.parse()  # 实例化模型
-        samples.append(graph)  # 收集
-    return samples  # 返回列表
+        # 关键修改：不调用 graph.parse()，延迟实例化到真正需要时
+        samples.append(graph)  # 收集架构描述
+    return samples  # 返回架构列表（未实例化）
 
 
 # === 新增：自定义的 ZiCo 计算逻辑，修复梯度为 None 的问题 ===
@@ -309,10 +309,9 @@ def evaluate_task(task: str, ss_name: str, args):
         if args.dry_run:
             zico_scores.append(0.0)  # 仅占位
             continue  # 跳过计算
-            
-        # === 关键 OOM 修复 ===
-        # graph.to(device) 会将内部模型移至 GPU。
-        # 由于 graph 仍在 samples 列表中，如果不移回 CPU，显存会持续累积直到 OOM。
+        
+        # === 关键修改：在这里才实例化模型（延迟实例化） ===
+        graph.parse()  # 实例化模型参数
         model = graph.to(args.device)  # 取具体模型并放设备
         model.train()  # 训练模式
         
@@ -329,12 +328,18 @@ def evaluate_task(task: str, ss_name: str, args):
                 
         zico_scores.append(zc)  # 记录分数
         
-        # === 显存清理 ===
-        model.cpu() # 关键：必须将模型移回 CPU，否则 graph 引用保持在 GPU 上
-        del model  # 删除当前引用
+        # === 显存和内存清理（彻底释放） ===
+        model.cpu()  # 关键：必须移回 CPU
+        del model  # 删除模型引用
+        
+        # 关键新增：删除 graph 对象，释放其持有的模型参数
+        # 因为 graph.parse() 后，graph 内部持有实例化的模型参数
+        del graph  # 删除 graph 引用
+        samples[i] = None  # 将列表中的引用也置为 None，确保 GC 可以回收
+        
         torch.cuda.empty_cache()  # 清理显存碎片
         
-        # === 新增：强制 GC ===
+        # === 强制 GC ===
         import gc
         gc.collect()
 
