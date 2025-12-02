@@ -236,7 +236,7 @@ def evaluate_task(task: str, ss_name: str, args):
         
         # === 关键修改：调用 C-SWAG Proxy ===
         try:
-            zc = compute_proxy_score(model, train_batches, loss_fn, args.device)  # 计算 Proxy 分数
+            zc = compute_proxy_score(model, train_batches, loss_fn, args.device, args.top_k_percent, args.alpha_threshold)  # 计算 Proxy 分数
         except RuntimeError as e:
             if "out of memory" in str(e):
                 print(f"!!! OOM detected at sample {i}. Trying to clear cache and retry...")
@@ -288,6 +288,8 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=42, help="随机种子")  # 种子
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="设备")  # 设备选择
     parser.add_argument("--dry_run", action="store_true", help="仅跑数据管线，不计算 Proxy")  # dry run
+    parser.add_argument("--top_k_percent", type=float, default=0.50, help="Top-K 截断比例（层内保留前 30% 稳定性分数/通道）")  # Top-K 截断比例
+    parser.add_argument("--alpha_threshold", type=float, default=0, help="关键层筛选阈值中的超参数 alpha")  # 关键层筛选阈值中的超参数 alpha
     return parser.parse_args()  # 返回参数
 
 
@@ -298,7 +300,7 @@ def main():
     random.seed(args.seed)  # 设定种子
     results = []  # 结果列表
     for task in args.tasks:
-        print(f"==> 评估任务 {task}")  # 打印任务
+        print(f"==> 评估任务 {task}，top_k_percent={args.top_k_percent}, alpha_threshold={args.alpha_threshold}")  # 打印任务
         res = evaluate_task(task, args.search_space, args)  # 评估单任务
         results.append(res)  # 收集结果
         # 打印简要结果

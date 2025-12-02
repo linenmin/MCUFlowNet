@@ -18,12 +18,12 @@ import numpy as np  # 导入 NumPy 做统计计算
 import math  # 导入数学库（主要用 log）
 
 
-def compute_myscore_score(model, train_batches, loss_fn, device):
+def compute_myscore_score(model, train_batches, loss_fn, device, top_k_percent, alpha_threshold):
     """C-SWAG 代理分数计算入口函数（快速版：基于 Batch 间稳定性 + Top-K 通道表达能力）。"""  # 函数说明
 
     # === 超参数配置 ===
-    ALPHA_THRESHOLD = 0.5  # 关键层筛选阈值中的超参数 alpha
-    TOP_K_PERCENT = 0.30  # Top-K 截断比例（层内保留前 30% 稳定性分数/通道）
+    ALPHA_THRESHOLD = alpha_threshold  # 关键层筛选阈值中的超参数 alpha
+    TOP_K_PERCENT = top_k_percent  # Top-K 截断比例（层内保留前 30% 稳定性分数/通道）
     EPSILON = 1e-8  # 数值稳定项，避免除零
 
     # === 模型准备 ===
@@ -141,8 +141,13 @@ def compute_myscore_score(model, train_batches, loss_fn, device):
         name for name, stats in layer_stats.items() if stats['mean_sigma'] > threshold
     ]
 
+     # 打印当前一次运行中，被 ALPHA_THRESHOLD 选中的层数量
+    # print(f"[MyScore] 选中关键层数量 = {len(critical_layers)} / {len(layer_stats)} (alpha={ALPHA_THRESHOLD:.2f})")
+
     if not critical_layers:
         return 1e-6
+    
+    
 
     # ------------------------------------------------------------------
     # 第 4 步：Top-K 聚合 & Top-K 通道表达能力计算
