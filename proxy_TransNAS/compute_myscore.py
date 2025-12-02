@@ -152,7 +152,7 @@ def compute_myscore_score(model, train_batches, loss_fn, device, top_k_percent, 
     # ------------------------------------------------------------------
     # 第 4 步：Top-K 聚合 & Top-K 通道表达能力计算
     # ------------------------------------------------------------------
-    c_swag_score = 0.0
+    c_swag_score = 0.0  # 累积所有关键层的得分（后面会取平均，而不是简单求和）
 
     for name in critical_layers:
         stats = layer_stats[name]
@@ -222,6 +222,13 @@ def compute_myscore_score(model, train_batches, loss_fn, device, top_k_percent, 
         final_layer_score_l = base_score_l * psi_l
 
         if final_layer_score_l > 1e-9:
-            c_swag_score += math.log(final_layer_score_l)
-
-    return c_swag_score
+            c_swag_score += math.log(final_layer_score_l)  # 对单层得分取 log 后累加
+    
+    # ------------------------------------------------------------------
+    # 第 5 步：按层数做归一化（取“平均层得分”而不是“层数越多越高”）
+    # ------------------------------------------------------------------
+    num_critical_layers = len(critical_layers)  # 关键层数量
+    if num_critical_layers > 0:
+        c_swag_score = c_swag_score / float(num_critical_layers)  # 用关键层数做平均，避免“差层越多分越高”
+    
+    return c_swag_score  # 返回最终 C-SWAG 得分
