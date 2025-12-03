@@ -114,7 +114,7 @@ def make_train_loader(task: str, data_root: Path, batch_size: int, seed: int):
 def truncate_loader(loader, max_batch: int):
     """截断 DataLoader 只保留前 max_batch 个 batch（返回迭代器，节省内存）。"""
     # 返回迭代器而非列表，避免一次性加载所有数据到内存
-    return itertools.islice(iter(loader), max_batch)  # 返回迭代器
+    return list(itertools.islice(iter(loader), max_batch))  # 返回前若干 batch
 
 
 class SegmentationLoss(torch.nn.Module):
@@ -164,17 +164,54 @@ def get_loss_fn(task: str):
 # 
 # 
 # 
-def sample_architectures(ss, dataset_api, num_samples: int, seed: int):
-    """随机采样若干架构，但不立即实例化模型（延迟到使用时）。"""
+def sample_architecture_identifiers(ss, dataset_api, num_samples: int, seed: int):
+    """
+    随机采样若干不重复的架构，只返回轻量的架构标识符（op_indices）。
+    
+    优势：
+    - 内存占用极小（每个标识符只有几十字节）
+    - 自动去重，保证没有重复架构
+    - 可通过 set_op_indices 重建完整架构
+    """
     random.seed(seed)  # 控制随机
     torch.manual_seed(seed)  # 控制随机
-    samples = []  # 存储图（只保存架构描述，不实例化模型）
-    for _ in range(num_samples):
-        graph = ss.clone()  # 复制搜索空间
-        graph.sample_random_architecture(dataset_api=dataset_api)  # 随机采样架构
-        # 关键修改：不调用 graph.parse()，延迟实例化到真正需要时
-        samples.append(graph)  # 收集架构描述
-    return samples  # 返回架构列表（未实例化）
+    
+    arch_identifiers = []  # 只存储轻量的架构标识符（tuple of op_indices）
+    seen_hashes = set()    # 用于去重
+    
+    max_attempts = num_samples * 10  # 最大尝试次数，避免死循环
+    attempts = 0
+    
+    print(f"正在采样 {num_samples} 个不重复的架构...", end="", flush=True)
+    
+    while len(arch_identifiers) < num_samples and attempts < max_attempts:
+        attempts += 1
+        
+        # 临时创建 graph，获取哈希
+        temp_graph = ss.clone()
+        temp_graph.sample_random_architecture(dataset_api=dataset_api)
+        
+        try:
+            arch_hash = tuple(temp_graph.get_hash())  # 转 tuple 才能加入 set
+        except Exception:
+            del temp_graph
+            continue  # 如果获取哈希失败，跳过
+        
+        # 去重检查
+        if arch_hash in seen_hashes:
+            del temp_graph  # 重复了，丢弃
+            continue
+        
+        seen_hashes.add(arch_hash)
+        arch_identifiers.append(arch_hash)
+        del temp_graph  # 立即释放，不保留
+    
+    if len(arch_identifiers) < num_samples:
+        print(f"\n警告：只采样到 {len(arch_identifiers)} 个不重复架构（目标 {num_samples}），可能搜索空间太小")
+    else:
+        print(f" 完成（尝试 {attempts} 次）")
+    
+    return arch_identifiers  # 返回轻量标识符列表
 
 
 # === 新增：自定义的 ZiCo 计算逻辑，修复梯度为 None 的问题 ===
@@ -300,22 +337,22 @@ def evaluate_task(task: str, ss_name: str, args):
         # 错误修正：必须传入 dataset=task，否则默认为 jigsaw
         ss = TransBench101SearchSpaceMacro(dataset=task, create_graph=True)
     
-    samples = sample_architectures(ss, dataset_api, args.num_samples, args.seed)  # 采样架构
+    # 第 1 步：采样架构标识符（轻量+去重）
+    arch_identifiers = sample_architecture_identifiers(ss, dataset_api, args.num_samples, args.seed)
 
     gt_scores = []  # 存储真值
     zico_scores = []  # 存储 ZiCo
     arch_hashes = []  # 存储每个架构的哈希（op_indices）
     start = time.time()  # 计时开始
     
-    # 使用 tqdm 显示进度条
-    for i, graph in enumerate(tqdm(samples, desc=f"[{task}] 评估架构", unit="arch")):
-        # 记录当前架构的哈希（使用 op_indices 作为离散结构编码，便于后续分析）
-        try:
-            arch_hash = list(graph.get_hash())
-        except Exception:
-            # 如果意外失败，则用 None 占位，避免中断主流程
-            arch_hash = None
-        arch_hashes.append(arch_hash)
+    # 第 2 步：逐个重建架构并评估
+    for i, arch_identifier in enumerate(tqdm(arch_identifiers, desc=f"[{task}] 评估架构", unit="arch")):
+        # 从标识符重建 graph
+        graph = ss.clone()
+        graph.set_op_indices(list(arch_identifier))  # 从 hash 恢复架构
+        
+        # 记录架构哈希
+        arch_hashes.append(list(arch_identifier))
         
         # 查询真值（VAL_ACCURACY 映射到任务对应指标）
         gt = graph.query(metric=Metric.VAL_ACCURACY, dataset=task, dataset_api=dataset_api)  # 取真值
@@ -323,9 +360,10 @@ def evaluate_task(task: str, ss_name: str, args):
         
         if args.dry_run:
             zico_scores.append(0.0)  # 仅占位
+            del graph  # 释放 graph
             continue  # 跳过计算
         
-        # === 关键修改：在这里才实例化模型（延迟实例化） ===
+        # === 实例化模型并评估 ===
         graph.parse()  # 实例化模型参数
         model = graph.to(args.device)  # 取具体模型并放设备
         model.train()  # 训练模式
@@ -346,11 +384,7 @@ def evaluate_task(task: str, ss_name: str, args):
         # === 显存和内存清理（彻底释放） ===
         model.cpu()  # 关键：必须移回 CPU
         del model  # 删除模型引用
-        
-        # 关键新增：删除 graph 对象，释放其持有的模型参数
-        # 因为 graph.parse() 后，graph 内部持有实例化的模型参数
-        del graph  # 删除 graph 引用
-        samples[i] = None  # 将列表中的引用也置为 None，确保 GC 可以回收
+        del graph  # 删除 graph 引用（立即释放，不累积）
         
         torch.cuda.empty_cache()  # 清理显存碎片
         
