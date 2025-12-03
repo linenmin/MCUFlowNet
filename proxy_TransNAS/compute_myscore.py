@@ -102,6 +102,7 @@ def compute_myscore_score(model, train_batches, loss_fn, device, top_k_percent, 
                 layer_psi_stats[name]['valid_batches'] += 1  # 累加有效 batch 数
                 
                 # fmap 在此 batch 结束后会被自动释放，不占用额外内存
+        features_dict.clear()
 
     # 移除 Hooks
     for h in hooks: h.remove()
@@ -217,6 +218,9 @@ def compute_myscore_score(model, train_batches, loss_fn, device, top_k_percent, 
         if final_layer_score_l > 1e-9:
             c_swag_score += math.log(final_layer_score_l)  # 对单层得分取 log 后累加
     
+    del raw_grads
+    del layer_stats
+    del layer_psi_stats
     # ------------------------------------------------------------------
     # 第 5 步：按层数做归一化（取“平均层得分”而不是“层数越多越高”）
     # ------------------------------------------------------------------
