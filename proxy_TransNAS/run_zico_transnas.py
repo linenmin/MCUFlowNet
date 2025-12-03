@@ -76,11 +76,11 @@ def load_transbench_api(data_root: Path, task: str):
 
     # 2. 如果全局缓存还没有实例，则从磁盘加载一次巨大的 .pth
     if _GLOBAL_TRANSNASBENCH_API is None:  # 只有第一次会进来
-        # 默认查找 data_root 下的 pth，否则回落 NASLib 自带路径
-        candidate = data_root / "transnas-bench_v10141024.pth"  # 用户指定路径
+    # 默认查找 data_root 下的 pth，否则回落 NASLib 自带路径
+    candidate = data_root / "transnas-bench_v10141024.pth"  # 用户指定路径
         if not candidate.exists():  # 如果用户路径不存在
-            candidate = NASLIB_ROOT / "naslib" / "data" / "transnas-bench_v10141024.pth"  # 回落默认
-        assert candidate.exists(), f"缺少 transnas-bench_v10141024.pth，检查 {candidate}"  # 断言存在
+        candidate = NASLIB_ROOT / "naslib" / "data" / "transnas-bench_v10141024.pth"  # 回落默认
+    assert candidate.exists(), f"缺少 transnas-bench_v10141024.pth，检查 {candidate}"  # 断言存在
         # 实例化并缓存在全局变量中
         _GLOBAL_TRANSNASBENCH_API = TransNASBenchAPI(str(candidate))  # 只在第一次从磁盘读取
 
@@ -309,7 +309,7 @@ def compute_zico_score(model, train_batches, loss_fn, device: torch.device):
 # === 新增：自定义的 ZiCo 计算逻辑，修复梯度为 None 的问题 ===
 
 
-def evaluate_task(task: str, ss_name: str, args):
+def evaluate_task(task: str, ss_name: str, args, shared_arch_identifiers=None):
     """在单个任务上评估 ZiCo 与真值的相关性。"""
     # 动态取 Metric 与搜索空间类
     TransBench101SearchSpaceMicro, TransBench101SearchSpaceMacro, graph_module = load_transbench_classes()  # 取类和模块
@@ -332,13 +332,17 @@ def evaluate_task(task: str, ss_name: str, args):
         if task == "segmentsemantic":
              ss = TransBench101SearchSpaceMicro(dataset=task, create_graph=True, n_classes=17)
         else:
-             ss = TransBench101SearchSpaceMicro(dataset=task, create_graph=True)
+        ss = TransBench101SearchSpaceMicro(dataset=task, create_graph=True)
     else:
         # 错误修正：必须传入 dataset=task，否则默认为 jigsaw
         ss = TransBench101SearchSpaceMacro(dataset=task, create_graph=True)
     
-    # 第 1 步：采样架构标识符（轻量+去重）
-    arch_identifiers = sample_architecture_identifiers(ss, dataset_api, args.num_samples, args.seed)
+    # === 修改：如果提供了共享架构列表，直接使用；否则自己采样（兼容性）===
+    if shared_arch_identifiers is not None:
+        arch_identifiers = shared_arch_identifiers  # 使用共享的采样结果
+    else:
+        # 如果没有提供，自己采样（兼容独立调用或 dry_run）
+        arch_identifiers = sample_architecture_identifiers(ss, dataset_api, args.num_samples, args.seed)
 
     gt_scores = []  # 存储真值
     zico_scores = []  # 存储 ZiCo
@@ -351,14 +355,11 @@ def evaluate_task(task: str, ss_name: str, args):
         graph = ss.clone()
         graph.set_op_indices(list(arch_identifier))  # 从 hash 恢复架构
         
-        # 记录架构哈希
-        arch_hashes.append(list(arch_identifier))
-        
-        # 查询真值（VAL_ACCURACY 映射到任务对应指标）
-        gt = graph.query(metric=Metric.VAL_ACCURACY, dataset=task, dataset_api=dataset_api)  # 取真值
-        gt_scores.append(gt)  # 记录真值
-        
         if args.dry_run:
+            # dry_run 模式：记录所有架构
+            arch_hashes.append(list(arch_identifier))
+            gt = graph.query(metric=Metric.VAL_ACCURACY, dataset=task, dataset_api=dataset_api)
+            gt_scores.append(gt)
             zico_scores.append(0.0)  # 仅占位
             del graph  # 释放 graph
             continue  # 跳过计算
@@ -368,17 +369,28 @@ def evaluate_task(task: str, ss_name: str, args):
         model = graph.to(args.device)  # 取具体模型并放设备
         model.train()  # 训练模式
         
-        # 计算 ZiCo 分数
+        # 计算 ZiCo 分数（先计算，成功后才记录数据）
         try:
-            zc = compute_zico_score(model, train_batches, loss_fn, args.device)  # 计算 ZiCo
+        zc = compute_zico_score(model, train_batches, loss_fn, args.device)  # 计算 ZiCo
         except RuntimeError as e:
             if "out of memory" in str(e):
-                print(f"!!! OOM detected at sample {i}. Trying to clear cache and retry...")
+                print(f"!!! OOM detected at sample {i}. Skipping this architecture...")
                 torch.cuda.empty_cache()
-                zc = 0.0 # OOM 时给 0 分，或者你可以选择跳过
+                # 关键：OOM 时直接跳过，不记录任何数据
+                model.cpu()
+                del model
+                del graph
+                torch.cuda.empty_cache()
+                import gc
+                gc.collect()
+                continue  # 跳过，不记录 GT 和 ZiCo
             else:
                 raise e
-                
+        
+        # 只有成功计算 ZiCo 后，才记录数据
+        arch_hashes.append(list(arch_identifier))  # 记录架构哈希
+        gt = graph.query(metric=Metric.VAL_ACCURACY, dataset=task, dataset_api=dataset_api)  # 查询真值
+        gt_scores.append(gt)  # 记录真值
         zico_scores.append(zc)  # 记录分数
         
         # === 显存和内存清理（彻底释放） ===
@@ -426,10 +438,35 @@ def main():
     args = parse_args()  # 解析参数
     torch.manual_seed(args.seed)  # 设定种子
     random.seed(args.seed)  # 设定种子
+    
+    # === 新增：在任务循环之前，先采样一次架构（所有任务共享）===
+    print("=" * 80)
+    print("Step 0: 为所有任务采样架构（共享）")
+    print("=" * 80)
+    
+    # 创建搜索空间（用于采样）
+    TransBench101SearchSpaceMicro, TransBench101SearchSpaceMacro, graph_module = load_transbench_classes()
+    data_root = Path(args.data_root).resolve()
+    dataset_api = load_transbench_api(data_root, args.tasks[0])  # 用第一个任务获取 API（API 本身是任务无关的）
+    
+    # 创建搜索空间（用第一个任务，因为搜索空间结构是任务无关的）
+    if args.search_space == "micro":
+        # 显式指定 n_classes 为 17 (segmentsemantic 的类别数)
+        if args.tasks[0] == "segmentsemantic":
+            ss = TransBench101SearchSpaceMicro(dataset=args.tasks[0], create_graph=True, n_classes=17)
+        else:
+            ss = TransBench101SearchSpaceMicro(dataset=args.tasks[0], create_graph=True)
+    else:
+        ss = TransBench101SearchSpaceMacro(dataset=args.tasks[0], create_graph=True)
+    
+    shared_arch_identifiers = sample_architecture_identifiers(ss, dataset_api, args.num_samples, args.seed)
+    print(f"✓ 采样完成，所有任务将共享这 {len(shared_arch_identifiers)} 个架构\n")
+    
+    # === 遍历任务，传入共享的架构列表 ===
     results = []  # 结果列表
     for task in args.tasks:
         print(f"==> 评估任务 {task}")  # 打印任务
-        res = evaluate_task(task, args.search_space, args)  # 评估单任务
+        res = evaluate_task(task, args.search_space, args, shared_arch_identifiers)  # 传入共享列表
         results.append(res)  # 收集结果
         # 打印简要结果
         print(
