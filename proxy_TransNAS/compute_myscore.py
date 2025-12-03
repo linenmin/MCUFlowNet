@@ -24,7 +24,7 @@ def compute_myscore_score(model, train_batches, loss_fn, device, top_k_percent, 
     # === 超参数配置 ===
     ALPHA_THRESHOLD = alpha_threshold  # 关键层筛选阈值中的超参数 alpha
     TOP_K_PERCENT = top_k_percent  # Top-K 截断比例（层内保留前 30% 稳定性分数/通道）
-    EPSILON = 1e-8  # 数值稳定项，避免除零
+    # 注意：不再使用 EPSILON，方差为0的参数将被直接过滤
 
     # === 模型准备 ===
     model = model.to(device)  # 把模型移动到指定设备
@@ -111,18 +111,27 @@ def compute_myscore_score(model, train_batches, loss_fn, device, top_k_percent, 
         # Stack -> (Num_Batches, P)
         grads = torch.stack(grads_list) 
         
-        # 2.1 梯度方差 (沿 Batch 维度) -> Sigma_w
-        sigma_w = torch.std(grads, dim=0) + EPSILON
+        # 2.1 梯度方差 (沿 Batch 维度) -> Sigma_w（不再加 EPSILON）
+        sigma_w = torch.std(grads, dim=0)
         
-        # 2.2 稳定性分数 S_w = 1 / Sigma_w
-        s_w = 1.0 / sigma_w
+        # 2.2 过滤掉方差为0的参数
+        non_zero_mask = (sigma_w != 0)  # 标记非零方差的参数
         
-        # 2.3 层级混乱度 MeanSigma_l
-        mean_sigma_l = torch.mean(sigma_w).item()
+        # 如果所有参数的方差都为0，跳过这一层
+        if not non_zero_mask.any():
+            continue  # 直接跳过，不记录这一层的统计信息
+        
+        # 2.3 只对非零方差的参数计算稳定性分数 S_w = 1 / Sigma_w
+        s_w = torch.zeros_like(sigma_w)  # 初始化为0
+        s_w[non_zero_mask] = 1.0 / sigma_w[non_zero_mask]  # 只计算非零方差参数的稳定性
+        
+        # 2.4 层级混乱度 MeanSigma_l（只计算非零方差参数的均值）
+        mean_sigma_l = torch.mean(sigma_w[non_zero_mask]).item()
         
         layer_stats[name] = {
             's_w': s_w,
-            'mean_sigma': mean_sigma_l
+            'mean_sigma': mean_sigma_l,
+            'non_zero_mask': non_zero_mask  # 记录哪些参数有效
         }
         mean_sigmas.append(mean_sigma_l)
 
@@ -157,15 +166,24 @@ def compute_myscore_score(model, train_batches, loss_fn, device, top_k_percent, 
     for name in critical_layers:
         stats = layer_stats[name]
         s_w = stats['s_w'].to(device) # (P,) 展平后的参数稳定性分数
+        non_zero_mask = stats['non_zero_mask'].to(device)  # 获取非零方差参数的掩码
         
-        # 4.1 Top-K 稳定性聚合
-        num_params = s_w.numel()
-        k_count = max(1, int(num_params * TOP_K_PERCENT))
+        # 4.1 Top-K 稳定性聚合（只从非零方差参数中选择）
+        valid_s_w = s_w[non_zero_mask]  # 只取有效参数的稳定性分数
+        num_valid_params = valid_s_w.numel()  # 有效参数数量
         
-        # 获取 Top-K 的值和索引
-        sorted_s, sorted_indices = torch.sort(s_w, descending=True)
+        if num_valid_params == 0:  # 如果没有有效参数，跳过
+            continue
+        
+        k_count = max(1, int(num_valid_params * TOP_K_PERCENT))
+        
+        # 获取 Top-K 的值和索引（在有效参数中排序）
+        sorted_s, sorted_valid_indices = torch.sort(valid_s_w, descending=True)
         top_k_s = sorted_s[:k_count]
-        top_k_indices = sorted_indices[:k_count]
+        
+        # 将有效参数的索引映射回原始参数索引
+        valid_indices = torch.where(non_zero_mask)[0]  # 原始索引中的有效参数位置
+        top_k_indices = valid_indices[sorted_valid_indices[:k_count]]  # Top-K 参数的原始索引
         
         base_score_l = torch.mean(top_k_s).item() # 基础稳定性得分
 
@@ -173,7 +191,7 @@ def compute_myscore_score(model, train_batches, loss_fn, device, top_k_percent, 
         # 注意：参数索引是展平后的 (Out, In, K, K)。
         # 我们需要将其映射回 (Out_Channel) 维度，因为特征图是 (B, Out_Channel, H, W)。
         # 策略：如果一个 Out_Channel 对应的卷积核参数中有任意一个入选 Top-K，
-        #       则认为该通道是“稳定通道”，纳入表达能力计算。
+        #       则认为该通道是"稳定通道"，纳入表达能力计算。
         
         psi_l = 1.0
         if name in batch_features:
@@ -188,7 +206,8 @@ def compute_myscore_score(model, train_batches, loss_fn, device, top_k_percent, 
             module = dict(model.named_modules())[name]
             weight_shape = module.weight.shape
             out_channels = weight_shape[0]
-            params_per_channel = num_params // out_channels # 每个 filter 的参数量
+            total_params = s_w.numel()  # 总参数数量
+            params_per_channel = total_params // out_channels # 每个 filter 的参数量
             
             # 将 Top-K 的 parameter indices 转换为 channel indices
             # index // params_per_channel 即为 channel index
