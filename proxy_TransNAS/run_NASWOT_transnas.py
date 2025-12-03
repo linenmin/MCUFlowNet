@@ -169,14 +169,18 @@ def network_weight_gaussian_init(net: torch.nn.Module):
     with torch.no_grad():  # 无梯度模式
         for m in net.modules():  # 遍历所有模块
             if isinstance(m, torch.nn.Conv2d):  # 卷积层
-                torch.nn.init.normal_(m.weight)  # 高斯初始化权重
+                if hasattr(m, 'weight') and m.weight is not None:  # 检查 weight 是否存在
+                    torch.nn.init.normal_(m.weight)  # 高斯初始化权重
                 if hasattr(m, 'bias') and m.bias is not None:  # 如果有偏置
                     torch.nn.init.zeros_(m.bias)  # 偏置初始化为 0
             elif isinstance(m, (torch.nn.BatchNorm2d, torch.nn.GroupNorm)):  # BN 或 GN 层
-                torch.nn.init.ones_(m.weight)  # 权重初始化为 1
-                torch.nn.init.zeros_(m.bias)  # 偏置初始化为 0
+                if hasattr(m, 'weight') and m.weight is not None:  # 检查 weight 是否存在（affine=True 时才有）
+                    torch.nn.init.ones_(m.weight)  # 权重初始化为 1
+                if hasattr(m, 'bias') and m.bias is not None:  # 检查 bias 是否存在
+                    torch.nn.init.zeros_(m.bias)  # 偏置初始化为 0
             elif isinstance(m, torch.nn.Linear):  # 全连接层
-                torch.nn.init.normal_(m.weight)  # 高斯初始化权重
+                if hasattr(m, 'weight') and m.weight is not None:  # 检查 weight 是否存在
+                    torch.nn.init.normal_(m.weight)  # 高斯初始化权重
                 if hasattr(m, 'bias') and m.bias is not None:  # 如果有偏置
                     torch.nn.init.zeros_(m.bias)  # 偏置初始化为 0
             else:
