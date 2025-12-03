@@ -181,7 +181,7 @@ def compute_myscore_score(model, train_batches, loss_fn, device, top_k_percent, 
     for name in critical_layers:
         stats = layer_stats[name]
         s_w = stats['s_w'].to(device) # (P,) 展平后的参数稳定性分数
-        non_zero_mask = stats['non_zero_mask'].to(device)  # 获取非零方差参数的掩码
+        non_zero_mask = stats['non_zero_mask']  # 获取非零方差参数的掩码
         
         # 4.1 Top-K 稳定性聚合（只从非零方差参数中选择）
         valid_s_w = s_w[non_zero_mask]  # 只取有效参数的稳定性分数
@@ -228,4 +228,7 @@ def compute_myscore_score(model, train_batches, loss_fn, device, top_k_percent, 
     if num_critical_layers > 0:
         c_swag_score = c_swag_score / float(num_critical_layers)  # 用关键层数做平均，避免“差层越多分越高”
     
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+
     return c_swag_score  # 返回最终 C-SWAG 得分
