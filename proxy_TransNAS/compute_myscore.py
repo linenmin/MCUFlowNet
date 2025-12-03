@@ -136,7 +136,8 @@ def compute_myscore_score(model, train_batches, loss_fn, device, top_k_percent, 
         
         # 2.1 梯度方差 (沿 Batch 维度) -> Sigma_w（不再加 EPSILON）
         sigma_w = torch.std(grads, dim=0)  # 在 CPU 上计算，避免显存占用
-        
+        grad_mean = torch.mean(torch.abs(grads), dim=0)      # (P,) 每个参数在 batch 维度上的均值
+
         # 2.2 过滤掉方差为0的参数
         non_zero_mask = (sigma_w != 0)  # 标记非零方差的参数
         
@@ -146,7 +147,7 @@ def compute_myscore_score(model, train_batches, loss_fn, device, top_k_percent, 
         
         # 2.3 只对非零方差的参数计算稳定性分数 S_w = 1 / Sigma_w（在 CPU 上）
         s_w = torch.zeros_like(sigma_w)  # 初始化为0，保持在 CPU
-        s_w[non_zero_mask] = 1.0 / sigma_w[non_zero_mask]  # 只计算非零方差参数的稳定性
+        s_w[non_zero_mask] = grad_mean[non_zero_mask] / sigma_w[non_zero_mask]  # 只计算非零方差参数的稳定性
         
         # 2.4 层级混乱度 MeanSigma_l（只计算非零方差参数的均值）
         mean_sigma_l = torch.mean(sigma_w[non_zero_mask]).item()
@@ -216,8 +217,9 @@ def compute_myscore_score(model, train_batches, loss_fn, device, top_k_percent, 
             psi_l = layer_psi_stats[name]['psi_sum'] / layer_psi_stats[name]['valid_batches']
 
         # 4.3 最终层得分（稳定性 × 表达能力）
-        final_layer_score_l = base_score_l * psi_l
-
+        # final_layer_score_l = base_score_l * psi_l
+        final_layer_score_l = base_score_l
+        
         if final_layer_score_l > 0:  # 只要大于0就取 log
             c_swag_score += math.log(final_layer_score_l)  # 对单层得分取 log 后累加
     

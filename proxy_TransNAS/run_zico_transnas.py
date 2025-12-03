@@ -112,9 +112,9 @@ def make_train_loader(task: str, data_root: Path, batch_size: int, seed: int):
 
 
 def truncate_loader(loader, max_batch: int):
-    """截断 DataLoader 只保留前 max_batch 个 batch。"""
-    # 转为列表以兼容 compute_zico 里的 enumerate
-    return list(itertools.islice(iter(loader), max_batch))  # 返回前若干 batch
+    """截断 DataLoader 只保留前 max_batch 个 batch（返回迭代器，节省内存）。"""
+    # 返回迭代器而非列表，避免一次性加载所有数据到内存
+    return itertools.islice(iter(loader), max_batch)  # 返回迭代器
 
 
 class SegmentationLoss(torch.nn.Module):
@@ -203,6 +203,7 @@ def caculate_zico_safe(grad_dict):
         grad_dict[modname] = np.array(grad_dict[modname])
     
     nsr_mean_sum_abs = 0
+    valid_layer_count = 0  # 新增：统计有效层数
     
     for j, modname in enumerate(grad_dict.keys()):
         nsr_std = np.std(grad_dict[modname], axis=0)
@@ -214,14 +215,22 @@ def caculate_zico_safe(grad_dict):
             continue
             
         nsr_mean_abs = np.mean(np.abs(grad_dict[modname]), axis=0)
-        tmpsum = np.sum(nsr_mean_abs[nonzero_idx] / nsr_std[nonzero_idx])
+        # tmpsum = np.sum(nsr_mean_abs[nonzero_idx] / nsr_std[nonzero_idx])
+        tmpsum = np.mean(nsr_mean_abs[nonzero_idx] / nsr_std[nonzero_idx]) #取平均而不是求和
         
         if tmpsum == 0:
             pass
         else:
             nsr_mean_sum_abs += np.log(tmpsum)
-            
-    return nsr_mean_sum_abs
+            valid_layer_count += 1  # 新增：累加有效层数
+
+
+    # 新增：如果有效层数 > 0，则除以有效层数做平均
+    if valid_layer_count > 0:
+        return nsr_mean_sum_abs / valid_layer_count
+        # return nsr_mean_sum_abs
+    else:
+        return 0.0
 
 def compute_zico_score(model, train_batches, loss_fn, device: torch.device):
     """使用安全的 ZiCo 计算实现，替代原始库函数。"""
@@ -254,6 +263,10 @@ def compute_zico_score(model, train_batches, loss_fn, device: torch.device):
         
     # 计算分数
     res = caculate_zico_safe(grad_dict)
+    
+    # 显式释放 CPU 内存（帮助 GC 更快回收）
+    del grad_dict
+    
     return res
 
 # === 新增：自定义的 ZiCo 计算逻辑，修复梯度为 None 的问题 ===
