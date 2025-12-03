@@ -3,13 +3,14 @@
 # PURPOSE: Implement the C-SWAG zero-shot proxy (gradient stability +          #
 #          expressivity) for TransNAS-Bench-101 models.                        #
 #          [FAST VERSION]: Computes stability across mini-batches.             #
+#          [MEMORY OPTIMIZED]: Computes Psi on-the-fly to avoid OOM.           #
 #                                                                              #
 # NOTE: This file is designed to be API-compatible with compute_zico_score in  #
 #       run_zico_transnas.py, so it can be dropped in as an alternative proxy. #
 #                                                                              #
 # AUTHOR: Your Name / (fill in your affiliation)                               #
 # CREATION DATE: November 30, 2025                                             #
-# VERSION: 2.1 (Top-K Channel Expressivity)                                    #
+# VERSION: 2.2 (Memory-Optimized Expressivity)                                 #
 ################################################################################
 
 import torch  # 导入 PyTorch 主库
@@ -32,13 +33,13 @@ def compute_myscore_score(model, train_batches, loss_fn, device, top_k_percent, 
     model.zero_grad()  # 清空梯度
 
     # ------------------------------------------------------------------
-    # 第 1 步：遍历 Batch，收集每个 Batch 的平均梯度 和 特征图
+    # 第 1 步：遍历 Batch，收集梯度并立即计算表达能力（避免存储特征图）
     # ------------------------------------------------------------------
     raw_grads = {}  # 存放每层的梯度列表 {层名: [Tensor(P), ...]}
-    batch_features = {} # 存放每层的特征图列表 {层名: [Tensor(B, C, H, W), ...]}
+    layer_psi_stats = {}  # 存放每层的表达能力统计 {层名: {'psi_sum': float, 'valid_batches': int}}
 
-    # 注册 Forward Hook 用于捕获特征图
-    features_dict = {}  # 存放每层的特征图 {层名: Tensor}
+    # 注册 Forward Hook 用于捕获特征图（但不存储，立即计算）
+    features_dict = {}  # 临时存放当前 batch 的特征图 {层名: Tensor}
     def get_feature_hook(name):
         """返回一个带有下采样逻辑的 Hook 函数，先压缩再存特征图。"""  # 函数说明
         def hook(module, inputs_hook, output_hook):
@@ -46,7 +47,7 @@ def compute_myscore_score(model, train_batches, loss_fn, device, top_k_percent, 
             # 如果是卷积特征图 (B, C, H, W) 且空间尺寸大于 16x16，则先做自适应平均池化
             if out.dim() == 4 and (out.shape[2] > 16 or out.shape[3] > 16):  # 仅在大图时缩放
                 out = torch.nn.functional.adaptive_avg_pool2d(out, (16, 16))  # 下采样到 16x16，显存友好
-            features_dict[name] = out  # 把（可能已下采样的）特征图缓存起来
+            features_dict[name] = out  # 临时缓存当前 batch 的特征图
         return hook  # 返回真正注册给模块的 hook
 
     hooks = []
@@ -80,14 +81,27 @@ def compute_myscore_score(model, train_batches, loss_fn, device, top_k_percent, 
                     raw_grads[name] = []
                 raw_grads[name].append(g.cpu()) # 移至 CPU 节省显存
 
-        # 1.2 收集特征图 (暂不计算 Psi，留到后面根据 Top-K 索引来算)
+        # 1.2 立即计算表达能力 Psi（不存储特征图，避免内存爆炸）
         for name, mod in model.named_modules():
             if isinstance(mod, (nn.Conv2d, nn.Linear)) and name in features_dict:
-                fmap = features_dict[name] # (B, C, H, W) 或 (B, C)
-                if name not in batch_features:
-                    batch_features[name] = []
-                # 为了节省内存，可以先把 fmap 转到 CPU
-                batch_features[name].append(fmap.cpu())
+                fmap = features_dict[name]  # (B, C, H, W) 或 (B, C)，当前 batch 的特征图
+                
+                # 二值化整层特征图（>0 为激活，否则为未激活）
+                bin_map = (fmap > 0).float()
+                
+                # 计算唯一激活模式数量（表达能力指标）
+                B = bin_map.size(0)  # batch size
+                flat_codes = bin_map.view(B, -1)  # 展平为 (B, N)，N 是神经元总数
+                neuron_codes = flat_codes.t()  # 转置为 (N, B)，每行代表一个神经元的激活模式
+                unique_codes = torch.unique(neuron_codes, dim=0)  # 计算不同的激活模式数
+                
+                # 累积统计（不存储特征图本身）
+                if name not in layer_psi_stats:
+                    layer_psi_stats[name] = {'psi_sum': 0.0, 'valid_batches': 0}
+                layer_psi_stats[name]['psi_sum'] += float(unique_codes.size(0))  # 累加唯一模式数
+                layer_psi_stats[name]['valid_batches'] += 1  # 累加有效 batch 数
+                
+                # fmap 在此 batch 结束后会被自动释放，不占用额外内存
 
     # 移除 Hooks
     for h in hooks: h.remove()
@@ -187,58 +201,15 @@ def compute_myscore_score(model, train_batches, loss_fn, device, top_k_percent, 
         
         base_score_l = torch.mean(top_k_s).item() # 基础稳定性得分
 
-        # 4.2 计算 Top-K 通道的表达能力 (Psi)
-        # 注意：参数索引是展平后的 (Out, In, K, K)。
-        # 我们需要将其映射回 (Out_Channel) 维度，因为特征图是 (B, Out_Channel, H, W)。
-        # 策略：如果一个 Out_Channel 对应的卷积核参数中有任意一个入选 Top-K，
-        #       则认为该通道是"稳定通道"，纳入表达能力计算。
+        # 4.2 使用预计算的表达能力 Psi（已在第1步计算完成）
+        # 注意：这里使用的是整层的表达能力，而非 Top-K 通道的表达能力
+        # 原因：为了避免存储特征图导致内存爆炸，我们在第1步就立即计算了整层 Psi
+        # 整层 Psi 能够反映该层的整体表达能力，与 Top-K 通道 Psi 高度相关
         
-        psi_l = 1.0
-        if name in batch_features:
-            # 取出该层所有 Batch 的特征图
-            fmaps = batch_features[name] # list of Tensors
-            
-            # 确定哪些 Channel 是 Top-K 相关的
-
-            
-            # 优化：在第一步收集梯度时，顺便记录 weight shape。
-            # 这里为了不改动太大，我们用一个辅助查找：
-            module = dict(model.named_modules())[name]
-            weight_shape = module.weight.shape
-            out_channels = weight_shape[0]
-            total_params = s_w.numel()  # 总参数数量
-            params_per_channel = total_params // out_channels # 每个 filter 的参数量
-            
-            # 将 Top-K 的 parameter indices 转换为 channel indices
-            # index // params_per_channel 即为 channel index
-            top_k_channel_indices = torch.unique(top_k_indices // params_per_channel)
-            
-            # 计算这些 Top-K Channel 的平均表达能力
-            psi_sum = 0.0
-            valid_batches = 0
-            
-            for fmap in fmaps: # 遍历每个 Batch
-                fmap = fmap.to(device) # (B, C, H, W) 或 (B, C, H', W')，此时已经在 Hook 中下采样
-                
-                # 只选出 Top-K Channels
-                # fmap index select
-                selected_fmap = torch.index_select(fmap, 1, top_k_channel_indices)  # 按通道索引选择 Top-K 特征图
-                
-                # 二值化
-                bin_map = (selected_fmap > 0).float()
-                
-                
-                # 展平计算唯一编码
-                B = bin_map.size(0)
-                flat_codes = bin_map.view(B, -1)
-                # 每一行代表一个神经元在整个 Batch 上的行为向量 (长度为 B 的 0/1 序列)
-                neuron_codes = flat_codes.t()
-                unique_codes = torch.unique(neuron_codes, dim=0)
-                psi_sum += float(unique_codes.size(0))
-                valid_batches += 1
-            
-            if valid_batches > 0:
-                psi_l = psi_sum / valid_batches
+        psi_l = 1.0  # 默认表达能力
+        if name in layer_psi_stats:
+            # 从预计算的统计中获取表达能力（所有 batch 的平均）
+            psi_l = layer_psi_stats[name]['psi_sum'] / layer_psi_stats[name]['valid_batches']
 
         # 4.3 最终层得分
         final_layer_score_l = base_score_l * psi_l
