@@ -117,7 +117,7 @@ def truncate_loader(loader, max_batch: int):
     return list(itertools.islice(iter(loader), max_batch))  # 返回前若干 batch
 
 
-def select_architectures_by_percentile(ss, dataset_api, task: str, start_percent: float, end_percent: float):
+def select_architectures_by_percentile(ss, dataset_api, task: str, start_percent: float, end_percent: float, search_space_name: str):
     """
     根据 Ground Truth 百分比范围选择架构。
     
@@ -127,9 +127,10 @@ def select_architectures_by_percentile(ss, dataset_api, task: str, start_percent
         task: 任务名称
         start_percent: 起始百分比（0-100），从性能最好开始计
         end_percent: 结束百分比（0-100）
+        search_space_name: 搜索空间名称 ('micro' 或 'macro')，直接从命令行参数传入
     
     返回：
-        arch_identifiers: 架构标识符列表（tuple of op_indices）
+        arch_list: 架构字符串列表
     
     示例：
         - start_percent=0, end_percent=10  → 前 10% 的架构（性能最好）
@@ -137,7 +138,7 @@ def select_architectures_by_percentile(ss, dataset_api, task: str, start_percent
         - start_percent=90, end_percent=100 → 后 10% 的架构（性能最差）
     """
     api = dataset_api['api']
-    search_space_name = 'micro' if hasattr(ss, 'max_nodes') else 'macro'  # 判断搜索空间类型
+    # 直接使用传入的 search_space_name，不再通过属性判断，避免误判
     
     print(f"正在查询所有 {search_space_name} 架构的 GT 分数...", end="", flush=True)
     
@@ -177,6 +178,8 @@ def select_architectures_by_percentile(ss, dataset_api, task: str, start_percent
     start_idx = max(0, min(start_idx, total_archs - 1))
     end_idx = max(start_idx + 1, min(end_idx, total_archs))
     
+
+
     # 选择架构
     selected_archs = arch_scores_sorted[start_idx:end_idx]
     num_selected = len(selected_archs)
@@ -507,7 +510,24 @@ def evaluate_task(task: str, ss_name: str, args, arch_identifiers=None):
     for i, arch_str in enumerate(tqdm(arch_identifiers, desc=f"[{task}] 评估架构", unit="arch")):
         # 从架构字符串重建 graph
         graph = ss.clone()
-        graph.set_spec(arch_str, dataset_api=dataset_api)
+        
+        # 对于 micro 搜索空间，需要手动解析架构字符串
+        if ss_name == "micro":
+            parts = arch_str.split("-")
+            config_part = parts[-1]
+            config_parts = config_part.split("_")
+            
+            op_indices = []
+            op_indices.append(int(config_parts[0]))
+            for digit in config_parts[1]:
+                op_indices.append(int(digit))
+            for digit in config_parts[2]:
+                op_indices.append(int(digit))
+            
+            graph.set_op_indices(op_indices)
+        else:
+            # macro 搜索空间可以直接使用 set_spec
+            graph.set_spec(arch_str, dataset_api=dataset_api)
         
         if args.dry_run:
             arch_strs.append(arch_str)
@@ -548,8 +568,8 @@ def evaluate_task(task: str, ss_name: str, args, arch_identifiers=None):
                 elif proxy == "flops":
                     model.eval()
                     score = compute_flops(model, train_batches, args.device)
-                    # FLOPs 是"越低越好"，需要取负数才能与其他 proxy 方向一致
-                    score = np.log(score)
+                    # print(f"FLOPs: {score}")
+                    # score = np.log(score)
                 else:
                     score = 0.0
                 
@@ -613,7 +633,7 @@ def evaluate_task(task: str, ss_name: str, args, arch_identifiers=None):
         }
         aggregated_scores = nonlinear_ranking_aggregation(proxy_scores_for_aggregation)
     else:
-        aggregated_scores = [0.0] * len(arch_hashes)
+        aggregated_scores = [0.0] * len(arch_strs)
     
     # 相关性评估
     corr = compute_scores(ytest=gt_scores, test_pred=aggregated_scores)
@@ -648,20 +668,6 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Run Multi-Proxy Ensemble on Constrained Architecture Sets",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-示例用法：
-  # 选择前10%的架构（性能最好）
-  python run_combine_constraint.py --start_percent 0 --end_percent 10
-  
-  # 选择30%-50%的架构（中等性能）
-  python run_combine_constraint.py --start_percent 30 --end_percent 50
-  
-  # 选择后10%的架构（性能最差）
-  python run_combine_constraint.py --start_percent 90 --end_percent 100
-  
-  # 使用所有proxy
-  python run_combine_constraint.py --start_percent 0 --end_percent 20 --proxies zico naswot flops
-        """
     )
     parser.add_argument("--tasks", nargs="+", default=["autoencoder", "segmentsemantic", "normal"], 
                         help="任务列表")
@@ -737,7 +743,7 @@ def main():
         
         # 根据百分比区间选择架构
         task_arch_identifiers = select_architectures_by_percentile(
-            ss, dataset_api, task, args.start_percent, args.end_percent
+            ss, dataset_api, task, args.start_percent, args.end_percent, args.search_space
         )
         
         if len(task_arch_identifiers) == 0:
