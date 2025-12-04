@@ -1,14 +1,15 @@
 ################################################################################
 # FILE: run_ZICO_NASWOT_transnas.py
-# PURPOSE: Evaluate the correlation between aggregated ZiCo+NASWOT ensemble 
+# PURPOSE: Evaluate the correlation between aggregated multi-proxy ensemble 
 #          and Ground Truth performance on TransNAS-Bench-101.
 #          
 # MODE: Uses non-linear ranking aggregation from AZ-NAS paper to combine
-#       multiple zero-shot proxies for better ranking consistency.
+#       multiple zero-shot proxies (ZiCo, NASWOT, FLOPs) for better ranking 
+#       consistency. Users can select any combination via --proxies argument.
 # 
 # AUTHOR: Enmin Lin / KU Leuven
 # CREATION DATE: December 3, 2025
-# VERSION: 1.0
+# VERSION: 2.0
 ################################################################################
 
 import argparse  # 解析命令行参数
@@ -25,6 +26,7 @@ import numpy as np  # 数值计算
 import warnings  # 警告控制
 from tqdm import tqdm  # 进度条显示
 from scipy.stats import rankdata  # 排名计算
+from fvcore.nn import FlopCountAnalysis  # FLOPs 计算
 
 # 忽略特定的 FutureWarning，保持输出整洁
 warnings.filterwarnings("ignore", category=FutureWarning, message=".*weights_only.*")
@@ -355,6 +357,40 @@ def compute_naswot_score(model, train_batches, device):
 
 
 # ============================================================================
+# FLOPs 计算逻辑
+# ============================================================================
+
+def compute_flops(model, train_batches, device):
+    """
+    计算模型的 FLOPs（浮点运算次数）。
+    
+    注意：FLOPs 越低越好（效率更高），但在排名聚合中需要取反。
+    """
+    model.eval()  # 评估模式
+    model.to(device)
+    
+    data, _ = train_batches[0]  # 取第一个 batch
+    input_tensor = data[:1].to(device)  # 只用一个样本即可
+    
+    try:
+        with torch.no_grad():
+            # 抑制 fvcore 的 unsupported operator 警告
+            import warnings
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message=".*unsupported.*")
+                warnings.filterwarnings("ignore", message=".*Unsupported.*")
+                warnings.filterwarnings("ignore", message=".*were never called.*")
+                flop_analyzer = FlopCountAnalysis(model, input_tensor)
+                flop_analyzer.unsupported_ops_warnings(False)  # 关闭警告
+                flop_analyzer.uncalled_modules_warnings(False)  # 关闭未调用模块警告
+                total_flops = flop_analyzer.total()
+        return float(total_flops)
+    except Exception as e:
+        print(f"!!! FLOPs 计算失败: {e}")
+        return 0.0
+
+
+# ============================================================================
 # 非线性排名聚合（AZ-NAS 方法）
 # ============================================================================
 
@@ -367,6 +403,10 @@ def nonlinear_ranking_aggregation(proxy_scores_dict):
     
     返回：
         aggregated_scores: 聚合后的分数列表
+    
+    注意：
+        - FLOPs 在传入前已取负数，因此"越低越好"已转换为"越高越好"
+        - 所有 proxy 都是分数越高排名越高
     """
     m = len(next(iter(proxy_scores_dict.values())))  # 架构数量
     aggregated_scores = np.zeros(m)  # 初始化聚合分数
@@ -429,8 +469,7 @@ def evaluate_task(task: str, ss_name: str, args, shared_arch_identifiers=None):
         arch_identifiers = sample_architecture_identifiers(ss, dataset_api, args.num_samples, args.seed)
     
     gt_scores = []  # 存储真值
-    zico_scores = []  # 存储 ZiCo
-    naswot_scores = []  # 存储 NASWOT
+    proxy_scores_dict = {proxy: [] for proxy in args.proxies}  # 动态存储各 proxy 分数
     arch_hashes = []  # 存储架构哈希
     start = time.time()
     
@@ -444,8 +483,8 @@ def evaluate_task(task: str, ss_name: str, args, shared_arch_identifiers=None):
             arch_hashes.append(list(arch_identifier))
             gt = graph.query(metric=Metric.VAL_ACCURACY, dataset=task, dataset_api=dataset_api)
             gt_scores.append(gt)
-            zico_scores.append(0.0)
-            naswot_scores.append(0.0)
+            for proxy in args.proxies:
+                proxy_scores_dict[proxy].append(0.0)
             del graph
             continue
         
@@ -453,84 +492,77 @@ def evaluate_task(task: str, ss_name: str, args, shared_arch_identifiers=None):
         graph.parse()
         model = graph.to(args.device)
         
-        # === 计算 ZiCo 分数 ===
-        try:
-            model.train()  # ZiCo 需要训练模式
-            zc = compute_zico_score(model, train_batches, loss_fn, args.device)
-        except RuntimeError as e:
-            if "out of memory" in str(e):
-                print(f"!!! OOM (ZiCo) at sample {i}. Skipping...")
-                torch.cuda.empty_cache()
-                model.cpu()
-                del model
-                del graph
-                torch.cuda.empty_cache()
-                import gc
-                gc.collect()
-                continue
-            else:
-                raise e
-        except Exception as e:
-            print(f"!!! Error (ZiCo) at sample {i}: {e}. Skipping...")
-            model.cpu()
-            del model
+        # === 存储本架构的 proxy 分数 ===
+        current_proxy_scores = {}
+        skip_architecture = False  # 标记是否跳过本架构
+        
+        # === 按需计算各个 proxy ===
+        for proxy in args.proxies:
+            try:
+                if proxy == "zico":
+                    model.train()
+                    score = compute_zico_score(model, train_batches, loss_fn, args.device)
+                elif proxy == "naswot":
+                    model.eval()
+                    score = compute_naswot_score(model, train_batches, args.device)
+                elif proxy == "flops":
+                    model.eval()
+                    score = compute_flops(model, train_batches, args.device)
+                    # FLOPs 是"越低越好"，需要取负数才能与其他 proxy 方向一致
+                    score = np.log(score)
+                else:
+                    score = 0.0
+                
+                current_proxy_scores[proxy] = score
+                
+            except RuntimeError as e:
+                if "out of memory" in str(e):
+                    print(f"!!! OOM ({proxy}) at sample {i}. Skipping...")
+                    skip_architecture = True
+                    break
+                else:
+                    raise e
+            except Exception as e:
+                print(f"!!! Error ({proxy}) at sample {i}: {e}. Skipping...")
+                skip_architecture = True
+                break
+        
+        # === 清理模型 ===
+        model.cpu()
+        del model
+        torch.cuda.empty_cache()
+        import gc
+        gc.collect()
+        
+        # === 如果出现错误，跳过本架构 ===
+        if skip_architecture:
             del graph
             torch.cuda.empty_cache()
-            import gc
             gc.collect()
             continue
         
-        # === 计算 NASWOT 分数 ===
-        try:
-            model.eval()  # NASWOT 需要评估模式
-            nw = compute_naswot_score(model, train_batches, args.device)
-        except RuntimeError as e:
-            if "out of memory" in str(e):
-                print(f"!!! OOM (NASWOT) at sample {i}. Skipping...")
-                torch.cuda.empty_cache()
-                model.cpu()
-                del model
-                del graph
-                torch.cuda.empty_cache()
-                import gc
-                gc.collect()
-                continue
-            else:
-                raise e
-        except Exception as e:
-            print(f"!!! Error (NASWOT) at sample {i}: {e}. Skipping...")
-            model.cpu()
-            del model
-            del graph
-            torch.cuda.empty_cache()
-            import gc
-            gc.collect()
-            continue
-        
-        # 只有成功计算两个分数后，才记录数据
+        # === 记录数据 ===
         arch_hashes.append(list(arch_identifier))
         gt = graph.query(metric=Metric.VAL_ACCURACY, dataset=task, dataset_api=dataset_api)
         gt_scores.append(gt)
-        zico_scores.append(zc)
-        naswot_scores.append(nw)
+        for proxy in args.proxies:
+            proxy_scores_dict[proxy].append(current_proxy_scores[proxy])
         
-        # === 显存和内存清理 ===
-        model.cpu()
-        del model
+        # === 清理图对象 ===
         del graph
         torch.cuda.empty_cache()
-        import gc
         gc.collect()
     
     elapsed = time.time() - start
     
     # === 非线性排名聚合 ===
-    if len(zico_scores) > 0 and not args.dry_run:
-        proxy_scores = {
-            "ZiCo": zico_scores,
-            "NASWOT": naswot_scores,
+    if len(gt_scores) > 0 and not args.dry_run:
+        # 准备排名聚合的数据（proxy 名称需要大写）
+        proxy_scores_for_aggregation = {
+            proxy.upper(): proxy_scores_dict[proxy] 
+            for proxy in args.proxies
         }
-        aggregated_scores = nonlinear_ranking_aggregation(proxy_scores)
+        aggregated_scores = nonlinear_ranking_aggregation(proxy_scores_for_aggregation)
     else:
         aggregated_scores = [0.0] * len(arch_hashes)
     
@@ -538,32 +570,38 @@ def evaluate_task(task: str, ss_name: str, args, shared_arch_identifiers=None):
     corr = compute_scores(ytest=gt_scores, test_pred=aggregated_scores)
     
     # 同时计算单独 proxy 的相关性（用于对比）
-    corr_zico = compute_scores(ytest=gt_scores, test_pred=zico_scores) if len(zico_scores) > 0 else {}
-    corr_naswot = compute_scores(ytest=gt_scores, test_pred=naswot_scores) if len(naswot_scores) > 0 else {}
+    individual_corrs = {}
+    for proxy in args.proxies:
+        if len(proxy_scores_dict[proxy]) > 0:
+            corr_single = compute_scores(ytest=gt_scores, test_pred=proxy_scores_dict[proxy])
+            individual_corrs[proxy] = {
+                "kendalltau": corr_single.get("kendalltau"),
+                "spearman": corr_single.get("spearman"),
+            }
     
-    return {
+    result = {
         "task": task,
         "kendalltau": corr.get("kendalltau"),
         "spearman": corr.get("spearman"),
         "time": elapsed,
         "gt": gt_scores,
         "pred": aggregated_scores,
-        "zico": zico_scores,
-        "naswot": naswot_scores,
         "arch_hash": arch_hashes,
-        # 单独 proxy 的相关性（用于对比）
-        "zico_kendalltau": corr_zico.get("kendalltau"),
-        "zico_spearman": corr_zico.get("spearman"),
-        "naswot_kendalltau": corr_naswot.get("kendalltau"),
-        "naswot_spearman": corr_naswot.get("spearman"),
+        "proxy_scores": proxy_scores_dict,  # 存储所有 proxy 的分数
+        "individual_corrs": individual_corrs,  # 存储单独 proxy 的相关性
     }
+    
+    return result
 
 
 def parse_args():
     """解析命令行参数。"""
-    parser = argparse.ArgumentParser(description="Run ZiCo+NASWOT Ensemble on TransNAS-Bench-101")
+    parser = argparse.ArgumentParser(description="Run Multi-Proxy Ensemble on TransNAS-Bench-101")
     parser.add_argument("--tasks", nargs="+", default=["autoencoder", "segmentsemantic", "normal"], help="任务列表")
     parser.add_argument("--search_space", choices=["micro", "macro"], default="micro", help="搜索空间类型")
+    parser.add_argument("--proxies", nargs="+", choices=["zico", "naswot", "flops"], 
+                        default=["zico", "naswot"], 
+                        help="选择使用的 proxy 组合（例如：--proxies zico naswot flops）")
     parser.add_argument("--data_root", type=str, default=str(NASLIB_ROOT / "data"), help="数据根路径")
     parser.add_argument("--num_samples", type=int, default=20, help="采样架构数量")
     parser.add_argument("--batch_size", type=int, default=128, help="DataLoader 的 batch 大小")
@@ -611,21 +649,43 @@ def main():
         
         # 打印详细结果（包含单独 proxy 的对比）
         print(f"\n[{task}] 结果对比:")
-        print(f"  ZiCo only:       kendalltau={res.get('zico_kendalltau', 0.0):.4f}, spearman={res.get('zico_spearman', 0.0):.4f}")
-        print(f"  NASWOT only:     kendalltau={res.get('naswot_kendalltau', 0.0):.4f}, spearman={res.get('naswot_spearman', 0.0):.4f}")
-        print(f"  ZiCo+NASWOT:     kendalltau={res['kendalltau']:.4f}, spearman={res['spearman']:.4f}")
+        
+        # 打印每个单独 proxy 的结果
+        for proxy in args.proxies:
+            if proxy in res['individual_corrs']:
+                corr = res['individual_corrs'][proxy]
+                proxy_name = proxy.upper()
+                print(f"  {proxy_name:12} only: τ={corr['kendalltau']:.4f}, ρ={corr['spearman']:.4f}")
+        
+        # 打印聚合结果
+        proxy_names = "+".join([p.upper() for p in args.proxies])
+        print(f"  {proxy_names:12}     : τ={res['kendalltau']:.4f}, ρ={res['spearman']:.4f}")
         print(f"  用时: {res['time']:.1f}s\n")
     
     # 汇总输出
     print("=" * 80)
     print("=== 汇总结果 ===")
     print("=" * 80)
+    proxy_names = "+".join([p.upper() for p in args.proxies])
+    
     for res in results:
         print(f"\n{res['task']}:")
-        print(f"  ZiCo only:       τ={res.get('zico_kendalltau', 0.0):.4f}, ρ={res.get('zico_spearman', 0.0):.4f}")
-        print(f"  NASWOT only:     τ={res.get('naswot_kendalltau', 0.0):.4f}, ρ={res.get('naswot_spearman', 0.0):.4f}")
-        print(f"  ZiCo+NASWOT:     τ={res['kendalltau']:.4f}, ρ={res['spearman']:.4f}")
-        print(f"  改进: τ +{res['kendalltau'] - max(res.get('zico_kendalltau', 0), res.get('naswot_kendalltau', 0)):.4f}")
+        
+        # 打印每个单独 proxy 的结果
+        best_single_tau = 0.0
+        for proxy in args.proxies:
+            if proxy in res['individual_corrs']:
+                corr = res['individual_corrs'][proxy]
+                proxy_name = proxy.upper()
+                print(f"  {proxy_name:12} only: τ={corr['kendalltau']:.4f}, ρ={corr['spearman']:.4f}")
+                best_single_tau = max(best_single_tau, corr['kendalltau'])
+        
+        # 打印聚合结果
+        print(f"  {proxy_names:12}     : τ={res['kendalltau']:.4f}, ρ={res['spearman']:.4f}")
+        
+        # 打印改进程度
+        improvement = res['kendalltau'] - best_single_tau
+        print(f"  改进: τ {improvement:+.4f}")
 
 
 if __name__ == "__main__":
