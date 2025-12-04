@@ -440,6 +440,7 @@ def nonlinear_ranking_aggregation(proxy_scores_dict):
         aggregated_scores: 聚合后的分数列表
     
     注意：
+        - 自动跳过常数 proxy（方差为 0），避免干扰聚合结果
         - FLOPs 在传入前已取负数，因此"越低越好"已转换为"越高越好"
         - 所有 proxy 都是分数越高排名越高
     """
@@ -450,15 +451,34 @@ def nonlinear_ranking_aggregation(proxy_scores_dict):
     print(f"架构数量: {m}")
     print(f"Proxy 数量: {len(proxy_scores_dict)}")
     
+    skipped_proxies = []  # 记录被跳过的常数 proxy
+    
     for proxy_name, scores in proxy_scores_dict.items():
+        scores_array = np.array(scores)
+        
+        # 检查是否为常数 proxy（方差为 0 或标准差极小）
+        score_std = np.std(scores_array)
+        score_range = np.max(scores_array) - np.min(scores_array)
+        
+        print(f"  {proxy_name}: 分数范围 [{np.min(scores_array):.4f}, {np.max(scores_array):.4f}], "
+              f"标准差={score_std:.6f}")
+        
+        # 如果标准差极小（小于 1e-10）或范围极小，跳过这个 proxy
+        if score_std < 1e-10 or score_range < 1e-10:
+            print(f"    ⚠️  警告：{proxy_name} 是常数 proxy（所有架构值相同），跳过聚合")
+            skipped_proxies.append(proxy_name)
+            continue
+        
         # 计算排名（升序：分数越高排名越大）
         ranks = rankdata(scores, method='ordinal')  # 排名从 1 到 m
         
         # 应用非线性聚合公式：log(rank / m)
         for i in range(m):
             aggregated_scores[i] += np.log(ranks[i] / m)  # 累加对数排名
-        
-        print(f"  {proxy_name}: 分数范围 [{np.min(scores):.4f}, {np.max(scores):.4f}]")
+    
+    if skipped_proxies:
+        print(f"  已跳过常数 proxy: {', '.join(skipped_proxies)}")
+        print(f"  实际参与聚合的 proxy 数量: {len(proxy_scores_dict) - len(skipped_proxies)}")
     
     print(f"聚合分数范围: [{np.min(aggregated_scores):.4f}, {np.max(aggregated_scores):.4f}]")
     
@@ -642,11 +662,21 @@ def evaluate_task(task: str, ss_name: str, args, arch_identifiers=None):
     individual_corrs = {}
     for proxy in args.proxies:
         if len(proxy_scores_dict[proxy]) > 0:
-            corr_single = compute_scores(ytest=gt_scores, test_pred=proxy_scores_dict[proxy])
-            individual_corrs[proxy] = {
-                "kendalltau": corr_single.get("kendalltau"),
-                "spearman": corr_single.get("spearman"),
-            }
+            scores_array = np.array(proxy_scores_dict[proxy])
+            # 检查是否为常数 proxy（方差为 0）
+            score_std = np.std(scores_array)
+            if score_std < 1e-10:
+                # 常数 proxy，无法计算相关性
+                individual_corrs[proxy] = {
+                    "kendalltau": np.nan,
+                    "spearman": np.nan,
+                }
+            else:
+                corr_single = compute_scores(ytest=gt_scores, test_pred=proxy_scores_dict[proxy])
+                individual_corrs[proxy] = {
+                    "kendalltau": corr_single.get("kendalltau"),
+                    "spearman": corr_single.get("spearman"),
+                }
     
     result = {
         "task": task,
@@ -760,7 +790,13 @@ def main():
             if proxy in res['individual_corrs']:
                 corr = res['individual_corrs'][proxy]
                 proxy_name = proxy.upper()
-                print(f"  {proxy_name:12} only: τ={corr['kendalltau']:.4f}, ρ={corr['spearman']:.4f}")
+                tau_val = corr['kendalltau']
+                rho_val = corr['spearman']
+                # 处理 np.nan 的情况
+                if np.isnan(tau_val) or np.isnan(rho_val):
+                    print(f"  {proxy_name:12} only: τ=nan, ρ=nan (常数 proxy，无法计算相关性)")
+                else:
+                    print(f"  {proxy_name:12} only: τ={tau_val:.4f}, ρ={rho_val:.4f}")
         
         proxy_names = "+".join([p.upper() for p in args.proxies])
         print(f"  {proxy_names:12}     : τ={res['kendalltau']:.4f}, ρ={res['spearman']:.4f}")
@@ -781,8 +817,14 @@ def main():
             if proxy in res['individual_corrs']:
                 corr = res['individual_corrs'][proxy]
                 proxy_name = proxy.upper()
-                print(f"  {proxy_name:12} only: τ={corr['kendalltau']:.4f}, ρ={corr['spearman']:.4f}")
-                best_single_tau = max(best_single_tau, corr['kendalltau'])
+                tau_val = corr['kendalltau']
+                rho_val = corr['spearman']
+                # 处理 np.nan 的情况
+                if np.isnan(tau_val) or np.isnan(rho_val):
+                    print(f"  {proxy_name:12} only: τ=nan, ρ=nan (常数 proxy，无法计算相关性)")
+                else:
+                    print(f"  {proxy_name:12} only: τ={tau_val:.4f}, ρ={rho_val:.4f}")
+                    best_single_tau = max(best_single_tau, tau_val)
         
         # 打印聚合结果
         print(f"  {proxy_names:12}     : τ={res['kendalltau']:.4f}, ρ={res['spearman']:.4f}")
