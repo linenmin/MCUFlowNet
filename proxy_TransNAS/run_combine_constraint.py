@@ -546,8 +546,14 @@ def evaluate_task(task: str, ss_name: str, args, arch_identifiers=None):
             
             graph.set_op_indices(op_indices)
         else:
-            # macro 搜索空间可以直接使用 set_spec
-            graph.set_spec(arch_str, dataset_api=dataset_api)
+            # macro 搜索空间也需要手动解析（set_spec不能正确工作）
+            parts = arch_str.split("-")
+            ops_string = parts[1]  # 例如 "64-221113-basic" 中的 "221113"
+            op_indices = [int(d) for d in ops_string]
+            while len(op_indices) < 6:
+                op_indices.append(0)
+            
+            graph.set_op_indices(op_indices)
         
         if args.dry_run:
             arch_strs.append(arch_str)
