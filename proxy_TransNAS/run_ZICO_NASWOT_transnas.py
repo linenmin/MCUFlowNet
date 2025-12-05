@@ -210,9 +210,9 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Run Multi-Proxy Ensemble on TransNAS-Bench-101")
     parser.add_argument("--tasks", nargs="+", default=["autoencoder", "segmentsemantic", "normal"], help="任务列表")
     parser.add_argument("--search_space", choices=["micro", "macro"], default="micro", help="搜索空间类型")
-    parser.add_argument("--proxies", nargs="+", choices=["zico", "naswot", "flops"], 
+    parser.add_argument("--proxies", nargs="+", choices=["zico", "naswot", "flops", "swap"], 
                         default=["zico", "naswot"], 
-                        help="选择使用的 proxy 组合（例如：--proxies zico naswot flops）")
+                        help="选择使用的 proxy 组合（例如：--proxies zico naswot flops swap）")
     parser.add_argument("--data_root", type=str, default=str(NASLIB_ROOT / "data"), help="数据根路径")
     parser.add_argument("--num_samples", type=int, default=20, help="采样架构数量")
     parser.add_argument("--batch_size", type=int, default=128, help="DataLoader 的 batch 大小")

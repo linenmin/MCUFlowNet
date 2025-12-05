@@ -235,7 +235,7 @@ def parse_args():
                         help="任务列表")
     parser.add_argument("--search_space", choices=["micro", "macro"], default="micro", 
                         help="搜索空间类型")
-    parser.add_argument("--proxies", nargs="+", choices=["zico", "naswot", "flops"], 
+    parser.add_argument("--proxies", nargs="+", choices=["zico", "naswot", "flops", "swap"], 
                         default=["zico", "naswot"], 
                         help="选择使用的 proxy 组合")
     parser.add_argument("--start_percent", type=float, default=0.0,
