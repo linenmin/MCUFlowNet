@@ -81,13 +81,20 @@ def process_one(task: str, search_space: str, args, trans_classes):  # 处理单
         graph = set_op_indices_from_str(search_space, graph, arch_str)  # 写入 op_indices
         graph.parse()  # 实例化
         model = graph.to(args.device)  # 上设备
-        flops = compute_flops(model, train_batches, args.device)  # 计算 FLOPs
-        metric_name = "valid_ssim" if task in ["autoencoder", "normal"] else "valid_acc" if task == "segmentsemantic" else "valid_top1"  # 指标名
-        gt = api.get_single_metric(arch_str, task, metric_name, mode="final")  # 查询 GT
-        rows.append((arch_str, flops, gt))  # 记录
-        model.cpu()  # 释放
-        del model, graph  # 删除引用
-        torch.cuda.empty_cache()  # 清显存
+        try:  # 捕获 OOM
+            flops = compute_flops(model, train_batches, args.device)  # 计算 FLOPs
+            metric_name = "valid_ssim" if task in ["autoencoder", "normal"] else "valid_acc" if task == "segmentsemantic" else "valid_top1"  # 指标名
+            gt = api.get_single_metric(arch_str, task, metric_name, mode="final")  # 查询 GT
+            rows.append((arch_str, flops, gt))  # 记录
+        except RuntimeError as e:  # 运行时错误
+            if "out of memory" in str(e):  # OOM
+                print(f"!!! OOM (flops) arch={arch_str}, skip")  # 提示跳过
+            else:
+                raise e  # 其他错误抛出
+        finally:
+            model.cpu()  # 释放
+            del model, graph  # 删除引用
+            torch.cuda.empty_cache()  # 清显存
         if len(rows) >= 500:  # 分批写盘
             with open(out_path, "a", newline="") as f:  # 追加
                 writer = csv.writer(f)  # 写入器
