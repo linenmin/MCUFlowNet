@@ -36,277 +36,29 @@ CURRENT_DIR = Path(__file__).resolve().parent  # 本文件所在目录
 ROOT_DIR = CURRENT_DIR.parent  # MCUFlowNet 根目录
 ZICO_ROOT = ROOT_DIR / "Zico_repo"  # ZiCo 代码根目录
 NASLIB_ROOT = ROOT_DIR / "NASLib"  # NASLib 代码根目录
+sys.path.insert(0, str(ROOT_DIR))  # 将项目根加入路径，支持 proxy_TransNAS 包导入
 sys.path.insert(0, str(ZICO_ROOT))  # 优先导入 ZiCo
 sys.path.insert(0, str(NASLIB_ROOT))  # 再导入 NASLib
 
-# === 新增：全局缓存 TransNASBenchAPI，避免重复从磁盘加载巨大 .pth 文件 ===
-_GLOBAL_TRANSNASBENCH_API = None  # 全局缓存变量，初始为 None
-
-# from ZeroShotProxy import compute_zico  # ZiCo 核心函数 (本文件使用本地优化的 compute_zico_score)
-from naslib import utils  # 统一从 utils 取函数
+from naslib import utils as nas_utils  # 避免与本地 utils 同名冲突
+from proxy_TransNAS.utils.load_model import (  # 复用通用加载函数
+    load_transbench_classes,  # 搜索空间类加载
+    load_transbench_api,  # API 加载缓存
+    make_train_loader,  # 构造 DataLoader
+    truncate_loader,  # 截断 DataLoader
+    sample_architecture_identifiers,  # 采样架构标识
+)  # 结束导入
+from proxy_TransNAS.proxies.zico import compute_zico_score, get_loss_fn  # ZiCo 计算与损失
 # 必须导入 ops，因为我们会用到 GenerativeDecoder
 from naslib.search_spaces.core import primitives as ops
 
 # 函数别名，便于调用
-get_train_val_loaders = utils.get_train_val_loaders  # 数据加载
-compute_scores = utils.compute_scores  # 相关性计算
+get_train_val_loaders = nas_utils.get_train_val_loaders  # 数据加载
+compute_scores = nas_utils.compute_scores  # 相关性计算
 
 
 
-def load_transbench_classes():
-    """动态加载 transbench101 的搜索空间，避免触发顶层 __init__ 依赖。"""
-    graph_path = NASLIB_ROOT / "naslib" / "search_spaces" / "transbench101" / "graph.py"  # 路径
-    spec = importlib.util.spec_from_file_location("transbench_graph", graph_path)  # 创建规范
-    module = importlib.util.module_from_spec(spec)  # 创建模块
-    spec.loader.exec_module(module)  # 执行模块
-    
-    return module.TransBench101SearchSpaceMicro, module.TransBench101SearchSpaceMacro, module  # 返回类与模块
-
-
-def load_transbench_api(data_root: Path, task: str):
-    """直接加载 TransNASBenchAPI，并增加全局缓存，防止 full_run 循环中重复加载导致 RAM 爆掉。"""
-    global _GLOBAL_TRANSNASBENCH_API  # 引用全局变量
-
-    # 1. 动态加载模块定义（只负责拿到类定义，开销很小）
-    api_path = NASLIB_ROOT / "naslib" / "search_spaces" / "transbench101" / "api.py"  # API 路径
-    spec = importlib.util.spec_from_file_location("transbench_api", api_path)  # 创建规范
-    module = importlib.util.module_from_spec(spec)  # 创建模块
-    spec.loader.exec_module(module)  # 执行模块
-    TransNASBenchAPI = module.TransNASBenchAPI  # 取类
-
-    # 2. 如果全局缓存还没有实例，则从磁盘加载一次巨大的 .pth
-    if _GLOBAL_TRANSNASBENCH_API is None:  # 只有第一次会进来
-        # 默认查找 data_root 下的 pth，否则回落 NASLib 自带路径
-        candidate = data_root / "transnas-bench_v10141024.pth"  # 用户指定路径
-        if not candidate.exists():  # 如果用户路径不存在
-            candidate = NASLIB_ROOT / "naslib" / "data" / "transnas-bench_v10141024.pth"  # 回落默认
-        assert candidate.exists(), f"缺少 transnas-bench_v10141024.pth，检查 {candidate}"  # 断言存在
-        # 实例化并缓存在全局变量中
-        _GLOBAL_TRANSNASBENCH_API = TransNASBenchAPI(str(candidate))  # 只在第一次从磁盘读取
-
-    # 3. 返回缓存的 API 对象（后续调用全部走内存，不再读盘）
-    return {"api": _GLOBAL_TRANSNASBENCH_API, "task": task}  # 返回与 NASLib 一致的字典
-
-
-def build_config(data_root: Path, dataset: str, batch_size: int, seed: int):
-    """构造最小配置对象，复用 NASLib 的 get_train_val_loaders。"""
-    # 用简单对象而非 CfgNode，避免修改库代码
-    search_cfg = argparse.Namespace(
-        seed=seed,  # 随机种子
-        batch_size=batch_size,  # batch 大小
-        train_portion=0.7,  # 训练集比例
-    )
-    config = argparse.Namespace(
-        data=str(data_root),  # 数据根路径
-        dataset=dataset,  # 任务名
-        search=search_cfg,  # 训练相关配置
-    )
-    return config  # 返回配置
-
-
-def make_train_loader(task: str, data_root: Path, batch_size: int, seed: int):
-    """生成指定任务的训练 DataLoader，只取训练队列。"""
-    config = build_config(data_root, task, batch_size, seed)  # 构建配置
-    train_loader, _, _, _, _ = get_train_val_loaders(config)  # 取训练 loader
-    return train_loader  # 返回 loader
-
-
-def truncate_loader(loader, max_batch: int):
-    """截断 DataLoader 只保留前 max_batch 个 batch（返回迭代器，节省内存）。"""
-    # 返回迭代器而非列表，避免一次性加载所有数据到内存
-    return list(itertools.islice(iter(loader), max_batch))  # 返回前若干 batch
-
-
-class SegmentationLoss(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.ce = torch.nn.CrossEntropyLoss()
-
-    def forward(self, logits, label):
-        # 1. 确保 Label 是 Long 类型
-        if label.dtype != torch.long:
-            label = label.long()
-
-        # 2. 处理 Label 维度
-        # 如果是 (B, 1, H, W)，squeeze 成 (B, H, W)
-        if label.ndim == 4 and label.shape[1] == 1:
-            label = label.squeeze(1)
-            
-        # 3. 检查 Logits 维度并适配
-        # 语义分割标准：Logits (B, C, H, W), Label (B, H, W)
-        if logits.ndim == 4 and label.ndim == 3:
-            return self.ce(logits, label)
-            
-        # 4. 如果以上都不对，尝试 Flatten 策略 (兼容性最强)
-        # 将 Logits 转为 (N, C)，Label 转为 (N)
-        if logits.ndim > 2:
-            num_classes = logits.shape[1]
-            # permute 把 channel 放到最后: (B, H, W, C)
-            logits_flat = logits.permute(0, 2, 3, 1).reshape(-1, num_classes)
-            label_flat = label.reshape(-1)
-            return self.ce(logits_flat, label_flat)
-            
-        # 如果已经是 2D Input 和 1D Target，直接计算
-        return self.ce(logits, label)
-
-def get_loss_fn(task: str):
-    """根据任务选择合适的损失函数，遵循 NASLib 的定义。"""
-    # autoencoder/normal 用 L1，segmentsemantic 用交叉熵
-    if task in ["autoencoder", "normal"]:
-        return torch.nn.L1Loss()
-    elif task == "segmentsemantic":
-        # 使用自定义 Loss 包装器来处理维度和类型
-        return SegmentationLoss()
-    else:
-        # 其他分类任务可扩展，此处默认交叉熵
-        return torch.nn.CrossEntropyLoss()
-
-# 
-# 
-# 
-def sample_architecture_identifiers(ss, dataset_api, num_samples: int, seed: int):
-    """
-    随机采样若干不重复的架构，只返回轻量的架构标识符（op_indices）。
-    
-    优势：
-    - 内存占用极小（每个标识符只有几十字节）
-    - 自动去重，保证没有重复架构
-    - 可通过 set_op_indices 重建完整架构
-    """
-    random.seed(seed)  # 控制随机
-    torch.manual_seed(seed)  # 控制随机
-    
-    arch_identifiers = []  # 只存储轻量的架构标识符（tuple of op_indices）
-    seen_hashes = set()    # 用于去重
-    
-    max_attempts = num_samples * 10  # 最大尝试次数，避免死循环
-    attempts = 0
-    
-    print(f"正在采样 {num_samples} 个不重复的架构...", end="", flush=True)
-    
-    while len(arch_identifiers) < num_samples and attempts < max_attempts:
-        attempts += 1
-        
-        # 临时创建 graph，获取哈希
-        temp_graph = ss.clone()
-        temp_graph.sample_random_architecture(dataset_api=dataset_api)
-        
-        try:
-            arch_hash = tuple(temp_graph.get_hash())  # 转 tuple 才能加入 set
-        except Exception:
-            del temp_graph
-            continue  # 如果获取哈希失败，跳过
-        
-        # 去重检查
-        if arch_hash in seen_hashes:
-            del temp_graph  # 重复了，丢弃
-            continue
-        
-        seen_hashes.add(arch_hash)
-        arch_identifiers.append(arch_hash)
-        del temp_graph  # 立即释放，不保留
-    
-    if len(arch_identifiers) < num_samples:
-        print(f"\n警告：只采样到 {len(arch_identifiers)} 个不重复架构（目标 {num_samples}），可能搜索空间太小")
-    else:
-        print(f" 完成（尝试 {attempts} 次）")
-    
-    return arch_identifiers  # 返回轻量标识符列表
-
-
-# === 新增：自定义的 ZiCo 计算逻辑，修复梯度为 None 的问题 ===
-def getgrad_safe(model: torch.nn.Module, grad_dict: dict, step_iter=0):
-    if step_iter == 0:
-        for name, mod in model.named_modules():
-            if isinstance(mod, torch.nn.Conv2d) or isinstance(mod, torch.nn.Linear):
-                # 关键修复：检查 grad 是否为 None
-                if mod.weight.grad is not None:
-                    grad_dict[name] = [mod.weight.grad.data.cpu().reshape(-1).numpy()]
-    else:
-        for name, mod in model.named_modules():
-            if isinstance(mod, torch.nn.Conv2d) or isinstance(mod, torch.nn.Linear):
-                if mod.weight.grad is not None:
-                    if name in grad_dict: # 确保 key 存在
-                        grad_dict[name].append(mod.weight.grad.data.cpu().reshape(-1).numpy())
-    return grad_dict
-
-def caculate_zico_safe(grad_dict):
-    allgrad_array = None
-    # 如果 grad_dict 为空（比如所有层都没梯度），返回 0
-    if not grad_dict:
-        return 0.0
-        
-    for i, modname in enumerate(grad_dict.keys()):
-        grad_dict[modname] = np.array(grad_dict[modname])
-    
-    nsr_mean_sum_abs = 0
-    valid_layer_count = 0  # 新增：统计有效层数
-    
-    for j, modname in enumerate(grad_dict.keys()):
-        nsr_std = np.std(grad_dict[modname], axis=0)
-        if np.sum(nsr_std) == 0: # 避免全0导致的除0警告
-            continue
-            
-        nonzero_idx = np.nonzero(nsr_std)[0]
-        if len(nonzero_idx) == 0:
-            continue
-            
-        nsr_mean_abs = np.mean(np.abs(grad_dict[modname]), axis=0)
-        # tmpsum = np.sum(nsr_mean_abs[nonzero_idx] / nsr_std[nonzero_idx])
-        tmpsum = np.mean(nsr_mean_abs[nonzero_idx] / nsr_std[nonzero_idx]) #取平均而不是求和
-        
-        if tmpsum == 0:
-            pass
-        else:
-            nsr_mean_sum_abs += np.log(tmpsum)
-            valid_layer_count += 1  # 新增：累加有效层数
-
-
-    # 新增：如果有效层数 > 0，则除以有效层数做平均
-    if valid_layer_count > 0:
-        return nsr_mean_sum_abs / valid_layer_count
-        # return nsr_mean_sum_abs
-    else:
-        return 0.0
-
-def compute_zico_score(model, train_batches, loss_fn, device: torch.device):
-    """使用安全的 ZiCo 计算实现，替代原始库函数。"""
-    grad_dict = {}
-    model.train()
-    model.to(device)
-    
-    # 确保 loss_fn 在设备上
-    if isinstance(loss_fn, torch.nn.Module):
-        loss_fn.to(device)
-    
-    for i, batch in enumerate(train_batches):
-        model.zero_grad()
-        data, label = batch
-        data = data.to(device)
-        label = label.to(device)
-        
-        # 前向传播
-        logits = model(data)
-        # 计算损失
-        loss = loss_fn(logits, label)
-        # 反向传播
-        loss.backward()
-        
-        # 获取梯度（使用安全版本）
-        grad_dict = getgrad_safe(model, grad_dict, i)
-
-        # 极速显存释放
-        model.zero_grad(set_to_none=True) 
-        
-    # 计算分数
-    res = caculate_zico_safe(grad_dict)
-    
-    # 显式释放 CPU 内存（帮助 GC 更快回收）
-    del grad_dict
-    
-    return res
-
-# === 新增：自定义的 ZiCo 计算逻辑，修复梯度为 None 的问题 ===
+# 下方通用函数已改为复用 proxy_TransNAS.utils / proxies 的实现，移除本地重复定义
 
 
 def evaluate_task(task: str, ss_name: str, args, shared_arch_identifiers=None):
