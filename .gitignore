@@ -16,6 +16,7 @@ env/
 # 日志与运行输出
 *.log
 proxy_TransNAS/full_run_logs/
+proxy_TransNAS/flops_lookup/
 
 # 大型模型或权重文件
 *.pth
