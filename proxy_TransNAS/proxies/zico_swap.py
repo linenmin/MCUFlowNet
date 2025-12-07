@@ -83,6 +83,7 @@ def compute_zico_swap_score(model: torch.nn.Module, train_batches, loss_fn, devi
     swap_dict = dict(swap_records)
     zico_dict = dict(zico_records)
     prod_vals = []
+    final_score = 0.0
     for name, zval in zico_dict.items():
         sval = swap_dict.get(name, None)
         if sval is None:
@@ -90,15 +91,16 @@ def compute_zico_swap_score(model: torch.nn.Module, train_batches, loss_fn, devi
         if zval is None or np.isnan(zval):
             continue
         product = zval * float(sval)
-        if product > 0:
-            term = np.log(product)
-            if not np.isnan(term) and not np.isinf(term):
-                final_score += term
-                prod_vals.append(term))
+        if product <= 0:
+            continue
+        term = np.log(product)
+        if np.isfinite(term):
+            prod_vals.append(term)
+            final_score += term
 
     # 求和作为单个 proxy 值
     if len(prod_vals) == 0:
         return 0.0
-    return float(np.sum(prod_vals))
+    return float(final_score)
 
 
