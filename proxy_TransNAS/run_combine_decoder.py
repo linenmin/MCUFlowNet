@@ -213,7 +213,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Run decoder-only Multi-Proxy Ensemble on TransNAS-Bench-101")
     parser.add_argument("--tasks", nargs="+", default=["autoencoder", "segmentsemantic", "normal"], help="任务列表")
     parser.add_argument("--search_space", choices=["micro", "macro"], default="micro", help="搜索空间类型")
-    parser.add_argument("--proxies", nargs="+", choices=["zico", "naswot", "flops", "swap", "zico_swap", "zico_swap2"], 
+    parser.add_argument("--proxies", nargs="+", choices=["zico", "naswot", "flops", "swap", "zico_swap", "lswag", "zico_swap2"], 
                         default=["zico", "naswot", "swap", "flops"], 
                         help="选择使用的 proxy 组合（例如：--proxies zico naswot flops swap）")
     parser.add_argument("--decoder_only", action="store_true", help="仅计算 decoder 部分（不加则全模型）")

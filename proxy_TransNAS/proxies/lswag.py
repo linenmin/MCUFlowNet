@@ -5,7 +5,7 @@ import torch.nn as nn  # 模块类型判断
 from .zico import getgrad_safe  # 复用安全梯度收集
 
 
-def compute_zico_swap_score2(model: torch.nn.Module, train_batches, loss_fn, device: str, decoder_only: bool = False):
+def compute_lswag_score(model: torch.nn.Module, train_batches, loss_fn, device: str, decoder_only: bool = False):
     """
     逐层 ZiCo 与逐层 SWAP 相乘并求和，返回单个标量。
     - ZiCo: 同 zico.py 按层收集梯度，计算 log(NSR)
