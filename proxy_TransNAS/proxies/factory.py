@@ -4,7 +4,7 @@ from .naswot import compute_naswot_score  # 导入 NASWOT
 from .flops import compute_flops  # 导入 FLOPs
 from .swap import compute_swap_score  # 导入 SWAP
 from .zico_swap import compute_zico_swap_score  # 导入 ZiCo*SWAP
-
+from .zico_swap2 import compute_zico_swap_score2  # 导入 ZiCo*SWAP
 
 def compute_proxy_score(model, proxy, train_batches, loss_fn, device, decoder_only: bool = False):  # 统一计算入口
     if proxy == "zico":  # ZiCo
@@ -23,5 +23,8 @@ def compute_proxy_score(model, proxy, train_batches, loss_fn, device, decoder_on
     if proxy == "zico_swap":  # 逐层 ZiCo×SWAP 求和
         model.train()  # 训练模式
         return compute_zico_swap_score(model, train_batches, loss_fn, device, decoder_only=decoder_only)
+    if proxy == "zico_swap2":  # 逐层 ZiCo×SWAP 求和
+        model.train()  # 训练模式
+        return compute_zico_swap_score2(model, train_batches, loss_fn, device, decoder_only=decoder_only)
     return 0.0  # 未知 proxy
 
