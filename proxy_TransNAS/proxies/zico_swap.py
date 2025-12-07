@@ -17,24 +17,32 @@ def compute_zico_swap_score(model: torch.nn.Module, train_batches, loss_fn, devi
     if isinstance(loss_fn, torch.nn.Module):
         loss_fn = loss_fn.to(device)
 
-    # 先收集 SWAP (逐层)
+    # 先收集 SWAP (逐层，参数层+其后激活配对；用参数层名做 key 对齐 ZiCo)
     swap_records = []
 
-    def make_swap_hook(name):
+    def make_swap_hook(pname):
         def hook(module, inp, out):
             if isinstance(out, torch.Tensor):
                 x = out.view(out.size(0), -1)
                 sign = torch.sign(x).cpu().t()  # (neurons, batch)
                 unique_rows = torch.unique(sign, dim=0).shape[0]
-                swap_records.append((name, int(unique_rows)))
+                swap_records.append((pname, int(unique_rows)))  # 用参数层名作为 key
         return hook
 
     handles = []
+    param_layer_name = None
     for name, module in model.named_modules():
-        if isinstance(module, (nn.ReLU, nn.LeakyReLU, nn.PReLU)):
+        if isinstance(module, (nn.Conv2d, nn.Linear)):
+            if decoder_only and ("decoder" not in str(name)):
+                param_layer_name = None
+                continue
+            param_layer_name = name  # 记录最近的参数层
+        elif isinstance(module, (nn.ReLU, nn.LeakyReLU, nn.PReLU, nn.GELU, nn.SiLU)):
             if decoder_only and ("decoder" not in str(name)):
                 continue
-            handles.append(module.register_forward_hook(make_swap_hook(name)))
+            if param_layer_name is not None:
+                handles.append(module.register_forward_hook(make_swap_hook(param_layer_name)))
+                param_layer_name = None  # 绑定一次后重置，避免跨 block
 
     # 前向一次（不算梯度，swap 只需激活）
     data, _ = train_batches[0]
@@ -67,8 +75,9 @@ def compute_zico_swap_score(model: torch.nn.Module, train_batches, loss_fn, devi
             zico_records.append((name, np.nan))
             continue
         grad_mean_abs = np.mean(np.abs(arr), axis=0)
-        tmpsum = np.mean(grad_mean_abs[nz] / grad_std[nz])
-        zico_records.append((name, float(np.log(tmpsum)) if tmpsum > 0 else np.nan))
+        # tmpsum = np.mean(grad_mean_abs[nz] / grad_std[nz])
+        tmpsum = np.sum(1 / grad_std[nz])
+        zico_records.append((name, float(tmpsum) if tmpsum > 0 else np.nan))
 
     # 对齐层名并逐层相乘
     swap_dict = dict(swap_records)
@@ -80,7 +89,12 @@ def compute_zico_swap_score(model: torch.nn.Module, train_batches, loss_fn, devi
             continue
         if zval is None or np.isnan(zval):
             continue
-        prod_vals.append(zval * float(sval))
+        product = zval * float(sval)
+        if product > 0:
+            term = np.log(product)
+            if not np.isnan(term) and not np.isinf(term):
+                final_score += term
+                prod_vals.append(term))
 
     # 求和作为单个 proxy 值
     if len(prod_vals) == 0:
