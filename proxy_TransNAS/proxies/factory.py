@@ -4,7 +4,7 @@ from .naswot import compute_naswot_score  # 导入 NASWOT
 from .flops import compute_flops  # 导入 FLOPs
 from .swap import compute_swap_score  # 导入 SWAP
 from .zico_swap import compute_zico_swap_score  # 导入 ZiCo*SWAP
-from .zico_swap2 import compute_zico_swap_score2  # 导入 ZiCo*SWAP
+from .lswag import compute_lswag_score  # 导入 LSWAG
 
 def compute_proxy_score(model, proxy, train_batches, loss_fn, device, decoder_only: bool = False):  # 统一计算入口
     if proxy == "zico":  # ZiCo
