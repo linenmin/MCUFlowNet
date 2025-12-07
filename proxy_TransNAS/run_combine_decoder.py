@@ -126,7 +126,7 @@ def evaluate_task(task: str, ss_name: str, args, arch_strings=None):
         # === 按需计算各个 proxy ===
         for proxy in args.proxies:
             try:
-                score = compute_proxy_score(model, proxy, train_batches, loss_fn, args.device, decoder_only=True)
+                score = compute_proxy_score(model, proxy, train_batches, loss_fn, args.device, decoder_only=args.decoder_only)
                 current_proxy_scores[proxy] = score
             except RuntimeError as e:
                 if "out of memory" in str(e):
@@ -216,6 +216,7 @@ def parse_args():
     parser.add_argument("--proxies", nargs="+", choices=["zico", "naswot", "flops", "swap"], 
                         default=["zico", "naswot", "swap", "flops"], 
                         help="选择使用的 proxy 组合（例如：--proxies zico naswot flops swap）")
+    parser.add_argument("--decoder_only", action="store_true", help="仅计算 decoder 部分（不加则全模型）")
     parser.add_argument("--data_root", type=str, default=str(NASLIB_ROOT / "data"), help="数据根路径")
     parser.add_argument("--batch_size", type=int, default=128, help="DataLoader 的 batch 大小")
     parser.add_argument("--maxbatch", type=int, default=2, help="截断的 batch 数")
