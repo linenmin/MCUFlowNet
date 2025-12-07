@@ -37,7 +37,7 @@ class _SampleWiseActivationPatterns:  # 按样本收集激活模式
 
 class SWAP:  # SWAP 主逻辑
     def __init__(self, model: nn.Module, inputs: torch.Tensor, device: str = "cuda", seed: int = 0,
-                 regular: bool = False, mu: float = None, sigma: float = None):  # 初始化
+                 regular: bool = False, mu: float = None, sigma: float = None, decoder_only: bool = False):  # 初始化
         self.model = model  # 模型
         self.inputs = inputs  # 输入批次
         self.device = device  # 设备
@@ -45,6 +45,7 @@ class SWAP:  # SWAP 主逻辑
         self.inter_features = []  # 中间特征缓存
         self.swap_helper = _SampleWiseActivationPatterns(device)  # 激活收集器
         self.regular_factor = 1.0  # 正则系数
+        self.decoder_only = decoder_only  # 仅统计 decoder
         if regular and mu is not None and sigma is not None:  # 需要正则
             self.regular_factor = _cal_regular_factor(self.model, mu, sigma).item()  # 计算因子
         self._reinit(model, seed)  # 设置钩子与种子
@@ -63,8 +64,10 @@ class SWAP:  # SWAP 主逻辑
         torch.cuda.empty_cache()  # 清显存
 
     def _register_hook(self, model: nn.Module):  # 注册 ReLU 钩子
-        for _, m in model.named_modules():  # 遍历模块
-            if isinstance(m, nn.ReLU):  # 仅处理 ReLU
+        for name, m in model.named_modules():  # 遍历模块
+            if isinstance(m, (nn.ReLU, nn.LeakyReLU, nn.PReLU)):  # 仅处理 ReLU、LeakyReLU、PReLU
+                if self.decoder_only and ("decoder" not in str(name)):
+                    continue
                 m.register_forward_hook(self._hook_in_forward)  # 前向钩子
 
     def _hook_in_forward(self, module, inp, out):  # 前向钩子函数
@@ -86,11 +89,11 @@ class SWAP:  # SWAP 主逻辑
         return score  # 返回结果
 
 
-def compute_swap_score(model: nn.Module, train_batches, device: str, regular=False, mu=None, sigma=None):  # 入口函数
+def compute_swap_score(model: nn.Module, train_batches, device: str, regular=False, mu=None, sigma=None, decoder_only: bool = False):  # 入口函数
     if len(train_batches) == 0:  # 无数据
         return 0.0  # 返回零
     data, _ = train_batches[0]  # 取首个 batch
     inputs = data.to(device)  # 数据上设备
-    swap = SWAP(model=model, inputs=inputs, device=device, seed=0, regular=regular, mu=mu, sigma=sigma)  # 创建 SWAP
+    swap = SWAP(model=model, inputs=inputs, device=device, seed=0, regular=regular, mu=mu, sigma=sigma, decoder_only=decoder_only)  # 创建 SWAP
     return swap.forward()  # 计算并返回分数
 

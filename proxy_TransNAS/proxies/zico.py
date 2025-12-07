@@ -30,14 +30,18 @@ def get_loss_fn(task: str):  # 选择损失函数
     return torch.nn.CrossEntropyLoss()  # 其他任务
 
 
-def getgrad_safe(model: torch.nn.Module, grad_dict: dict, step_iter=0):  # 安全取梯度
+def getgrad_safe(model: torch.nn.Module, grad_dict: dict, step_iter=0, decoder_only: bool = False):  # 安全取梯度
     if step_iter == 0:  # 首个 batch
         for name, mod in model.named_modules():  # 遍历模块
+            if decoder_only and ("decoder" not in name):  # 仅 decoder
+                continue
             if isinstance(mod, (torch.nn.Conv2d, torch.nn.Linear)):  # 目标层
                 if mod.weight.grad is not None:  # 有梯度
                     grad_dict[name] = [mod.weight.grad.data.cpu().reshape(-1).numpy()]  # 记录
     else:  # 后续 batch
         for name, mod in model.named_modules():  # 遍历模块
+            if decoder_only and ("decoder" not in name):
+                continue
             if isinstance(mod, (torch.nn.Conv2d, torch.nn.Linear)):  # 目标层
                 if mod.weight.grad is not None:  # 有梯度
                     if name in grad_dict:  # 已存在
@@ -69,7 +73,7 @@ def caculate_zico_safe(grad_dict):  # 计算 ZiCo
     return 0.0  # 否则零
 
 
-def compute_zico_score(model, train_batches, loss_fn, device: torch.device):  # 计算 ZiCo 分数
+def compute_zico_score(model, train_batches, loss_fn, device: torch.device, decoder_only: bool = False):  # 计算 ZiCo 分数
     grad_dict = {}  # 梯度存储
     model.train()  # 训练模式
     model.to(device)  # 移动设备
@@ -83,7 +87,7 @@ def compute_zico_score(model, train_batches, loss_fn, device: torch.device):  # 
         logits = model(data)  # 前向
         loss = loss_fn(logits, label)  # 计算损失
         loss.backward()  # 反向
-        grad_dict = getgrad_safe(model, grad_dict, i)  # 记录梯度
+        grad_dict = getgrad_safe(model, grad_dict, i, decoder_only=decoder_only)  # 记录梯度
         model.zero_grad(set_to_none=True)  # 清理
     res = caculate_zico_safe(grad_dict)  # 计算分数
     del grad_dict  # 释放字典

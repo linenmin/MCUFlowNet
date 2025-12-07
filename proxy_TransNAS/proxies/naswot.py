@@ -28,7 +28,7 @@ def logdet(K):  # 计算对数行列式
     return ld  # 返回对数行列式
 
 
-def compute_naswot_score(model, train_batches, device):  # 计算 NASWOT 分数
+def compute_naswot_score(model, train_batches, device, decoder_only: bool = False):  # 计算 NASWOT 分数；decoder_only 仅解码器
     model = model.to(device)  # 模型上设备
     network_weight_gaussian_init(model)  # 初始化权重
     data, _ = train_batches[0]  # 取首个 batch
@@ -52,8 +52,10 @@ def compute_naswot_score(model, train_batches, device):  # 计算 NASWOT 分数
             print(model)  # 打印模型
             raise err  # 抛出异常
 
-    for _, module in model.named_modules():  # 遍历模块
+    for name, module in model.named_modules():  # 遍历模块
         if isinstance(module, (torch.nn.ReLU, torch.nn.LeakyReLU, torch.nn.PReLU)):  # 激活层
+            if decoder_only and ("decoder" not in str(name)):
+                continue
             module.visited_backwards = True  # 标记
             module.register_forward_hook(counting_forward_hook)  # 注册钩子
 
