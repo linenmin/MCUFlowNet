@@ -20,6 +20,7 @@ import time  # 计时
 from pathlib import Path  # 路径对象
 import torch  # 张量与设备管理
 import numpy as np  # 数值计算
+import pandas as pd  # 读 flops CSV
 import warnings  # 警告控制
 from tqdm import tqdm  # 进度条显示
 
@@ -41,7 +42,9 @@ from proxy_TransNAS.utils.load_model import (  # 导入通用加载函数
     load_transbench_api,  # API 加载缓存
     make_train_loader,  # 构造训练 loader
     truncate_loader,  # 截断 loader
-    sample_architecture_identifiers,  # 采样架构标识
+    select_architectures_by_percentile,  # 百分位选架构
+    get_metric_name,  # metric 名
+    set_op_indices_from_str,  # 从架构串写入 op_indices
 )  # 结束导入
 from proxy_TransNAS.utils.rank_agg import nonlinear_ranking_aggregation  # 排名聚合
 from proxy_TransNAS.proxies.factory import compute_proxy_score  # 统一 proxy 入口
@@ -59,8 +62,8 @@ compute_scores = nas_utils.compute_scores  # 相关性计算
 # 主评估逻辑
 # ============================================================================
 
-def evaluate_task(task: str, ss_name: str, args, shared_arch_identifiers=None):
-    """在单个任务上评估 ZiCo+NASWOT 聚合与真值的相关性。"""
+def evaluate_task(task: str, ss_name: str, args, arch_strings=None):
+    """在单个任务上评估 decoder-only 多 proxy 与真值的相关性。"""
     # 动态取 Metric 与搜索空间类
     TransBench101SearchSpaceMicro, TransBench101SearchSpaceMacro, graph_module = load_transbench_classes()
     Metric = graph_module.Metric
@@ -68,6 +71,7 @@ def evaluate_task(task: str, ss_name: str, args, shared_arch_identifiers=None):
     # 数据与 API 准备
     data_root = Path(args.data_root).resolve()
     dataset_api = load_transbench_api(data_root, task)
+    api = dataset_api["api"]  # 取出 API 对象
     
     # 加载真实数据
     if args.dry_run:
@@ -78,7 +82,7 @@ def evaluate_task(task: str, ss_name: str, args, shared_arch_identifiers=None):
         train_batches = truncate_loader(train_loader, args.maxbatch)
         loss_fn = get_loss_fn(task).to(args.device)
     
-    # 搜索空间与架构采样
+    # 搜索空间
     if ss_name == "micro":
         if task == "segmentsemantic":
             ss = TransBench101SearchSpaceMicro(dataset=task, create_graph=True, n_classes=17)
@@ -87,11 +91,8 @@ def evaluate_task(task: str, ss_name: str, args, shared_arch_identifiers=None):
     else:
         ss = TransBench101SearchSpaceMacro(dataset=task, create_graph=True)
     
-    # 如果提供了共享架构列表，直接使用；否则自己采样
-    if shared_arch_identifiers is not None:
-        arch_identifiers = shared_arch_identifiers
-    else:
-        arch_identifiers = sample_architecture_identifiers(ss, dataset_api, args.num_samples, args.seed)
+    # 架构列表必须提供
+    assert arch_strings is not None and len(arch_strings) > 0, "arch_strings 不能为空"
     
     gt_scores = []  # 存储真值
     proxy_scores_dict = {proxy: [] for proxy in args.proxies}  # 动态存储各 proxy 分数
@@ -99,14 +100,15 @@ def evaluate_task(task: str, ss_name: str, args, shared_arch_identifiers=None):
     start = time.time()
     
     # 逐个重建架构并评估
-    for i, arch_identifier in enumerate(tqdm(arch_identifiers, desc=f"[{task}] 评估架构", unit="arch")):
-        # 从标识符重建 graph
+    for i, arch_str in enumerate(tqdm(arch_strings, desc=f"[{task}] 评估架构", unit="arch")):
+        # 从架构串重建 graph
         graph = ss.clone()
-        graph.set_op_indices(list(arch_identifier))
+        graph = set_op_indices_from_str(ss_name, graph, arch_str)
         
         if args.dry_run:
-            arch_hashes.append(list(arch_identifier))
-            gt = graph.query(metric=Metric.VAL_ACCURACY, dataset=task, dataset_api=dataset_api)
+            arch_hashes.append(arch_str)
+            metric_name = get_metric_name(task)
+            gt = api.get_single_metric(arch_str, task, metric_name, mode="final")
             gt_scores.append(gt)
             for proxy in args.proxies:
                 proxy_scores_dict[proxy].append(0.0)
@@ -153,8 +155,9 @@ def evaluate_task(task: str, ss_name: str, args, shared_arch_identifiers=None):
             continue
         
         # === 记录数据 ===
-        arch_hashes.append(list(arch_identifier))
-        gt = graph.query(metric=Metric.VAL_ACCURACY, dataset=task, dataset_api=dataset_api)
+        arch_hashes.append(arch_str)
+        metric_name = get_metric_name(task)
+        gt = api.get_single_metric(arch_str, task, metric_name, mode="final")
         gt_scores.append(gt)
         for proxy in args.proxies:
             proxy_scores_dict[proxy].append(current_proxy_scores[proxy])
@@ -207,16 +210,24 @@ def evaluate_task(task: str, ss_name: str, args, shared_arch_identifiers=None):
 
 def parse_args():
     """解析命令行参数。"""
-    parser = argparse.ArgumentParser(description="Run Multi-Proxy Ensemble on TransNAS-Bench-101")
+    parser = argparse.ArgumentParser(description="Run decoder-only Multi-Proxy Ensemble on TransNAS-Bench-101")
     parser.add_argument("--tasks", nargs="+", default=["autoencoder", "segmentsemantic", "normal"], help="任务列表")
     parser.add_argument("--search_space", choices=["micro", "macro"], default="micro", help="搜索空间类型")
     parser.add_argument("--proxies", nargs="+", choices=["zico", "naswot", "flops", "swap"], 
                         default=["zico", "naswot", "swap", "flops"], 
                         help="选择使用的 proxy 组合（例如：--proxies zico naswot flops swap）")
     parser.add_argument("--data_root", type=str, default=str(NASLIB_ROOT / "data"), help="数据根路径")
-    parser.add_argument("--num_samples", type=int, default=20, help="采样架构数量")
     parser.add_argument("--batch_size", type=int, default=128, help="DataLoader 的 batch 大小")
     parser.add_argument("--maxbatch", type=int, default=2, help="截断的 batch 数")
+    parser.add_argument("--num_samples", type=int, default=20, help="随机采样数量（sample_mode=random 时有效）")
+    parser.add_argument("--start_percent", type=float, default=0.0, help="按百分比分段采样起点（sample_mode=percent）")
+    parser.add_argument("--end_percent", type=float, default=10.0, help="按百分比分段采样终点（sample_mode=percent）")
+    parser.add_argument("--flops_csv", type=str, default=str(ROOT_DIR / "proxy_TransNAS" / "flops_lookup" / "flops_macro_autoencoder.csv"),
+                        help="flops lookup CSV 路径（sample_mode=flops）")
+    parser.add_argument("--start_arch_str", type=str, default=None, help="flops CSV 起始架构串（sample_mode=flops）")
+    parser.add_argument("--arch_count", type=int, default=10, help="flops CSV 采样数量（sample_mode=flops）")
+    parser.add_argument("--sample_mode", choices=["random", "percent", "flops"], default="random",
+                        help="采样模式：random 随机数量；percent 按 GT 百分比；flops 按 flops CSV 顺序切片")
     parser.add_argument("--seed", type=int, default=42, help="随机种子")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="设备")
     parser.add_argument("--dry_run", action="store_true", help="仅跑采样管线，不计算 proxy")
@@ -229,46 +240,62 @@ def main():
     torch.manual_seed(args.seed)
     random.seed(args.seed)
     
-    # === 在任务循环之前，先采样一次架构（所有任务共享）===
-    print("=" * 80)
-    print("Step 0: 为所有任务采样架构（共享）")
-    print("=" * 80)
-    
-    # 创建搜索空间（用于采样）
     TransBench101SearchSpaceMicro, TransBench101SearchSpaceMacro, graph_module = load_transbench_classes()
     data_root = Path(args.data_root).resolve()
-    dataset_api = load_transbench_api(data_root, args.tasks[0])
+    # 打印配置
+    print("=" * 80)
+    print(f"Sample mode: {args.sample_mode}")
+    print(f"Search space: {args.search_space}")
+    print(f"Tasks: {args.tasks}")
+    print(f"Proxies: {args.proxies}")
+    print("=" * 80)
     
-    # 创建搜索空间
-    if args.search_space == "micro":
-        if args.tasks[0] == "segmentsemantic":
-            ss = TransBench101SearchSpaceMicro(dataset=args.tasks[0], create_graph=True, n_classes=17)
-        else:
-            ss = TransBench101SearchSpaceMicro(dataset=args.tasks[0], create_graph=True)
-    else:
-        ss = TransBench101SearchSpaceMacro(dataset=args.tasks[0], create_graph=True)
-    
-    shared_arch_identifiers = sample_architecture_identifiers(ss, dataset_api, args.num_samples, args.seed)
-    print(f"✓ 采样完成，所有任务将共享这 {len(shared_arch_identifiers)} 个架构\n")
-    
-    # === 遍历任务，传入共享的架构列表 ===
     results = []
     for task in args.tasks:
-        print(f"==> 评估任务 {task}")
-        res = evaluate_task(task, args.search_space, args, shared_arch_identifiers)
+        # 准备 API
+        dataset_api = load_transbench_api(data_root, task)
+        api = dataset_api["api"]
+        
+        # 按模式选择架构串
+        if args.sample_mode == "random":
+            arch_pool = api.all_arch_dict[args.search_space]
+            if len(arch_pool) < args.num_samples:
+                print(f"警告：可用架构 {len(arch_pool)} 少于请求数量 {args.num_samples}")
+            arch_strings = random.sample(arch_pool, min(args.num_samples, len(arch_pool)))
+        elif args.sample_mode == "percent":
+            arch_strings = select_architectures_by_percentile(
+                dataset_api, args.search_space, task, args.start_percent, args.end_percent
+            )
+            if len(arch_strings) == 0:
+                print(f"任务 {task} 在区间 {args.start_percent}-{args.end_percent}% 无架构，跳过")
+                continue
+        else:  # flops CSV
+            csv_path = Path(args.flops_csv)
+            assert csv_path.exists(), f"CSV 不存在: {csv_path}"
+            df = pd.read_csv(csv_path).sort_values(by="flops").reset_index(drop=True)
+            if args.start_arch_str is None:
+                start_idx = 0
+            else:
+                hit = df.index[df["arch_str"] == args.start_arch_str].tolist()
+                assert len(hit) > 0, f"start_arch_str 未在 CSV 中找到: {args.start_arch_str}"
+                start_idx = hit[0]
+            end_idx = start_idx + args.arch_count
+            arch_strings = df.iloc[start_idx:end_idx]["arch_str"].tolist()
+            if len(arch_strings) == 0:
+                print(f"任务 {task} 在 CSV 切片为空，跳过")
+                continue
+        
+        print(f"==> 评估任务 {task}, 架构数: {len(arch_strings)}")
+        res = evaluate_task(task, args.search_space, args, arch_strings)
         results.append(res)
         
         # 打印详细结果（包含单独 proxy 的对比）
         print(f"\n[{task}] 结果对比:")
-        
-        # 打印每个单独 proxy 的结果
         for proxy in args.proxies:
             if proxy in res['individual_corrs']:
                 corr = res['individual_corrs'][proxy]
                 proxy_name = proxy.upper()
                 print(f"  {proxy_name:12} only: τ={corr['kendalltau']:.4f}, ρ={corr['spearman']:.4f}")
-        
-        # 打印聚合结果
         proxy_names = "+".join([p.upper() for p in args.proxies])
         print(f"  {proxy_names:12}     : τ={res['kendalltau']:.4f}, ρ={res['spearman']:.4f}")
         print(f"  用时: {res['time']:.1f}s\n")
@@ -282,19 +309,16 @@ def main():
     for res in results:
         print(f"\n{res['task']}:")
         
-        # 打印每个单独 proxy 的结果
         best_single_tau = 0.0
         for proxy in args.proxies:
             if proxy in res['individual_corrs']:
                 corr = res['individual_corrs'][proxy]
                 proxy_name = proxy.upper()
                 print(f"  {proxy_name:12} only: τ={corr['kendalltau']:.4f}, ρ={corr['spearman']:.4f}")
-                best_single_tau = max(best_single_tau, corr['kendalltau'])
+                if corr['kendalltau'] is not None and not np.isnan(corr['kendalltau']):
+                    best_single_tau = max(best_single_tau, corr['kendalltau'])
         
-        # 打印聚合结果
         print(f"  {proxy_names:12}     : τ={res['kendalltau']:.4f}, ρ={res['spearman']:.4f}")
-        
-        # 打印改进程度
         improvement = res['kendalltau'] - best_single_tau
         print(f"  改进: τ {improvement:+.4f}")
 

@@ -46,7 +46,10 @@ def compute_naswot_score(model, train_batches, device, decoder_only: bool = Fals
             x = (inp > 0).float()  # 二值化
             K = x @ x.t()  # 正激活核
             K2 = (1.0 - x) @ (1.0 - x.t())  # 负激活核
-            model.K = model.K + K.cpu().numpy() + K2.cpu().numpy()  # 累加核
+            K_full = K.cpu().numpy() + K2.cpu().numpy()  # 汇总核
+            eps = 1e-6
+            K_full = K_full + eps * np.eye(K_full.shape[0])  # 加扰动防止奇异
+            model.K = model.K + K_full  # 累加核
         except Exception as err:  # 异常处理
             print("---- NASWOT 计算错误：")  # 提示
             print(model)  # 打印模型

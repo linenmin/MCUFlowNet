@@ -65,7 +65,7 @@ class SWAP:  # SWAP 主逻辑
 
     def _register_hook(self, model: nn.Module):  # 注册 ReLU 钩子
         for name, m in model.named_modules():  # 遍历模块
-            if isinstance(m, (nn.ReLU, nn.LeakyReLU, nn.PReLU)):  # 仅处理 ReLU、LeakyReLU、PReLU
+            if isinstance(m, (nn.ReLU, nn.LeakyReLU, nn.PReLU)):  # 覆盖 ReLU/LeakyReLU/PReLU
                 if self.decoder_only and ("decoder" not in str(name)):
                     continue
                 m.register_forward_hook(self._hook_in_forward)  # 前向钩子
