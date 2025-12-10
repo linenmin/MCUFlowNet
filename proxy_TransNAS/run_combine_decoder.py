@@ -118,6 +118,21 @@ def evaluate_task(task: str, ss_name: str, args, arch_strings=None):
         # === 实例化模型 ===
         graph.parse()
         model = graph.to(args.device)
+
+        # === 可选：固定超参的微训练（两步、lr=0.01，直接在当前模型上更新） ===
+        if args.pretrain and len(train_batches) > 0:
+            optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+            steps = min(2, len(train_batches))
+            model.train()
+            for j in range(steps):
+                data, label = train_batches[j]
+                data = data.to(args.device)
+                label = label.to(args.device)
+                optimizer.zero_grad(set_to_none=True)
+                out = model(data)
+                loss = loss_fn(out, label)
+                loss.backward()
+                optimizer.step()
         
         # === 存储本架构的 proxy 分数 ===
         current_proxy_scores = {}
@@ -216,6 +231,7 @@ def parse_args():
     parser.add_argument("--proxies", nargs="+", choices=["zico", "naswot", "flops", "swap", "zico_swap", "lswag", "fisher", "loss"], 
                         default=["zico", "naswot", "swap", "flops"], 
                         help="选择使用的 proxy 组合（例如：--proxies zico naswot flops swap）")
+    parser.add_argument("--pretrain", action="store_true", help="实例化后先用固定超参微训两步 (SGD lr=0.01)")
     parser.add_argument("--decoder_only", action="store_true", help="仅计算 decoder 部分（不加则全模型）")
     parser.add_argument("--data_root", type=str, default=str(NASLIB_ROOT / "data"), help="数据根路径")
     parser.add_argument("--batch_size", type=int, default=128, help="DataLoader 的 batch 大小")
