@@ -6,6 +6,7 @@ from .swap import compute_swap_score  # 导入 SWAP
 from .zico_swap import compute_zico_swap_score  # 导入 ZiCo*SWAP
 from .lswag import compute_lswag_score  # 导入 LSWAG
 from .fisher_wrapper import compute_fisher_score  # 导入 Fisher
+from .loss import compute_loss_score  # 导入简单 loss proxy
 
 def compute_proxy_score(model, proxy, train_batches, loss_fn, device, decoder_only: bool = False):  # 统一计算入口
     if proxy == "zico":  # ZiCo
@@ -30,5 +31,8 @@ def compute_proxy_score(model, proxy, train_batches, loss_fn, device, decoder_on
     if proxy == "fisher":  # Fisher 信息
         model.train()
         return compute_fisher_score(model, train_batches, loss_fn, device, decoder_only=decoder_only)
+    if proxy == "loss":  # 直接平均前向 loss
+        model.train()
+        return compute_loss_score(model, train_batches, loss_fn, device, decoder_only=decoder_only)
     return 0.0  # 未知 proxy
 

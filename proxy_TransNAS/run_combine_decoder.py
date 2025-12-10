@@ -100,7 +100,7 @@ def evaluate_task(task: str, ss_name: str, args, arch_strings=None):
     start = time.time()
     
     # 逐个重建架构并评估
-    for i, arch_str in enumerate(tqdm(arch_strings, desc=f"[{task}] 评估架构", unit="arch")):
+    for i, arch_str in enumerate(tqdm(arch_strings, desc=f"[{task}] 评估架构", unit="arch", leave=False)):
         # dry_run 时不实例化模型，直接取 GT 并用 0 占位，避免 train_batches 为空导致的下标错误
         if args.dry_run:
             arch_hashes.append(arch_str)
@@ -213,7 +213,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Run decoder-only Multi-Proxy Ensemble on TransNAS-Bench-101")
     parser.add_argument("--tasks", nargs="+", default=["autoencoder", "segmentsemantic", "normal"], help="任务列表")
     parser.add_argument("--search_space", choices=["micro", "macro"], default="micro", help="搜索空间类型")
-    parser.add_argument("--proxies", nargs="+", choices=["zico", "naswot", "flops", "swap", "zico_swap", "lswag", "zico_swap", "fisher"], 
+    parser.add_argument("--proxies", nargs="+", choices=["zico", "naswot", "flops", "swap", "zico_swap", "lswag", "fisher", "loss"], 
                         default=["zico", "naswot", "swap", "flops"], 
                         help="选择使用的 proxy 组合（例如：--proxies zico naswot flops swap）")
     parser.add_argument("--decoder_only", action="store_true", help="仅计算 decoder 部分（不加则全模型）")
@@ -244,12 +244,12 @@ def main():
     TransBench101SearchSpaceMicro, TransBench101SearchSpaceMacro, graph_module = load_transbench_classes()
     data_root = Path(args.data_root).resolve()
     # 打印配置
-    print("=" * 80)
-    print(f"Sample mode: {args.sample_mode}")
-    print(f"Search space: {args.search_space}")
-    print(f"Tasks: {args.tasks}")
-    print(f"Proxies: {args.proxies}")
-    print("=" * 80)
+    # print("=" * 80)
+    # print(f"Sample mode: {args.sample_mode}")
+    # print(f"Search space: {args.search_space}")
+    # print(f"Tasks: {args.tasks}")
+    # print(f"Proxies: {args.proxies}")
+    # print("=" * 80)
     
     results = []
     for task in args.tasks:
@@ -302,9 +302,9 @@ def main():
         print(f"  用时: {res['time']:.1f}s\n")
     
     # 汇总输出
-    print("=" * 80)
-    print("=== 汇总结果 ===")
-    print("=" * 80)
+    print("=" * 20)
+    print("=== Final Results ===")
+    print("=" * 20)
     proxy_names = "+".join([p.upper() for p in args.proxies])
     
     for res in results:
