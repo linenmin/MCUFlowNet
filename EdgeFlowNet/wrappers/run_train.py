@@ -26,7 +26,7 @@ def run_train_local(args):  # 本地模式运行训练
 
 def main():  # 入口函数
     parser = argparse.ArgumentParser(description="run train locally without docker")  # 创建解析器
-    parser.add_argument("--dataset", default="FC2", help="选择数据集：FC2/FT3D/MSCOCO")  # 数据集名
+    parser.add_argument("--dataset", default="FlyingChairs2", help="选择数据集：FC2/FT3D/MSCOCO")  # 数据集名
     parser.add_argument("--data_list", default="code/dataset_paths", help="数据列表所在目录")  # 列表目录
     parser.add_argument("--gpu_device", type=int, default=0, help="GPU编号，-1为CPU")  # GPU选择
     parser.add_argument("--num_epochs", type=int, default=400, help="训练轮数")  # 训练轮数
