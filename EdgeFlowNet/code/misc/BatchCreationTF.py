@@ -35,7 +35,8 @@ class BatchGeneration():
         while ImageNum < Args.MiniBatchSize:
             # Generate random image
             RandIdx = random.randint(0, len(Args.TrainNames)-1)
-            RandImageName1 = os.sep + Args.TrainNames[RandIdx]
+            # RandImageName1 = os.sep + Args.TrainNames[RandIdx]
+            RandImageName1 = Args.TrainNames[RandIdx] #保持相对路径
 
             RandImageName1 = Args.BasePath + os.sep + Args.TrainNames[RandIdx]
             # Increment Image Number by 1
@@ -136,7 +137,8 @@ class BatchGeneration():
         while ImageNum < Args.MiniBatchSize:
             # Generate random image
             RandIdx = random.randint(0, len(Args.TrainNames)-1)
-            RandImageName1 = os.sep + Args.TrainNames[RandIdx]
+            # RandImageName1 = os.sep + Args.TrainNames[RandIdx]
+            RandImageName1 = Args.TrainNames[RandIdx] #保持相对路径
 
             if(Args.Dataset == 'FC2'):
                 RandImageName2 = RandImageName1.replace('img_0', 'img_1')
