@@ -68,8 +68,8 @@ def SetupAll(args):
     args.OriginalImageSize = OriginalImageSize
     args.Lambda = Lambda
     args.NumOut = NumOut
-    args.LogsPath = "/experiments/logs//"
-    args.CheckPointPath = "/experiments/models//"
+    args.LogsPath = os.path.abspath("./Logs/")          # 日志目录
+    args.CheckPointPath = os.path.abspath("./Checkpoints/")  # 模型目录
     args.LossFuncName = "MultiscaleSL1-1"
     
     if(not (os.path.isdir(args.CheckPointPath))):
