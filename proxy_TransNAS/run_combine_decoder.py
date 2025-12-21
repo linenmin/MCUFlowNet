@@ -306,6 +306,33 @@ def main():
         res = evaluate_task(task, args.search_space, args, arch_strings)
         results.append(res)
         
+        # === 如果是 flops 模式，计算额外的分析指标 ===
+        num_archs = len(res["gt"])
+        if args.sample_mode == "flops" and num_archs > 0:
+            gt_scores = np.array(res["gt"])
+            # 计算 GT 排名 (1-based, 降序，分数越高排名越靠前)
+            # 使用 ordinal 方法处理 tie，确保排名在 1~num_archs 之间
+            from scipy.stats import rankdata
+            gt_ranks = num_archs - rankdata(gt_scores, method='ordinal') + 1
+            
+            def get_rank_metrics(scores):
+                s = np.array(scores)
+                best_idx = np.argmax(s)
+                best_rank = gt_ranks[best_idx]
+                # 获取前三的索引（分数最高的三个）
+                top3_indices = np.argsort(s)[-3:][::-1]
+                avg_top3_rank = np.mean([gt_ranks[idx] for idx in top3_indices])
+                return best_rank, avg_top3_rank
+
+            # 计算融合后的指标
+            res["ensemble_ranks"] = get_rank_metrics(res["pred"])
+            
+            # 计算每个单独 proxy 的指标
+            res["individual_ranks"] = {}
+            for proxy in args.proxies:
+                if proxy in res["proxy_scores"] and len(res["proxy_scores"][proxy]) > 0:
+                    res["individual_ranks"][proxy] = get_rank_metrics(res["proxy_scores"][proxy])
+        
         # 打印详细结果（包含单独 proxy 的对比）
         print(f"\n[{task}] 结果对比:")
         for proxy in args.proxies:
@@ -313,8 +340,15 @@ def main():
                 corr = res['individual_corrs'][proxy]
                 proxy_name = proxy.upper()
                 print(f"  {proxy_name:12} only: τ={corr['kendalltau']:.4f}, ρ={corr['spearman']:.4f}")
+                if "individual_ranks" in res and proxy in res["individual_ranks"]:
+                    br, ar3 = res["individual_ranks"][proxy]
+                    print(f"    -> Best in GT: {br}/{num_archs} ({br/num_archs*100:.1f}%), Top3 Avg: {ar3:.1f} ({ar3/num_archs*100:.1f}%)")
+                    
         proxy_names = "+".join([p.upper() for p in args.proxies])
         print(f"  {proxy_names:12}     : τ={res['kendalltau']:.4f}, ρ={res['spearman']:.4f}")
+        if "ensemble_ranks" in res:
+            br, ar3 = res["ensemble_ranks"]
+            print(f"    -> Best in GT: {br}/{num_archs} ({br/num_archs*100:.1f}%), Top3 Avg: {ar3:.1f} ({ar3/num_archs*100:.1f}%)")
         print(f"  用时: {res['time']:.1f}s\n")
     
     # 汇总输出
@@ -338,6 +372,11 @@ def main():
         print(f"  {proxy_names:12}     : τ={res['kendalltau']:.4f}, ρ={res['spearman']:.4f}")
         improvement = res['kendalltau'] - best_single_tau
         print(f"  改进: τ {improvement:+.4f}")
+        if "ensemble_ranks" in res:
+            num_archs = len(res["gt"])
+            br, ar3 = res["ensemble_ranks"]
+            print(f"  Best Model in GT Rank: {br}/{num_archs} ({br/num_archs*100:.1f}%)")
+            print(f"  Top-3 Model Avg Rank : {ar3:.1f}/{num_archs} ({ar3/num_archs*100:.1f}%)")
 
 
 if __name__ == "__main__":
