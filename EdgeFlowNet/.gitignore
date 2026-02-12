@@ -1,6 +1,0 @@
-code/misc/__pycache__/
-code/network/__pycache__/
-wrappers/__pycache__/
-output/
-output_benchmark/
-*.tflite
