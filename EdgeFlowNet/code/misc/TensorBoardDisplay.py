@@ -50,6 +50,9 @@ def AccumPreds(prVals):
     
     return prValAccum
 
+def SummaryFinite(T):
+    return tf.where(tf.math.is_finite(T), T, tf.zeros_like(T))
+
 def TensorBoard(loss, I1PH, I2PH, prVal, Label1PH, Label2PH, Args):
     # Create a summary to monitor loss tensor    
     tf.compat.v1.summary.scalar('LossEveryIter', loss)
@@ -124,15 +127,17 @@ def TensorBoard(loss, I1PH, I2PH, prVal, Label1PH, Label2PH, Args):
         # Softplus
         if (Args.NetworkName == 'Network.MultiScaleResNet' or Args.NetworkName == "Network.MultiScaleMBResNet"):
             prVal = AccumPreds(prVal)
-        tf.compat.v1.summary.image('ScaleX', tf.clip_by_value(1/tf.math.softplus(prVal[:,:,:,2:3] + Eps), -MaxVal, MaxVal), max_outputs=1)
-        tf.compat.v1.summary.image('ScaleY', tf.clip_by_value(1/tf.math.softplus(prVal[:,:,:,3:4] + Eps), -MaxVal, MaxVal), max_outputs=1)
-        tf.compat.v1.summary.histogram('Scale', tf.clip_by_value(1/tf.math.softplus(prVal + Eps), -MaxVal, MaxVal))
-        tf.compat.v1.summary.histogram('prValHist', prVal[:,:,:,0:2])
+        prValSummary = SummaryFinite(prVal)
+        scaleDen = tf.maximum(tf.math.softplus(prValSummary + Eps), Eps)
+        tf.compat.v1.summary.image('ScaleX', tf.clip_by_value(1/scaleDen[:,:,:,2:3], -MaxVal, MaxVal), max_outputs=1)
+        tf.compat.v1.summary.image('ScaleY', tf.clip_by_value(1/scaleDen[:,:,:,3:4], -MaxVal, MaxVal), max_outputs=1)
+        tf.compat.v1.summary.histogram('Scale', tf.clip_by_value(1/scaleDen, -MaxVal, MaxVal))
+        tf.compat.v1.summary.histogram('prValHist', prValSummary[:,:,:,0:2])
     else:
         if Args.NetworkName == "Network.MultiScaleResNet" or (Args.NetworkName == "Network.MultiScaleMBResNet"):
-            tf.compat.v1.summary.histogram('prValHist', prVal[-1])
+            tf.compat.v1.summary.histogram('prValHist', SummaryFinite(prVal[-1]))
         else:
-            tf.compat.v1.summary.histogram('prValHist', prVal)
+            tf.compat.v1.summary.histogram('prValHist', SummaryFinite(prVal))
     # Merge all summaries into a single operation
     MergedSummaryOP = tf.compat.v1.summary.merge_all()
     return MergedSummaryOP
