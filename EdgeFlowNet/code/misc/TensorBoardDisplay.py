@@ -191,7 +191,7 @@ def PrettyPrint(Args, NumParams, NumFlops, ModelSize, VN, OverideKbInput=False):
         #     RunCommand.write('Logs are saved in: {}\n'.format(Args.LogsPath))
         #     RunCommand.write('Images used for Training are in: {}\n'.format(Args.BasePath))
         # cprint('Log written in {}'.format(FileName), 'yellow')
-        FileName = Args.CheckPointPath + 'RunCommand.md'
+        FileName = os.path.join(Args.CheckPointPath, 'RunCommand.md')
         with open(FileName, 'w+') as RunCommand:
             RunCommand.write('\n\n')
             RunCommand.write('{}\n'.format(datetime.now()))

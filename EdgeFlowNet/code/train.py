@@ -44,6 +44,12 @@ if PROJECT_ROOT not in sys.path:
 # Disable Eager Execution to use TF1 code in TF2
 tf.compat.v1.disable_eager_execution()
 
+# Effective training architecture defaults (kept explicit for manifest/matching)
+DEFAULT_INIT_NEURONS = 32
+DEFAULT_NUM_SUBBLOCKS = 2
+DEFAULT_EXPANSION_FACTOR = 2.0
+DEFAULT_UNCERTAINTY_TYPE = "LinearSoftplus"
+
 
 @Scope
 def Optimizer(OptimizerParams, loss):
@@ -62,12 +68,12 @@ def TrainOperation(InputPH, I1PH, I2PH, Label1PH, Label2PH, args):
     ClassName = args.NetworkName.replace('Network.', '').split('Net')[0]+'Net'
     Network = getattr(args.Net, ClassName)
     VN = Network(InputPH = InputPH, 
-                InitNeurons = 32, 
-                NumSubBlocks = 2, 
+                InitNeurons = args.EffectiveInitNeurons, 
+                NumSubBlocks = args.EffectiveNumSubBlocks, 
                 Suffix = '', 
                 NumOut = args.NumOut, 
-                UncType = "LinearSoftplus", 
-                ExpansionFactor=2)
+                UncType = args.EffectiveUncertaintyType, 
+                ExpansionFactor=args.EffectiveExpansionFactor)
     prVal = VN.Network()
     loss = Loss(I1PH, I2PH, Label1PH, Label2PH, prVal, args)
     OptimizerUpdate = Optimizer(args.OptimizerParams, loss)
@@ -75,7 +81,8 @@ def TrainOperation(InputPH, I1PH, I2PH, Label1PH, Label2PH, args):
     Saver = tf.compat.v1.train.Saver()
     with tf.compat.v1.Session() as sess:       
         if args.LatestFile is not None:
-            Saver.restore(sess, args.CheckPointPath + args.LatestFile + '.ckpt')
+            restore_path = os.path.join(args.ResumeCheckPointPath, args.LatestFile + '.ckpt')
+            Saver.restore(sess, restore_path)
             # Extract only numbers from the name
             StartEpoch = int(''.join(c for c in args.LatestFile.split('a')[0] if c.isdigit())) + 1
             print('Loaded latest checkpoint with the name ' + args.LatestFile + '....')
@@ -96,7 +103,7 @@ def TrainOperation(InputPH, I1PH, I2PH, Label1PH, Label2PH, args):
         Writer = tf.compat.v1.summary.FileWriter(args.LogsPath, graph=tf.compat.v1.get_default_graph())
 
         if args.SaveTestModel:
-            SaveName =  args.CheckPointPath + str(0) + 'a' + str(0) + 'model.ckpt'
+            SaveName = os.path.join(args.CheckPointPath, str(0) + 'a' + str(0) + 'model.ckpt')
             Saver.save(sess,  save_path=SaveName)
             print(SaveName + ' Model Saved...')
             exit(0)
@@ -118,11 +125,11 @@ def TrainOperation(InputPH, I1PH, I2PH, Label1PH, Label2PH, args):
                 Writer.flush()
 
                 if PerEpochCounter % args.SaveCheckPoint == 0:
-                    SaveName =  args.CheckPointPath + str(Epochs) + 'a' + str(PerEpochCounter) + 'model.ckpt'
+                    SaveName = os.path.join(args.CheckPointPath, str(Epochs) + 'a' + str(PerEpochCounter) + 'model.ckpt')
                     Saver.save(sess,  save_path=SaveName)
                     print(SaveName + ' Model Saved...')
 
-            SaveName = args.CheckPointPath + str(Epochs) + 'model.ckpt'
+            SaveName = os.path.join(args.CheckPointPath, str(Epochs) + 'model.ckpt')
             Saver.save(sess, save_path=SaveName)
             print(SaveName + ' Model Saved...')
 
@@ -154,6 +161,7 @@ def main():
     parser.add_argument('--DivTrain', type=int, default=1, help='Factor to reduce Train data by per epoch')
     parser.add_argument('--MiniBatchSize', type=int, default=16, help='Size of the MiniBatch to use')
     parser.add_argument('--LoadCheckPoint', type=int, default=0, help='Load Model from latest Checkpoint from CheckPointPath?')
+    parser.add_argument('--ResumeExperimentFileName', default='', help='Experiment directory name to resume from under Checkpoints/')
     parser.add_argument('--ExpansionFactor', type=float, default=2, help='PathSizeChannels')
     parser.add_argument('--RemoveLogs', type=int, default=0, help='Delete log Files from ./Logs?')
     parser.add_argument('--LossFuncName', default='MultiscaleSL1-1', help='Choice of Loss functions, choose from SL2, PhotoL1, PhotoChab, PhotoRobust')
@@ -170,6 +178,11 @@ def main():
                         help='Python module path for the network (e.g. sramTest.network.MultiScaleResNet_bilinear)')
     args = parser.parse_args()
 
+    args.EffectiveInitNeurons = DEFAULT_INIT_NEURONS
+    args.EffectiveNumSubBlocks = DEFAULT_NUM_SUBBLOCKS
+    args.EffectiveExpansionFactor = DEFAULT_EXPANSION_FACTOR
+    args.EffectiveUncertaintyType = DEFAULT_UNCERTAINTY_TYPE
+
     
     tu.SetGPU(args.GPUDevice)
 
@@ -180,6 +193,10 @@ def main():
         shutil.rmtree(os.getcwd() + os.sep + 'Logs' + os.sep)
 
     args = SetupAll(args)
+    if args.LoadCheckPoint == 1:
+        ValidateResumeManifest(args)
+    manifest_path = WriteRunManifest(args)
+    print(f"Run manifest written to: {manifest_path}")
 
         
     InputPH = tf.compat.v1.placeholder(tf.float32, shape=(args.MiniBatchSize, args.PatchSize[0], args.PatchSize[1], 2*args.PatchSize[2]), name='Input')

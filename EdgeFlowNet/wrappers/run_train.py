@@ -11,11 +11,15 @@ def run_train_local(args):
     cmd += ["--MiniBatchSize", str(args.batch_size)]
     cmd += ["--LR", str(args.lr)]
     cmd += ["--network_module", args.network_module]
+    cmd += ["--ExperimentFileName", args.experiment_name]
 
     if args.base_path:
         cmd += ["--BasePath", args.base_path]
     if args.load_checkpoint:
+        if not args.resume_experiment_name:
+            raise SystemExit("ERROR: --load_checkpoint requires --resume_experiment_name.")
         cmd += ["--LoadCheckPoint", "1"]
+        cmd += ["--ResumeExperimentFileName", args.resume_experiment_name]
 
     print("Running:", " ".join(cmd))
     return os.system(" ".join(cmd))
@@ -31,6 +35,8 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-4, help="learning rate")
     parser.add_argument("--base_path", default="", help="optional dataset root path")
     parser.add_argument("--load_checkpoint", action="store_true", help="resume from latest checkpoint in Checkpoints/")
+    parser.add_argument("--experiment_name", default="default", help="save experiment folder name under Checkpoints/ and Logs/")
+    parser.add_argument("--resume_experiment_name", default="", help="resume source experiment folder name under Checkpoints/")
     parser.add_argument(
         "--network_module",
         default="network.MultiScaleResNet",
