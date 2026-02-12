@@ -7,4 +7,3 @@ output_benchmark/
 *.onnx
 *.png
 *.csv
-*.txt

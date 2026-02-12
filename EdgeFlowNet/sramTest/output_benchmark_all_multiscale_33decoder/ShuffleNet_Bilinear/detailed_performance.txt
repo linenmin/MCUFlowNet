@@ -1,0 +1,230 @@
+
+################################################################################
+Tensor Allocation for mem_area Sram, of mem_type_set (Scratch, Scratch_fast), using allocator HillClimb, in Cpu and Npu subgraph:
+Start Time -   End Time: Start Addr -   End Addr: Tensor Size: Memory Usage: Purpose     : Name
+         0 -          3:        0x0 -    0x1c200:      115200:       326336: FeatureMap  : input
+         2 -          2:    0x41a00 -    0x43030:        5680:       280160: Weights     : EncoderDecoderBlock0/ResNetBlock0/ConvBNReLUBlock1/Conv2/conv2d/Conv2D_reshape_npu_buffer
+         2 -          3:    0x4e490 -    0x4fac0:        5680:       326336: Weights     : EncoderDecoderBlock0/ResNetBlock0/ConvBNReLUBlock1/Conv2/conv2d/Conv2D_reshape_npu_buffer2
+         2 -          5:    0x1c200 -    0x41a00:      153600:       326336: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/ConvBNReLUBlock1/ReLU4/Relu;EncoderDecoderBlock0/ResNetBlock0/ConvBNReLUBlock1/Conv2/conv2d/Conv2D
+         3 -          5:    0x41a00 -    0x4e490:       51856:       326336: Weights     : EncoderDecoderBlock0/ResNetBlock0/ConvBNReLUBlock5/Conv6/conv2d/Conv2D_reshape_npu_buffer
+         4 -          9:        0x0 -    0x12c00:       76800:       282256: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/ConvBNReLUBlock5/ReLU8/Relu;EncoderDecoderBlock0/ResNetBlock0/ConvBNReLUBlock5/Conv6/conv2d/Conv2D
+         6 -         17:    0x12c00 -    0x25800:       76800:       229392: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_0/concat
+         7 -          9:    0x2ee00 -    0x2f350:        1360:       194032: Weights     : EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_0/conv2d/Conv2D_reshape_npu_buffer
+         8 -         11:    0x25800 -    0x2ee00:       38400:       194032: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_0/Relu;EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_0/conv2d/Conv2D
+         9 -         11:    0x2f350 -    0x2f5f0:         672:       194032: Weights     : EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_0/batch_normalization_1/FusedBatchNormV3;EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_0/depthwise;EncoderDecoderBlock0/ResNetBlock0/BN15/batch_normalization/beta;EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_0/batch_normalization_2/FusedBatchNormV3_reshape_npu_buffer
+        10 -         13:        0x0 -     0x9600:       38400:       155632: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_0/batch_normalization_1/FusedBatchNormV3;EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_0/depthwise;EncoderDecoderBlock0/ResNetBlock0/BN15/batch_normalization/beta;EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_0/batch_normalization_2/FusedBatchNormV31
+        11 -         13:     0x9600 -     0x9b50:        1360:       155632: Weights     : EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_0/conv2d_1/Conv2D_reshape_npu_buffer
+        12 -         15:    0x25b00 -    0x2f100:       38400:       154960: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_0/Relu_1;EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_0/conv2d_1/Conv2D
+        15 -         17:    0x25800 -    0x25b00:         768:       229392: Weights     : EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_0/shuffle_conv_reshape_npu_buffer
+        16 -         19:        0x0 -    0x12c00:       76800:       229392: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_0/shuffle_conv1
+        17 -         19:    0x25b00 -    0x38010:       75024:       229392: Weights     : EncoderDecoderBlock0/ResNetBlock0/Conv9/conv2d/Conv2D_reshape_npu_buffer
+        18 -         23:    0x12c00 -    0x1c200:       38400:       190224: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/Conv9/conv2d/Conv2D1
+        20 -         31:        0x0 -     0x9600:       38400:       375936: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_1/concat
+        21 -         23:     0xe100 -     0xf390:        4752:       102080: Weights     : EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_1/conv2d/Conv2D_reshape_npu_buffer
+        22 -         25:     0x9600 -     0xe100:       19200:       102080: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_1/Relu;EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_1/conv2d/Conv2D
+        23 -         25:     0xf390 -     0xf8c0:        1328:       102080: Weights     : EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_1/batch_normalization_1/FusedBatchNormV3;EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_1/depthwise;EncoderDecoderBlock0/ResNetBlock0/Conv12/conv2d/bias;EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/batch_normalization_2/FusedBatchNormV3_reshape_npu_buffer
+        24 -         27:     0xf8c0 -    0x143c0:       19200:        82880: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_1/batch_normalization_1/FusedBatchNormV3;EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_1/depthwise;EncoderDecoderBlock0/ResNetBlock0/Conv12/conv2d/bias;EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/batch_normalization_2/FusedBatchNormV31
+        25 -         27:     0xe100 -     0xf390:        4752:        82880: Weights     : EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_1/conv2d_1/Conv2D_reshape_npu_buffer
+        26 -         29:     0x9600 -     0xe100:       19200:        81552: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_1/Relu_1;EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_1/conv2d_1/Conv2D
+        29 -         31:    0x12c00 -    0x13260:        1632:       375936: Weights     : EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/shuffle_conv_reshape_npu_buffer
+        30 -         33:     0x9600 -    0x12c00:       38400:       375936: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_1/shuffle_conv
+        31 -         33:    0x13260 -    0x5bc80:      297504:       375936: Weights     : EncoderDecoderBlock0/ResNetBlock0/Conv10/conv2d/Conv2D_reshape_npu_buffer
+        32 -         37:        0x0 -     0x5000:       20480:       356384: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/Conv10/conv2d/Conv2D1
+        34 -         45:     0x5000 -     0xa000:       20480:        71520: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_0/concat
+        35 -         37:     0xc800 -    0x10d10:       17680:        71520: Weights     : EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_0/conv2d/Conv2D_reshape_npu_buffer
+        36 -         39:     0xa000 -     0xc800:       10240:        71520: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_0/Relu;EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_0/conv2d/Conv2D
+        37 -         39:    0x10d10 -    0x11760:        2640:        71520: Weights     : EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_0/batch_normalization_1/FusedBatchNormV3;EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_0/depthwise;EncoderDecoderBlock0/ResNetBlock0/Conv11/conv2d/bias;EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_0/batch_normalization_2/FusedBatchNormV3_reshape_npu_buffer
+        38 -         41:        0x0 -     0x2800:       10240:        61280: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_0/batch_normalization_1/FusedBatchNormV3;EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_0/depthwise;EncoderDecoderBlock0/ResNetBlock0/Conv11/conv2d/bias;EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_0/batch_normalization_2/FusedBatchNormV31
+        39 -         41:     0xc800 -    0x10d10:       17680:        61280: Weights     : EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_0/conv2d_1/Conv2D_reshape_npu_buffer
+        40 -         43:     0x2800 -     0x5000:       10240:        58640: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_0/Relu_1;EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_0/conv2d_1/Conv2D
+        43 -         45:     0xa000 -     0xaeb0:        3760:        44720: Weights     : EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_0/shuffle_conv_reshape_npu_buffer
+        44 -         47:        0x0 -     0x5000:       20480:       398624: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_0/shuffle_conv1
+        46 -         49:     0xa000 -    0x1e000:       81920:       419104: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/ResizeBilinear
+        47 -         49:    0x1e000 -    0x66520:      296224:       419104: Weights     : EncoderDecoderBlock0/ResNetBlock0/Conv11/conv2d/Conv2D_reshape_npu_buffer
+        48 -         53:        0x0 -     0xa000:       40960:       419104: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/Conv11/conv2d/Conv2D1
+        50 -         61:     0xa000 -    0x14000:       40960:       108480: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/concat
+        51 -         53:    0x19000 -    0x1a290:        4752:       108480: Weights     : EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/conv2d/Conv2D_reshape_npu_buffer
+        52 -         55:    0x14000 -    0x19000:       20480:       108480: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/Relu;EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/conv2d/Conv2D
+        53 -         55:    0x1a290 -    0x1a7c0:        1328:       108480: Weights     : EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/batch_normalization_1/FusedBatchNormV3;EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/depthwise;EncoderDecoderBlock0/ResNetBlock0/Conv12/conv2d/bias;EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/batch_normalization_2/FusedBatchNormV3_reshape_npu_buffer
+        54 -         57:        0x0 -     0x5000:       20480:        88000: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/batch_normalization_1/FusedBatchNormV3;EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/depthwise;EncoderDecoderBlock0/ResNetBlock0/Conv12/conv2d/bias;EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/batch_normalization_2/FusedBatchNormV31
+        55 -         57:     0x5000 -     0x6290:        4752:        88000: Weights     : EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/conv2d_1/Conv2D_reshape_npu_buffer
+        56 -         59:    0x14000 -    0x19000:       20480:        86672: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/Relu_1;EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/conv2d_1/Conv2D
+        59 -         61:        0x0 -      0x660:        1632:        83552: Weights     : EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/shuffle_conv_reshape_npu_buffer
+        60 -         63:    0x3a290 -    0x44290:       40960:       279184: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/shuffle_conv1
+        62 -         65:        0x0 -    0x28000:      163840:       320144: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/ResizeBilinear_1
+        63 -         65:    0x28000 -    0x3a290:       74384:       320144: Weights     : EncoderDecoderBlock0/ResNetBlock0/Conv12/conv2d/Conv2D_reshape_npu_buffer
+        64 -         75:    0x50000 -    0x64000:       81920:       659792: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/Conv12/conv2d/Conv2D1
+        66 -         69:        0x0 -    0x50000:      327680:       592208: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/ResizeBilinear_2
+        67 -         69:    0x64000 -    0x68950:       18768:       592208: Weights     : EncoderDecoderBlock0/ResNetBlock0/Conv14/conv2d/Conv2D_reshape_npu_buffer
+        68 -         73:    0x78000 -    0xa0000:      163840:       659792: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/ReLU16/Relu;EncoderDecoderBlock0/ResNetBlock0/Conv14/conv2d/Conv2D
+        70 -         71:    0x706b0 -    0x709e0:         816:       626624: Weights     : EncoderDecoderBlock0/ResNetBlock0/Conv21/conv2d/Conv2D_reshape_npu_buffer
+        70 -         71:    0x6f400 -    0x706b0:        4784:       626624: Weights     : EncoderDecoderBlock0/ResNetBlock0/Conv18/conv2d/Conv2D_reshape_npu_buffer
+        70 -         71:    0x6b800 -    0x6f400:       15360:       626624: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/ReLU20/Relu;EncoderDecoderBlock0/ResNetBlock0/Conv18/conv2d/Conv2D
+        70 -         71:    0x64000 -    0x6b800:       30720:       626624: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/ResizeBilinear_3
+        70 -         83:        0x0 -    0x50000:      327680:       737280: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/Conv21/conv2d/Conv2D1
+        71 -         73:    0xa0000 -    0xa05e0:        1504:       659792: Weights     : EncoderDecoderBlock0/ResNetBlock0/Conv17/conv2d/Conv2D_reshape_npu_buffer
+        72 -         79:    0x64000 -    0x78000:       81920:       659792: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/Conv17/conv2d/Conv2D1
+        73 -         75:    0xa05e0 -    0xa1150:        2928:       659792: Weights     : EncoderDecoderBlock0/ResNetBlock0/Conv13/conv2d/Conv2D_reshape_npu_buffer
+        74 -         77:    0x78000 -    0x7d000:       20480:       514928: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/Conv13/conv2d/Conv2D1
+        76 -         81:    0x50000 -    0x64000:       81920:       737280: FeatureMap  : ResizeBilinear
+        76 -         81:    0x50000 -    0x64000:       81920:       737280: FeatureMap  : add
+        80 -         85:    0x64000 -    0xb4000:      327680:       737280: FeatureMap  : ResizeBilinear_1
+        80 -         85:    0x64000 -    0xb4000:      327680:       737280: FeatureMap  : add_1
+        84 -         87:        0x0 -     0xa000:       40960:       368640: FeatureMap  : strided_slice_cpu
+Allocation Peak Tensor Size:     737280 (   0xb4000) Bytes   720.00 KiB
+Allocation Peak Memory Usage:    737280 (   0xb4000) Bytes   720.00 KiB
+Allocation Overhead:                  0 Bytes (0.00 %)
+
+################################################################################
+Tensor Allocation for mem_area OffChipFlash, of mem_type_set (Permanent_NPU), using allocator LinearAlloc, in Npu subgraph:
+Start Time -   End Time: Start Addr -   End Addr: Tensor Size: Memory Usage: Purpose     : Name
+         0 -          1:     0x3e80 -     0x3e90:          16:       927456: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/ResizeBilinear/size_npu
+         0 -          1:     0x5010 -     0x5020:          16:       927456: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/ResizeBilinear_1/size_npu
+         0 -          1:     0x52a0 -     0x52b0:          16:       927456: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/ResizeBilinear_2/size_npu
+         0 -          1:     0x53f0 -     0x5400:          16:       927456: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/ResizeBilinear_3/size_npu
+         0 -          1:     0x54a0 -     0x54d0:          48:       927456: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/Conv13/conv2d/bias2_reshape_npu
+         0 -          1:     0x54d0 -     0x5500:          48:       927456: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/Conv13/conv2d/bias1_reshape_npu
+         0 -          1:     0x5500 -     0x5530:          48:       927456: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/Conv13/conv2d/bias_reshape_npu
+         0 -          1:     0x5400 -     0x54a0:         160:       927456: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/BN19/batch_normalization/beta_reshape_npu
+         0 -          1:        0x0 -      0x140:         320:       927456: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/BN15/batch_normalization/beta_reshape_npu
+         0 -          1:      0x3c0 -      0x500:         320:       927456: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/BN15/batch_normalization/beta1_reshape_npu
+         0 -          1:      0x500 -      0x640:         320:       927456: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/BN15/batch_normalization/beta2_reshape_npu
+         0 -          1:      0x640 -      0x780:         320:       927456: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/BN15/batch_normalization/beta3_reshape_npu
+         0 -          1:     0x52b0 -     0x53f0:         320:       927456: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/BN15/batch_normalization/beta4_reshape_npu
+         0 -          1:      0x140 -      0x3c0:         640:       927456: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/Conv12/conv2d/bias_reshape_npu
+         0 -          1:      0x780 -      0xa00:         640:       927456: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/Conv12/conv2d/bias1_reshape_npu
+         0 -          1:      0xf00 -     0x1180:         640:       927456: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/Conv12/conv2d/bias2_reshape_npu
+         0 -          1:     0x1180 -     0x1400:         640:       927456: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/Conv12/conv2d/bias3_reshape_npu
+         0 -          1:     0x1400 -     0x1680:         640:       927456: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/Conv12/conv2d/bias4_reshape_npu
+         0 -          1:     0x4390 -     0x4610:         640:       927456: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/Conv12/conv2d/bias5_reshape_npu
+         0 -          1:     0x4610 -     0x4890:         640:       927456: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/Conv12/conv2d/bias6_reshape_npu
+         0 -          1:     0x4890 -     0x4b10:         640:       927456: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/Conv12/conv2d/bias7_reshape_npu
+         0 -          1:     0x5020 -     0x52a0:         640:       927456: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/Conv12/conv2d/bias8_reshape_npu
+         0 -          1:    0x15170 -    0x15410:         672:       927456: Weights     : EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_0/batch_normalization_1/FusedBatchNormV3;EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_0/depthwise;EncoderDecoderBlock0/ResNetBlock0/BN15/batch_normalization/beta;EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_0/batch_normalization_2/FusedBatchNormV3_reshape_npu_npu_encoded_weights
+         0 -          1:    0x15960 -    0x15c60:         768:       927456: Weights     : EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_0/shuffle_conv_reshape_npu_npu_encoded_weights
+         0 -          1:    0xe1260 -    0xe1590:         816:       927456: Weights     : EncoderDecoderBlock0/ResNetBlock0/Conv21/conv2d/Conv2D_reshape_npu_npu_encoded_weights
+         0 -          1:      0xa00 -      0xf00:        1280:       927456: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/Conv11/conv2d/bias_reshape_npu
+         0 -          1:     0x1680 -     0x1b80:        1280:       927456: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/Conv11/conv2d/bias1_reshape_npu
+         0 -          1:     0x2580 -     0x2a80:        1280:       927456: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/Conv11/conv2d/bias2_reshape_npu
+         0 -          1:     0x2a80 -     0x2f80:        1280:       927456: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/Conv11/conv2d/bias3_reshape_npu
+         0 -          1:     0x2f80 -     0x3480:        1280:       927456: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/Conv11/conv2d/bias4_reshape_npu
+         0 -          1:     0x3e90 -     0x4390:        1280:       927456: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/Conv11/conv2d/bias5_reshape_npu
+         0 -          1:     0x4b10 -     0x5010:        1280:       927456: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/Conv11/conv2d/bias6_reshape_npu
+         0 -          1:    0xc8ed0 -    0xc93d0:        1280:       927456: FastStorageBias: EncoderDecoderBlock0/ResNetBlock0/Conv11/conv2d/bias6_reshape_npu_npu_encoded_weights
+         0 -          1:    0x29400 -    0x29930:        1328:       927456: Weights     : EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_1/batch_normalization_1/FusedBatchNormV3;EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_1/depthwise;EncoderDecoderBlock0/ResNetBlock0/Conv12/conv2d/bias;EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/batch_normalization_2/FusedBatchNormV3_reshape_npu_npu_encoded_weights
+         0 -          1:    0xc7710 -    0xc7c40:        1328:       927456: Weights     : EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/batch_normalization_1/FusedBatchNormV3;EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/depthwise;EncoderDecoderBlock0/ResNetBlock0/Conv12/conv2d/bias;EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/batch_normalization_2/FusedBatchNormV3_reshape_npu_npu_encoded_weights
+         0 -          1:    0x14c20 -    0x15170:        1360:       927456: Weights     : EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_0/conv2d/Conv2D_reshape_npu_npu_encoded_weights
+         0 -          1:    0x15410 -    0x15960:        1360:       927456: Weights     : EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_0/conv2d_1/Conv2D_reshape_npu_npu_encoded_weights
+         0 -          1:    0xe1590 -    0xe1b70:        1504:       927456: Weights     : EncoderDecoderBlock0/ResNetBlock0/Conv17/conv2d/Conv2D_reshape_npu_npu_encoded_weights
+         0 -          1:    0x2abc0 -    0x2b220:        1632:       927456: Weights     : EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/shuffle_conv_reshape_npu_npu_encoded_weights
+         0 -          1:     0x1b80 -     0x2580:        2560:       927456: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/Conv10/conv2d/bias_reshape_npu
+         0 -          1:     0x3480 -     0x3e80:        2560:       927456: FeatureMap  : EncoderDecoderBlock0/ResNetBlock0/Conv10/conv2d/bias1_reshape_npu
+         0 -          1:    0x78150 -    0x78ba0:        2640:       927456: Weights     : EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_0/batch_normalization_1/FusedBatchNormV3;EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_0/depthwise;EncoderDecoderBlock0/ResNetBlock0/Conv11/conv2d/bias;EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_0/batch_normalization_2/FusedBatchNormV3_reshape_npu_npu_encoded_weights
+         0 -          1:    0xe1b70 -    0xe26e0:        2928:       927456: Weights     : EncoderDecoderBlock0/ResNetBlock0/Conv13/conv2d/Conv2D_reshape_npu_npu_encoded_weights
+         0 -          1:    0x7d0b0 -    0x7df60:        3760:       927456: Weights     : EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_0/shuffle_conv_reshape_npu_npu_encoded_weights
+         0 -          1:    0x28170 -    0x29400:        4752:       927456: Weights     : EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_1/conv2d/Conv2D_reshape_npu_npu_encoded_weights
+         0 -          1:    0x29930 -    0x2abc0:        4752:       927456: Weights     : EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_1/conv2d_1/Conv2D_reshape_npu_npu_encoded_weights
+         0 -          1:    0xc6480 -    0xc7710:        4752:       927456: Weights     : EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/conv2d/Conv2D_reshape_npu_npu_encoded_weights
+         0 -          1:    0xc7c40 -    0xc8ed0:        4752:       927456: Weights     : EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/conv2d_1/Conv2D_reshape_npu_npu_encoded_weights
+         0 -          1:    0xdffb0 -    0xe1260:        4784:       927456: Weights     : EncoderDecoderBlock0/ResNetBlock0/Conv18/conv2d/Conv2D_reshape_npu_npu_encoded_weights
+         0 -          1:     0x5530 -     0x8190:       11360:       927456: Weights     : EncoderDecoderBlock0/ResNetBlock0/ConvBNReLUBlock1/Conv2/conv2d/Conv2D_reshape_npu_npu_encoded_weights
+         0 -          1:    0x73c40 -    0x78150:       17680:       927456: Weights     : EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_0/conv2d/Conv2D_reshape_npu_npu_encoded_weights
+         0 -          1:    0x78ba0 -    0x7d0b0:       17680:       927456: Weights     : EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_0/conv2d_1/Conv2D_reshape_npu_npu_encoded_weights
+         0 -          1:    0xdb660 -    0xdffb0:       18768:       927456: Weights     : EncoderDecoderBlock0/ResNetBlock0/Conv14/conv2d/Conv2D_reshape_npu_npu_encoded_weights
+         0 -          1:     0x8190 -    0x14c20:       51856:       927456: Weights     : EncoderDecoderBlock0/ResNetBlock0/ConvBNReLUBlock5/Conv6/conv2d/Conv2D_reshape_npu_npu_encoded_weights
+         0 -          1:    0xc93d0 -    0xdb660:       74384:       927456: Weights     : EncoderDecoderBlock0/ResNetBlock0/Conv12/conv2d/Conv2D_reshape_npu_npu_encoded_weights
+         0 -          1:    0x15c60 -    0x28170:       75024:       927456: Weights     : EncoderDecoderBlock0/ResNetBlock0/Conv9/conv2d/Conv2D_reshape_npu_npu_encoded_weights
+         0 -          1:    0x7df60 -    0xc6480:      296224:       927456: Weights     : EncoderDecoderBlock0/ResNetBlock0/Conv11/conv2d/Conv2D_reshape_npu_npu_encoded_weights
+         0 -          1:    0x2b220 -    0x73c40:      297504:       927456: Weights     : EncoderDecoderBlock0/ResNetBlock0/Conv10/conv2d/Conv2D_reshape_npu_npu_encoded_weights
+Allocation Peak Tensor Size:     927456 (   0xe26e0) Bytes   905.72 KiB
+Allocation Peak Memory Usage:    927456 (   0xe26e0) Bytes   905.72 KiB
+Allocation Overhead:                  0 Bytes (0.00 %)
+
+################################################################################
+Tensor Allocation for mem_area OffChipFlash, of mem_type_set (Permanent_CPU), using allocator LinearAlloc, in Cpu subgraph:
+Start Time -   End Time: Start Addr -   End Addr: Tensor Size: Memory Usage: Purpose     : Name
+         0 -          3:        0x0 -     0xa160:       41312:       968768: FeatureMap  : main_split_1_command_stream
+         0 -          3:     0xa160 -    0xec840:      927456:       968768: FeatureMap  : main_split_1_flash
+Allocation Peak Tensor Size:     968768 (   0xec840) Bytes   946.06 KiB
+Allocation Peak Memory Usage:    968768 (   0xec840) Bytes   946.06 KiB
+Allocation Overhead:                  0 Bytes (0.00 %)
+
+################################################################################
+Performance for NPU Subgraph main_split_1
+TFLite_operator      NNG Operator         SRAM Usage  Peak%  Op Cycles Network%        NPU    SRAM AC    DRAM AC OnFlash AC OffFlash AC  MAC Count Network%  Util% Name                 
+-------------------- -------------------- ---------- ------ ---------- -------- ---------- ---------- ---------- ---------- ----------- ---------- -------- ------ -------------------- 
+CONV_2D              Conv2DBias               280160  38.00    1000705     7.22    1000705      73200          0          0           0   45158400     7.69  70.51 EncoderDecoderBlock0/ResNetBlock0/ConvBNReLUBlock1/ReLU4/Relu;EncoderDecoderBlock0/ResNetBlock0/ConvBNReLUBlock1/Conv2/conv2d/Conv2D 
+CONV_2D              Conv2DBias               282256  38.28     961233     6.94     961233     146880          0          0           0   61440000    10.46  99.87 EncoderDecoderBlock0/ResNetBlock0/ConvBNReLUBlock5/ReLU8/Relu;EncoderDecoderBlock0/ResNetBlock0/ConvBNReLUBlock5/Conv6/conv2d/Conv2D 
+CONCATENATION        AvgPool                  153600  20.83      42504     0.31      42504      10080          0          0           0      38400     0.01   1.41 EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_0/concat0_avgpool 
+CONV_2D              Conv2DBias               193360  26.23      38880     0.28      38880       9600          0          0           0    1228800     0.21  49.38 EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_0/Relu;EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_0/conv2d/Conv2D 
+DEPTHWISE_CONV_2D    DepthwiseConv2DBias      154272  20.92      62464     0.45      62464      12800          0          0           0     345600     0.06   8.64 EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_0/batch_normalization_1/FusedBatchNormV3;EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_0/depthwise;EncoderDecoderBlock0/ResNetBlock0/BN15/batch_normalization/beta;EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_0/batch_normalization_2/FusedBatchNormV31 
+CONV_2D              Conv2DBias               154960  21.02      38880     0.28      38880       9600          0          0           0    1228800     0.21  49.38 EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_0/Relu_1;EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_0/conv2d_1/Conv2D 
+CONCATENATION        AvgPool                  115200  15.62      42504     0.31      42504      10080          0          0           0      38400     0.01   1.41 EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_0/concat1_avgpool 
+CONV_2D              Conv2DBias               154368  20.94      78336     0.57      78336      19200          0          0           0    4915200     0.84  98.04 EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_0/shuffle_conv1 
+CONV_2D              Conv2DBias               190224  25.80     370089     2.67     370089     102720          0          0           0   22118400     3.77  93.38 EncoderDecoderBlock0/ResNetBlock0/Conv9/conv2d/Conv2D1 
+CONCATENATION        AvgPool                   76800  10.42      21384     0.15      21384       5040          0          0           0      19200     0.00   1.40 EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_1/concat0_avgpool 
+CONV_2D              Conv2DBias               100752  13.67      23040     0.17      23040       5088          0          0           0    1228800     0.21  83.33 EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_1/Relu;EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_1/conv2d/Conv2D 
+DEPTHWISE_CONV_2D    DepthwiseConv2DBias       78128  10.60      37888     0.27      37888       7200          0          0           0     172800     0.03   7.13 EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_1/batch_normalization_1/FusedBatchNormV3;EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_1/depthwise;EncoderDecoderBlock0/ResNetBlock0/Conv12/conv2d/bias;EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/batch_normalization_2/FusedBatchNormV31 
+CONV_2D              Conv2DBias                81552  11.06      23040     0.17      23040       5088          0          0           0    1228800     0.21  83.33 EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_1/Relu_1;EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_1/conv2d_1/Conv2D 
+CONCATENATION        AvgPool                   57600   7.81      21384     0.15      21384       5040          0          0           0      19200     0.00   1.40 EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_1/concat1_avgpool 
+CONV_2D              Conv2DBias                78432  10.64      87840     0.63      87840      19200          0          0           0    4915200     0.84  87.43 EncoderDecoderBlock0/ResNetBlock0/shuffle_enc_1/shuffle_conv 
+CONV_2D              Conv2DBias               356384  48.34     444951     3.21     444951     106240          0          0           0   23592960     4.02  82.85 EncoderDecoderBlock0/ResNetBlock0/Conv10/conv2d/Conv2D1 
+CONCATENATION        AvgPool                   40960   5.56      17976     0.13      17976       3520          0          0           0      10240     0.00   0.89 EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_0/concat0_avgpool 
+CONV_2D              Conv2DBias                68880   9.34      27360     0.20      27360       5600          0          0           0    1310720     0.22  74.85 EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_0/Relu;EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_0/conv2d/Conv2D 
+DEPTHWISE_CONV_2D    DepthwiseConv2DBias       43600   5.91      25600     0.18      25600       3840          0          0           0      92160     0.02   5.62 EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_0/batch_normalization_1/FusedBatchNormV3;EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_0/depthwise;EncoderDecoderBlock0/ResNetBlock0/Conv11/conv2d/bias;EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_0/batch_normalization_2/FusedBatchNormV31 
+CONV_2D              Conv2DBias                58640   7.95      27360     0.20      27360       5600          0          0           0    1310720     0.22  74.85 EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_0/Relu_1;EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_0/conv2d_1/Conv2D 
+CONCATENATION        AvgPool                   30720   4.17      17976     0.13      17976       3520          0          0           0      10240     0.00   0.89 EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_0/concat1_avgpool 
+CONV_2D              Conv2DBias                44720   6.07     105555     0.76     105555      19840          0          0           0    5242880     0.89  77.61 EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_0/shuffle_conv1 
+RESIZE_BILINEAR      ResizeBilinear           102400  13.89     148224     1.07     148224      16960          0          0           0     327680     0.06   3.45 EncoderDecoderBlock0/ResNetBlock0/ResizeBilinear 
+CONV_2D              Conv2DBias               419104  56.84    1667886    12.04    1667886     152576          0          0           0   94371840    16.07  88.41 EncoderDecoderBlock0/ResNetBlock0/Conv11/conv2d/Conv2D1 
+CONCATENATION        AvgPool                   81920  11.11      25608     0.18      25608       5728          0          0           0      20480     0.00   1.25 EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/concat0_avgpool 
+CONV_2D              Conv2DBias               107152  14.53      23040     0.17      23040       5248          0          0           0    1310720     0.22  88.89 EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/Relu;EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/conv2d/Conv2D 
+DEPTHWISE_CONV_2D    DepthwiseConv2DBias       83248  11.29      37888     0.27      37888       7360          0          0           0     184320     0.03   7.60 EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/batch_normalization_1/FusedBatchNormV3;EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/depthwise;EncoderDecoderBlock0/ResNetBlock0/Conv12/conv2d/bias;EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/batch_normalization_2/FusedBatchNormV31 
+CONV_2D              Conv2DBias                86672  11.76      23040     0.17      23040       5248          0          0           0    1310720     0.22  88.89 EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/Relu_1;EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/conv2d_1/Conv2D 
+CONCATENATION        AvgPool                   61440   8.33      25608     0.18      25608       5728          0          0           0      20480     0.00   1.25 EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/concat1_avgpool 
+CONV_2D              Conv2DBias                83552  11.33      93696     0.68      93696      20480          0          0           0    5242880     0.89  87.43 EncoderDecoderBlock0/ResNetBlock0/shuffle_dec_1/shuffle_conv1 
+RESIZE_BILINEAR      ResizeBilinear           204800  27.78     185088     1.34     185088      28880          0          0           0     655360     0.11   5.53 EncoderDecoderBlock0/ResNetBlock0/ResizeBilinear_1 
+CONV_2D              Conv2DBias               320144  43.42    1663566    12.01    1663566     157696          0          0           0   94371840    16.07  88.64 EncoderDecoderBlock0/ResNetBlock0/Conv12/conv2d/Conv2D1 
+RESIZE_BILINEAR      ResizeBilinear           409600  55.56     369408     2.67     369408      57760          0          0           0    1310720     0.22   5.54 EncoderDecoderBlock0/ResNetBlock0/ResizeBilinear_2 
+CONV_2D              Conv2DBias               592208  80.32    1523166    10.99    1523166     155648          0          0           0   94371840    16.07  96.81 EncoderDecoderBlock0/ResNetBlock0/ReLU16/Relu;EncoderDecoderBlock0/ResNetBlock0/Conv14/conv2d/Conv2D 
+RESIZE_BILINEAR      ResizeBilinear           625120  84.79     787200     5.68     787200     133120          0          0           0    2621440     0.45   5.20 EncoderDecoderBlock0/ResNetBlock0/ResizeBilinear_3 
+CONV_2D              Conv2DBias               625120  84.79    1474784    10.64    1474784     302080          0          0           0   94371840    16.07  99.98 EncoderDecoderBlock0/ResNetBlock0/ReLU20/Relu;EncoderDecoderBlock0/ResNetBlock0/Conv18/conv2d/Conv2D 
+CONV_2D              Conv2DBias               625120  84.79     590277     4.26     590277     193024          0          0           0   11796480     2.01  31.23 EncoderDecoderBlock0/ResNetBlock0/Conv21/conv2d/Conv2D1 
+CONV_2D              Conv2DBias               656864  89.09     185068     1.34     185068      42240          0          0           0    5898240     1.00  49.80 EncoderDecoderBlock0/ResNetBlock0/Conv17/conv2d/Conv2D1 
+CONV_2D              Conv2DBias               514928  69.84      93484     0.67      93484      18560          0          0           0    2949120     0.50  49.29 EncoderDecoderBlock0/ResNetBlock0/Conv13/conv2d/Conv2D1 
+RESIZE_BILINEAR      ResizeBilinear           512000  69.44      23808     0.17      23808      14020          0          0           0      81920     0.01   5.38 ResizeBilinear       
+ADD                  Add                      491520  66.67     245760     1.77     245760      30720          0          0           0          0     0.00   0.00 add                  
+RESIZE_BILINEAR      ResizeBilinear           737280 100.00      85248     0.62      85248      54820          0          0           0     327680     0.06   6.01 ResizeBilinear_1     
+ADD                  Add                      655360  88.89     983040     7.09     983040     122880          0          0           0          0     0.00   0.00 add_1                
+STRIDED_SLICE        AvgPool                  368640  50.00      85206     0.61      85206      47690          0          0           0      40960     0.01   0.75 strided_slice_avgpool 
+
+Network summary for ShuffleNet_Bilinear_120x160
+Accelerator configuration                Ethos_U55_64
+System configuration                 Grove_Sys_Config
+Memory mode                            Grove_Mem_Mode
+Accelerator clock                                 400 MHz
+Design peak SRAM bandwidth                       2.98 GB/s
+Design peak Off-chip Flash bandwidth             2.98 GB/s
+
+Total SRAM used                                720.00 KiB
+Total Off-chip Flash used                      946.06 KiB
+
+CPU operators = 0 (0.0%)
+NPU operators = 44 (100.0%)
+
+Average SRAM bandwidth                           0.91 GB/s
+Input   SRAM bandwidth                          12.68 MB/batch
+Weight  SRAM bandwidth                          14.99 MB/batch
+Output  SRAM bandwidth                           3.85 MB/batch
+Total   SRAM bandwidth                          31.55 MB/batch
+Total   SRAM bandwidth            per input     31.55 MB/inference (batch size 1)
+
+Average Off-chip Flash bandwidth                 0.02 GB/s
+Input   Off-chip Flash bandwidth                 0.00 MB/batch
+Weight  Off-chip Flash bandwidth                 0.86 MB/batch
+Output  Off-chip Flash bandwidth                 0.00 MB/batch
+Total   Off-chip Flash bandwidth                 0.86 MB/batch
+Total   Off-chip Flash bandwidth  per input      0.86 MB/inference (batch size 1)
+
+Neural network macs                         587252480 MACs/batch
+

@@ -1,0 +1,36 @@
+============================================================
+Experiment: Ethos-U Channel Alignment Verification
+Date: 2025-12-22 13:25:58
+Input Shape: (64, 64, 32)
+Op Type(s): ['Conv2D', 'Conv2DTranspose', 'DepthwiseConv2D']
+Vela Optimise Mode: Size
+============================================================
+
+Op Type         | Channels   | SRAM (KiB)      | Diff (KiB)
+------------------------------------------------------------
+Conv2D          | 1          | 132.00          | 0.00      
+Conv2D          | 8          | 160.00          | 28.00     
+Conv2D          | 14         | 184.00          | 24.00     
+Conv2D          | 15         | 188.00          | 4.00      
+Conv2D          | 16         | 192.00          | 4.00      
+Conv2D          | 17         | 196.00          | 4.00      
+Conv2D          | 24         | 224.00          | 28.00     
+Conv2D          | 32         | 256.00          | 32.00     
+Conv2DTranspose | 1          | 384.00          | 0.00      
+Conv2DTranspose | 8          | 384.00          | 0.00      
+Conv2DTranspose | 14         | 480.00          | 96.00     
+Conv2DTranspose | 15         | 496.00          | 16.00     
+Conv2DTranspose | 16         | 512.00          | 16.00     
+Conv2DTranspose | 17         | 784.00          | 272.00    
+Conv2DTranspose | 24         | 896.00          | 112.00    
+Conv2DTranspose | 32         | 1024.00         | 128.00    
+DepthwiseConv2D | 1          | 136.00          | 0.00      
+DepthwiseConv2D | 8          | 164.00          | 28.00     
+DepthwiseConv2D | 14         | 188.00          | 24.00     
+DepthwiseConv2D | 15         | 192.00          | 4.00      
+DepthwiseConv2D | 16         | 196.00          | 4.00      
+DepthwiseConv2D | 17         | 200.00          | 4.00      
+DepthwiseConv2D | 24         | 228.00          | 28.00     
+DepthwiseConv2D | 32         | 256.00          | 28.00     
+------------------------------------------------------------
+[*] 测试完成。

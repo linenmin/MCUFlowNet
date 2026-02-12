@@ -1,0 +1,48 @@
+============================================================
+Experiment: Ethos-U Channel Alignment Verification
+Date: 2025-12-22 21:49:39
+Input Shape: (64, 64, 32)
+Op Type(s): ['Conv2D', 'Conv2DTranspose', 'DepthwiseConv2D']
+Vela Optimise Mode: Size
+============================================================
+
+Op Type         | Channels   | SRAM (KiB)      | Diff (KiB)
+------------------------------------------------------------
+Conv2D          | 1          | 154.00          | 0.00      
+Conv2D          | 8          | 154.00          | 0.00      
+Conv2D          | 14         | 154.00          | 0.00      
+Conv2D          | 15         | 154.00          | 0.00      
+Conv2D          | 16         | 154.00          | 0.00      
+Conv2D          | 17         | 160.00          | 6.00      
+Conv2D          | 24         | 160.00          | 0.00      
+Conv2D          | 32         | 160.00          | 0.00      
+Conv2D          | 58         | 172.00          | 12.00     
+Conv2D          | 64         | 172.00          | 0.00      
+Conv2D          | 88         | 184.00          | 12.00     
+Conv2D          | 128        | 196.00          | 12.00     
+Conv2DTranspose | 1          | 384.00          | 0.00      
+Conv2DTranspose | 8          | 384.00          | 0.00      
+Conv2DTranspose | 14         | 384.00          | 0.00      
+Conv2DTranspose | 15         | 384.00          | 0.00      
+Conv2DTranspose | 16         | 384.00          | 0.00      
+Conv2DTranspose | 17         | 640.00          | 256.00    
+Conv2DTranspose | 24         | 640.00          | 0.00      
+Conv2DTranspose | 32         | 640.00          | 0.00      
+Conv2DTranspose | 58         | 1152.00         | 512.00    
+Conv2DTranspose | 64         | 1152.00         | 0.00      
+Conv2DTranspose | 88         | 1664.00         | 512.00    
+Conv2DTranspose | 128        | 2176.00         | 512.00    
+DepthwiseConv2D | 1          | 158.00          | 0.00      
+DepthwiseConv2D | 8          | 158.00          | 0.00      
+DepthwiseConv2D | 14         | 158.00          | 0.00      
+DepthwiseConv2D | 15         | 158.00          | 0.00      
+DepthwiseConv2D | 16         | 158.00          | 0.00      
+DepthwiseConv2D | 17         | 164.00          | 6.00      
+DepthwiseConv2D | 24         | 164.00          | 0.00      
+DepthwiseConv2D | 32         | 164.00          | 0.00      
+DepthwiseConv2D | 58         | 176.00          | 12.00     
+DepthwiseConv2D | 64         | 176.00          | 0.00      
+DepthwiseConv2D | 88         | 188.00          | 12.00     
+DepthwiseConv2D | 128        | 200.00          | 12.00     
+------------------------------------------------------------
+[*] 测试完成。
