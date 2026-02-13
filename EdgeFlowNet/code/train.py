@@ -10,6 +10,8 @@ import glob
 import re
 import misc.ImageUtils as iu
 import random
+import queue
+import threading
 from skimage import data, exposure, img_as_float
 import matplotlib.pyplot as plt
 from misc.MiscUtils import *
@@ -51,6 +53,57 @@ DEFAULT_EXPANSION_FACTOR = 2.0
 DEFAULT_UNCERTAINTY_TYPE = "LinearSoftplus"
 
 
+class BatchPrefetcher:
+    def __init__(self, batch_generator, args, prefetch_batches):
+        self.batch_generator = batch_generator
+        self.args = args
+        self.prefetch_batches = max(0, int(prefetch_batches))
+        self.enabled = self.prefetch_batches > 0
+        self._error = None
+        self._stop_event = threading.Event()
+        self._queue = queue.Queue(maxsize=self.prefetch_batches) if self.enabled else None
+        self._worker_thread = (
+            threading.Thread(target=self._worker, name='batch-prefetcher', daemon=True)
+            if self.enabled else None
+        )
+
+    def start(self):
+        if self.enabled:
+            self._worker_thread.start()
+
+    def _worker(self):
+        try:
+            while not self._stop_event.is_set():
+                batch = self.batch_generator.GenerateBatchTF(self.args)
+                while not self._stop_event.is_set():
+                    try:
+                        self._queue.put(batch, timeout=0.5)
+                        break
+                    except queue.Full:
+                        continue
+        except Exception as exc:
+            self._error = exc
+            self._stop_event.set()
+
+    def get_batch(self):
+        if not self.enabled:
+            return self.batch_generator.GenerateBatchTF(self.args)
+
+        while True:
+            if self._error is not None:
+                raise RuntimeError("Batch prefetch worker failed.") from self._error
+            try:
+                return self._queue.get(timeout=0.5)
+            except queue.Empty:
+                if self._stop_event.is_set() and self._queue.empty():
+                    raise RuntimeError("Batch prefetcher stopped before delivering a batch.")
+
+    def stop(self):
+        self._stop_event.set()
+        if self.enabled and self._worker_thread.is_alive():
+            self._worker_thread.join(timeout=5.0)
+
+
 @Scope
 def Optimizer(OptimizerParams, loss):
     Optimizer = tf.compat.v1.train.AdamOptimizer(learning_rate=OptimizerParams[0], beta1=OptimizerParams[1],
@@ -77,7 +130,11 @@ def TrainOperation(InputPH, I1PH, I2PH, Label1PH, Label2PH, args):
     prVal = VN.Network()
     loss = Loss(I1PH, I2PH, Label1PH, Label2PH, prVal, args)
     OptimizerUpdate = Optimizer(args.OptimizerParams, loss)
-    MergedSummaryOP = TensorBoard(loss, I1PH, I2PH, prVal, Label1PH, Label2PH, args)
+    MergedSummaryOP = TensorBoard(
+        loss, I1PH, I2PH, prVal, Label1PH, Label2PH, args, summary_level=args.summary_level
+    )
+    summary_every = max(1, int(args.summary_every))
+    summary_flush_every = max(1, int(args.summary_flush_every))
     Saver = tf.compat.v1.train.Saver()
     with tf.compat.v1.Session() as sess:       
         if args.LatestFile is not None:
@@ -96,7 +153,11 @@ def TrainOperation(InputPH, I1PH, I2PH, Label1PH, Label2PH, args):
         args.Augmentations = 'None'
 
         NumParams = tu.FindNumParams(1)
-        NumFlops = tu.FindNumFlops(sess, 1)
+        if args.skip_model_profile:
+            NumFlops = -1
+            print('Skipping FLOPs profiling (--skip_model_profile=1).')
+        else:
+            NumFlops = tu.FindNumFlops(sess, 1)
         ModelSize = tu.CalculateModelSize(1)
 
         PrettyPrint(args, NumParams, NumFlops, ModelSize, VN, OverideKbInput=True)
@@ -108,30 +169,43 @@ def TrainOperation(InputPH, I1PH, I2PH, Label1PH, Label2PH, args):
             print(SaveName + ' Model Saved...')
             exit(0)
 
-        for Epochs in tqdm(range(StartEpoch, args.NumEpochs)):
-            NumIterationsPerEpoch = int(args.NumTrainSamples/args.MiniBatchSize/args.DivTrain)
-            for PerEpochCounter in tqdm(range(NumIterationsPerEpoch)):
-                IBatch, P1Batch, P2Batch, Label1Batch, Label2Batch = bg.GenerateBatchTF(args)
-                
-                FeedDict = {VN.InputPH: IBatch, 
-                            I1PH: P1Batch, 
-                            I2PH: P2Batch, 
-                            Label1PH: Label1Batch, 
-                            Label2PH: Label2Batch}
-                _, _, Summary = sess.run([OptimizerUpdate, loss, MergedSummaryOP], feed_dict=FeedDict)
+        prefetcher = BatchPrefetcher(bg, args, args.prefetch_batches)
+        if prefetcher.enabled:
+            print(f'Batch prefetch enabled with queue size {prefetcher.prefetch_batches}.')
+        prefetcher.start()
 
-                # Tensorboard
-                Writer.add_summary(Summary, Epochs*NumIterationsPerEpoch + PerEpochCounter)
-                Writer.flush()
+        try:
+            for Epochs in tqdm(range(StartEpoch, args.NumEpochs)):
+                NumIterationsPerEpoch = int(args.NumTrainSamples/args.MiniBatchSize/args.DivTrain)
+                for PerEpochCounter in tqdm(range(NumIterationsPerEpoch)):
+                    IBatch, P1Batch, P2Batch, Label1Batch, Label2Batch = prefetcher.get_batch()
+                    
+                    FeedDict = {VN.InputPH: IBatch, 
+                                I1PH: P1Batch, 
+                                I2PH: P2Batch, 
+                                Label1PH: Label1Batch, 
+                                Label2PH: Label2Batch}
+                    GlobalStep = Epochs*NumIterationsPerEpoch + PerEpochCounter
+                    if GlobalStep % summary_every == 0:
+                        _, _, Summary = sess.run([OptimizerUpdate, loss, MergedSummaryOP], feed_dict=FeedDict)
+                        Writer.add_summary(Summary, GlobalStep)
+                        if GlobalStep % summary_flush_every == 0:
+                            Writer.flush()
+                    else:
+                        sess.run([OptimizerUpdate, loss], feed_dict=FeedDict)
 
-                if PerEpochCounter % args.SaveCheckPoint == 0:
-                    SaveName = os.path.join(args.CheckPointPath, str(Epochs) + 'a' + str(PerEpochCounter) + 'model.ckpt')
-                    Saver.save(sess,  save_path=SaveName)
-                    print(SaveName + ' Model Saved...')
+                    if PerEpochCounter % args.SaveCheckPoint == 0:
+                        SaveName = os.path.join(args.CheckPointPath, str(Epochs) + 'a' + str(PerEpochCounter) + 'model.ckpt')
+                        Saver.save(sess,  save_path=SaveName)
+                        print(SaveName + ' Model Saved...')
 
-            SaveName = os.path.join(args.CheckPointPath, str(Epochs) + 'model.ckpt')
-            Saver.save(sess, save_path=SaveName)
-            print(SaveName + ' Model Saved...')
+                SaveName = os.path.join(args.CheckPointPath, str(Epochs) + 'model.ckpt')
+                Saver.save(sess, save_path=SaveName)
+                print(SaveName + ' Model Saved...')
+        finally:
+            prefetcher.stop()
+            Writer.flush()
+            Writer.close()
 
     PrettyPrint(args, NumParams, NumFlops, ModelSize, VN, OverideKbInput=True)
 
@@ -176,7 +250,34 @@ def main():
     parser.add_argument('--data_list', default='code/dataset_paths/MPI_Sintel_Final_train_list.txt', help='list of data')
     parser.add_argument('--network_module', default='network.MultiScaleResNet',
                         help='Python module path for the network (e.g. sramTest.network.MultiScaleResNet_bilinear)')
+    parser.add_argument('--fast_mode', action='store_true', help='Enable speed-oriented training defaults')
+    parser.add_argument('--summary_level', default='full', choices=['full', 'scalar'],
+                        help='TensorBoard summary verbosity')
+    parser.add_argument('--summary_every', type=int, default=1,
+                        help='Write TensorBoard summary every N global steps')
+    parser.add_argument('--summary_flush_every', type=int, default=1,
+                        help='Flush TensorBoard writer every N global steps')
+    parser.add_argument('--prefetch_batches', type=int, default=0,
+                        help='Number of CPU-prefetched batches, 0 disables prefetch')
+    parser.add_argument('--skip_model_profile', type=int, default=0, choices=[0, 1],
+                        help='Skip expensive FLOPs profiling at startup when set to 1')
     args = parser.parse_args()
+
+    def _arg_present(flag_name):
+        full_name = f'--{flag_name}'
+        return any(arg == full_name or arg.startswith(full_name + '=') for arg in sys.argv[1:])
+
+    if args.fast_mode:
+        if not _arg_present('summary_level'):
+            args.summary_level = 'scalar'
+        if not _arg_present('summary_every'):
+            args.summary_every = 100
+        if not _arg_present('summary_flush_every'):
+            args.summary_flush_every = 200
+        if not _arg_present('prefetch_batches'):
+            args.prefetch_batches = 8
+        if not _arg_present('skip_model_profile'):
+            args.skip_model_profile = 1
 
     args.EffectiveInitNeurons = DEFAULT_INIT_NEURONS
     args.EffectiveNumSubBlocks = DEFAULT_NUM_SUBBLOCKS

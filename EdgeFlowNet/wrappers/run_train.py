@@ -1,8 +1,31 @@
 import argparse
 import os
+import sys
 
 
 def run_train_local(args):
+    def _arg_present(flag_name):
+        full_name = f"--{flag_name}"
+        return any(arg == full_name or arg.startswith(full_name + "=") for arg in sys.argv[1:])
+
+    summary_level = args.summary_level
+    summary_every = args.summary_every
+    summary_flush_every = args.summary_flush_every
+    prefetch_batches = args.prefetch_batches
+    skip_model_profile = args.skip_model_profile
+
+    if args.fast_mode:
+        if not _arg_present('summary_level'):
+            summary_level = 'scalar'
+        if not _arg_present('summary_every'):
+            summary_every = 100
+        if not _arg_present('summary_flush_every'):
+            summary_flush_every = 200
+        if not _arg_present('prefetch_batches'):
+            prefetch_batches = 8
+        if not _arg_present('skip_model_profile'):
+            skip_model_profile = 1
+
     cmd = ["python", "code/train.py"]
     cmd += ["--Dataset", args.dataset]
     cmd += ["--data_list", args.data_list]
@@ -12,6 +35,14 @@ def run_train_local(args):
     cmd += ["--LR", str(args.lr)]
     cmd += ["--network_module", args.network_module]
     cmd += ["--ExperimentFileName", args.experiment_name]
+    cmd += ["--summary_level", summary_level]
+    cmd += ["--summary_every", str(summary_every)]
+    cmd += ["--summary_flush_every", str(summary_flush_every)]
+    cmd += ["--prefetch_batches", str(prefetch_batches)]
+    cmd += ["--skip_model_profile", str(skip_model_profile)]
+
+    if args.fast_mode:
+        cmd += ["--fast_mode"]
 
     if args.base_path:
         cmd += ["--BasePath", args.base_path]
@@ -37,6 +68,12 @@ def main():
     parser.add_argument("--load_checkpoint", action="store_true", help="resume from latest checkpoint in Checkpoints/")
     parser.add_argument("--experiment_name", default="default", help="save experiment folder name under Checkpoints/ and Logs/")
     parser.add_argument("--resume_experiment_name", default="", help="resume source experiment folder name under Checkpoints/")
+    parser.add_argument("--fast_mode", action="store_true", help="enable speed-optimized training defaults")
+    parser.add_argument("--summary_level", default="full", choices=["full", "scalar"], help="TensorBoard summary verbosity")
+    parser.add_argument("--summary_every", type=int, default=1, help="write summary every N global steps")
+    parser.add_argument("--summary_flush_every", type=int, default=1, help="flush summary writer every N global steps")
+    parser.add_argument("--prefetch_batches", type=int, default=0, help="number of prefetched batches, 0 disables prefetch")
+    parser.add_argument("--skip_model_profile", type=int, default=0, choices=[0, 1], help="skip FLOPs profiling at startup")
     parser.add_argument(
         "--network_module",
         default="network.MultiScaleResNet",

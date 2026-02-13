@@ -53,9 +53,16 @@ def AccumPreds(prVals):
 def SummaryFinite(T):
     return tf.where(tf.math.is_finite(T), T, tf.zeros_like(T))
 
-def TensorBoard(loss, I1PH, I2PH, prVal, Label1PH, Label2PH, Args):
+def TensorBoard(loss, I1PH, I2PH, prVal, Label1PH, Label2PH, Args, summary_level='full'):
+    summary_level = str(summary_level).lower()
     # Create a summary to monitor loss tensor    
     tf.compat.v1.summary.scalar('LossEveryIter', loss)
+
+    if summary_level == 'scalar':
+        return tf.compat.v1.summary.merge_all()
+
+    if summary_level != 'full':
+        print(f"WARNING: unknown summary_level='{summary_level}', falling back to 'full'.")
 
 
     tf.compat.v1.summary.image('I1Patch', I1PH[:,:,:,0:3], max_outputs=1)
