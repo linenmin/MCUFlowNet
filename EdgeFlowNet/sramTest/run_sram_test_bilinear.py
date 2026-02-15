@@ -26,7 +26,7 @@ except ImportError as e:
     sys.exit(1)
 
 # --- 1. 配置 ---
-height, width = 192, 256
+height, width = 180, 240
 # 使用独立的输出目录
 output_dir = os.path.join(current_dir, "output_bilinear")
 os.makedirs(output_dir, exist_ok=True)

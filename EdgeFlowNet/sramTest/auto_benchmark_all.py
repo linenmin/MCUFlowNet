@@ -24,7 +24,7 @@ if current_dir not in sys.path: sys.path.insert(0, current_dir)  # 添加 sramTe
 if root_dir not in sys.path: sys.path.append(root_dir)  # 添加根目录
 
 # --- 导入模块 ---
-from network.MultiScaleResNet_cell import MultiScaleResNet  # 统一的网络模块
+from network.MultiScaleResNet_cell_33decoder import MultiScaleResNet  # 统一的网络模块
 from misc.utils import AccumPreds  # 多尺度累加函数
 from vela.vela_compiler import run_vela  # Vela 编译器封装
 
@@ -236,7 +236,7 @@ def main():
     
     # 根据模式设置输出目录名
     if args.multiscale:
-        output_base = os.path.join(current_dir, 'output_benchmark_all_multiscale')
+        output_base = os.path.join(current_dir, 'output_benchmark_all_multiscale_33decoder')
     else:
         output_base = os.path.join(current_dir, 'output_benchmark_all_singlescale')
     
