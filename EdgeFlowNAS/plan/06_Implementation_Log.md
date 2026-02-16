@@ -139,3 +139,11 @@
 1. 编译检查全部通过。
 2. dry-run 输出配置中包含 `uncertainty_type` 和 `flow_channels`。
 3. 形状检查命令成功返回，且三尺度空间尺寸为 `45x60 / 90x120 / 180x240`。
+
+### 补充验收（实际执行）
+1. `conda run -n tf_work_hpc python wrappers/run_supernet_train.py --config configs/supernet_fc2_180x240.yaml --num_epochs 1 --steps_per_epoch 1 --batch_size 2 --fast_mode --experiment_name edgeflownas_supernet_fc2_180x240_uncert_smoke`
+2. `python -m code.nas.check_manifest --path outputs/supernet/edgeflownas_supernet_fc2_180x240_uncert_smoke/train_manifest.json --strict`
+
+### 补充结果
+1. 训练命令返回 `exit_code=0`，日志包含 `epoch=1` 并正常收敛输出。
+2. `check_manifest --strict` 返回 `ok=true`。
