@@ -13,7 +13,7 @@ class MultiScaleResNetSupernet(BaseLayers):  # 定义超网模型类
         input_ph,  # 定义输入占位符
         arch_code_ph,  # 定义架构编码占位符
         is_training_ph,  # 定义训练标志占位符
-        num_out=2,  # 定义输出通道数
+        num_out=4,  # 定义输出通道数
         init_neurons=32,  # 定义初始通道数
         expansion_factor=2.0,  # 定义通道扩展倍率
         suffix="",  # 定义作用域后缀

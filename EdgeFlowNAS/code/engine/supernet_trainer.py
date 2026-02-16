@@ -14,7 +14,7 @@ from code.engine.bn_recalibration import run_bn_recalibration_session  # 导入B
 from code.engine.checkpoint_manager import build_checkpoint_paths, find_existing_checkpoint, restore_checkpoint, save_checkpoint  # 导入checkpoint工具
 from code.engine.early_stop import EarlyStopState, update_early_stop  # 导入早停工具
 from code.engine.eval_step import build_epe_metric  # 导入EPE指标构建函数
-from code.engine.train_step import add_weight_decay, build_multiscale_l1_loss  # 导入训练图构建函数
+from code.engine.train_step import add_weight_decay, build_multiscale_uncertainty_loss  # 导入训练图构建函数
 from code.nas.eval_pool_builder import build_eval_pool, check_eval_pool_coverage  # 导入验证池工具
 from code.nas.fair_sampler import generate_fair_cycle  # 导入公平采样器
 from code.network.MultiScaleResNet_supernet import MultiScaleResNetSupernet  # 导入超网模型
@@ -117,13 +117,15 @@ def _build_graph(config: Dict[str, Any]) -> Dict[str, object]:  # 定义训练�
     input_h = int(data_cfg.get("input_height", 180))  # 读取输入高度配置
     input_w = int(data_cfg.get("input_width", 240))  # 读取输入宽度配置
     input_ph = tf.compat.v1.placeholder(tf.float32, shape=[batch_size, input_h, input_w, 6], name="Input")  # 创建输入占位符
-    label_ph = tf.compat.v1.placeholder(tf.float32, shape=[batch_size, input_h, input_w, 2], name="Label")  # 创建标签占位符
+    flow_channels = int(data_cfg.get("flow_channels", 2))  # 读取光流输出通道配置
+    pred_channels = int(flow_channels * 2)  # 计算不确定性版本预测通道数
+    label_ph = tf.compat.v1.placeholder(tf.float32, shape=[batch_size, input_h, input_w, flow_channels], name="Label")  # 创建标签占位符
     arch_code_ph = tf.compat.v1.placeholder(tf.int32, shape=[9], name="ArchCode")  # 创建架构编码占位符
     is_training_ph = tf.compat.v1.placeholder(tf.bool, shape=(), name="IsTraining")  # 创建训练标志占位符
     lr_ph = tf.compat.v1.placeholder(tf.float32, shape=(), name="LearningRate")  # 创建学习率占位符
-    model = MultiScaleResNetSupernet(input_ph=input_ph, arch_code_ph=arch_code_ph, is_training_ph=is_training_ph, num_out=2, init_neurons=32, expansion_factor=2.0)  # 创建超网模型实例
+    model = MultiScaleResNetSupernet(input_ph=input_ph, arch_code_ph=arch_code_ph, is_training_ph=is_training_ph, num_out=pred_channels, init_neurons=32, expansion_factor=2.0)  # 创建超网模型实例
     preds = model.build()  # 构建超网前向输出
-    loss_tensor = build_multiscale_l1_loss(preds=preds, label_ph=label_ph)  # 构建多尺度L1损失
+    loss_tensor = build_multiscale_uncertainty_loss(preds=preds, label_ph=label_ph, num_out=flow_channels)  # 构建多尺度不确定性损失
     loss_tensor = add_weight_decay(loss_tensor=loss_tensor, weight_decay=float(train_cfg.get("weight_decay", 0.0)))  # 叠加权重衰减项
     optimizer = tf.compat.v1.train.AdamOptimizer(learning_rate=lr_ph, beta1=0.9, beta2=0.999, epsilon=1e-8)  # 创建基于lr占位符的优化器
     grads_and_vars = optimizer.compute_gradients(loss_tensor)  # 计算损失梯度变量对
@@ -144,7 +146,7 @@ def _build_graph(config: Dict[str, Any]) -> Dict[str, object]:  # 定义训练�
     avg_grads = [accum_var / 3.0 for accum_var in accum_vars]  # 计算平均梯度列表
     with tf.control_dependencies([accum_op]):  # 绑定累积完成依赖
         apply_op = optimizer.apply_gradients(list(zip(avg_grads, vars_)), name="strict_apply")  # 创建梯度应用操作
-    epe_tensor = build_epe_metric(pred_tensor=preds[-1], label_ph=label_ph)  # 构建最终尺度EPE指标
+    epe_tensor = build_epe_metric(pred_tensor=preds[-1], label_ph=label_ph, num_out=flow_channels)  # 构建最终尺度EPE指标
     saver = tf.compat.v1.train.Saver(max_to_keep=5)  # 创建Saver对象
     return {"input_ph": input_ph, "label_ph": label_ph, "arch_code_ph": arch_code_ph, "is_training_ph": is_training_ph, "lr_ph": lr_ph, "preds": preds, "loss": loss_tensor, "epe": epe_tensor, "global_grad_norm": global_norm, "zero_ops": zero_ops, "accum_op": accum_op, "apply_op": apply_op, "saver": saver}  # 返回图对象字典
 

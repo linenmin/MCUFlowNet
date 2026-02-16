@@ -96,3 +96,46 @@
 
 ### 结果记录
 1. 使用手册已覆盖: 环境准备、训练/恢复/评估命令、产物验收、HPC 使用、常见问题与推荐流程。
+
+## Part-08（Supernet Uncertainty 对齐）
+
+### 本部分目标
+1. 将超网训练从纯 L1 版本切换为与单模型一致的 uncertainty 版本（LinearSoftplus 语义）。
+2. 保持评估指标 EPE 仅基于光流前 2 通道计算。
+3. 保持 Strict Fairness 训练主流程不变，仅替换输出语义与损失定义。
+
+### 代码改动
+1. 更新 `code/engine/train_step.py`：
+- 新增 `build_multiscale_uncertainty_loss(...)`，实现累计光流 + 累计不确定性的多尺度损失。
+- 保留 `build_multiscale_l1_loss(...)` 兼容函数。
+2. 更新 `code/engine/eval_step.py`：
+- 新增 `extract_flow_prediction(...)`，明确切片前 `num_out` 通道作为流场。
+- `build_epe_metric(...)` 改为只对流场分支计算 EPE。
+3. 更新 `code/engine/supernet_trainer.py`：
+- 读取 `data.flow_channels`。
+- 将 `num_out` 改为 `flow_channels * 2`。
+- 训练损失改为 `build_multiscale_uncertainty_loss(...)`。
+- EPE 调用改为 `build_epe_metric(..., num_out=flow_channels)`。
+4. 重写 `code/nas/supernet_eval.py`：
+- 清理原文件行粘连问题并重构为可维护版本。
+- 评估图改为 uncertainty 输出通道（`flow_channels * 2`）。
+- EPE 统一走 `code.engine.eval_step.build_epe_metric`。
+5. 更新 `code/nas/model_shape_check.py`：
+- 形状检查默认 `num_out=4`。
+6. 更新 `code/network/MultiScaleResNet_supernet.py`：
+- 默认 `num_out` 调整为 `4`。
+7. 更新 `configs/supernet_fc2_180x240.yaml`：
+- 新增 `train.uncertainty_type: LinearSoftplus`。
+- 新增 `data.flow_channels: 2`。
+8. 更新 `code/utils/manifest.py`：
+- manifest 新增 `flow_channels` 与 `uncertainty_type` 字段。
+
+### 验收命令
+1. `python -m py_compile code/engine/train_step.py code/engine/eval_step.py code/engine/supernet_trainer.py code/nas/supernet_eval.py code/nas/model_shape_check.py code/network/MultiScaleResNet_supernet.py`
+2. `python wrappers/run_supernet_train.py --config configs/supernet_fc2_180x240.yaml --dry_run`
+3. `conda run -n tf_work_hpc python -m code.nas.model_shape_check --h 180 --w 240 --batch 2 --samples 1`
+
+### 通过标准
+1. 编译检查全部通过。
+2. dry-run 输出配置中包含 `uncertainty_type` 和 `flow_channels`。
+3. 形状检查命令成功返回，且三尺度空间尺寸为 `45x60 / 90x120 / 180x240`。

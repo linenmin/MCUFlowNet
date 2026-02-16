@@ -34,7 +34,7 @@ def main():  # 定义主函数
         input_ph=input_ph,  # 传入输入占位符
         arch_code_ph=arch_code_ph,  # 传入架构编码占位符
         is_training_ph=is_training_ph,  # 传入训练标志占位符
-        num_out=2,  # 传入输出通道数
+        num_out=4,  # 传入输出通道数
         init_neurons=32,  # 传入初始通道数
         expansion_factor=2.0,  # 传入通道扩展倍率
     )
@@ -65,4 +65,3 @@ def main():  # 定义主函数
 
 if __name__ == "__main__":  # 判断是否为脚本直运行
     raise SystemExit(main())  # 以主函数返回码退出
-

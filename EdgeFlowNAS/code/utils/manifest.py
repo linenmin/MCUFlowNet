@@ -24,9 +24,10 @@ def build_manifest(config: Dict[str, Any], git_commit: str) -> Dict[str, Any]:  
         "git_commit": git_commit,  # 写入提交哈希
         "config_hash": _hash_config(config),  # 写入配置哈希
         "input_shape": [data_cfg.get("input_height", 0), data_cfg.get("input_width", 0)],  # 写入输入尺寸
+        "flow_channels": data_cfg.get("flow_channels", 2),  # 写入光流通道数
         "optimizer": train_cfg.get("optimizer", "adam"),  # 写入优化器
         "lr_schedule": train_cfg.get("lr_schedule", "cosine"),  # 写入学习率策略
+        "uncertainty_type": train_cfg.get("uncertainty_type", "LinearSoftplus"),  # 写入不确定性类型
         "wd": train_cfg.get("weight_decay", 0.0),  # 写入权重衰减
         "grad_clip": train_cfg.get("grad_clip_global_norm", 0.0),  # 写入梯度裁剪
     }
-

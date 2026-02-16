@@ -1,4 +1,4 @@
-runtime:  # 定义运行时配置分组
+runtime:  # 定义运行参数分组
   experiment_name: "edgeflownas_supernet_fc2_180x240"  # 定义实验名称
   output_root: "outputs/supernet"  # 定义输出根目录
   seed: 42  # 定义固定随机种子
@@ -14,6 +14,7 @@ train:  # 定义训练参数分组
   weight_decay: 4.0e-5  # 定义权重衰减
   grad_clip_global_norm: 5.0  # 定义全局梯度裁剪阈值
   supernet_mode: "strict_fairness"  # 定义超网训练模式
+  uncertainty_type: "LinearSoftplus"  # 定义不确定性训练类型
   fast_mode: false  # 定义是否开启快速模式
 
 data:  # 定义数据参数分组
@@ -21,9 +22,10 @@ data:  # 定义数据参数分组
   data_list: "../EdgeFlowNet/code/dataset_paths"  # 定义数据列表目录
   base_path: "../"  # 定义数据根路径前缀
   train_list_name: "FC2_train.txt"  # 定义训练划分文件名
+  val_list_name: "FC2_test.txt"  # 定义验证列表文件名
   input_height: 180  # 定义输入高度
   input_width: 240  # 定义输入宽度
-  val_list_name: "FC2_test.txt"  # 定义验证列表文件名
+  flow_channels: 2  # 定义光流标签通道数
   allow_synthetic_fallback: true  # 定义是否允许合成样本兜底
 
 eval:  # 定义评估参数分组

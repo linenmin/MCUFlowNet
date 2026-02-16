@@ -9,6 +9,7 @@ import tensorflow as tf  # 导入TensorFlow模块
 
 from code.data.dataloader_builder import build_fc2_provider  # 导入FC2数据加载器构建函数
 from code.data.transforms_180x240 import standardize_image_tensor  # 导入输入标准化函数
+from code.engine.eval_step import build_epe_metric  # 导入EPE指标构建函数
 from code.nas.eval_pool_builder import build_eval_pool, check_eval_pool_coverage  # 导入验证池工具
 from code.network.MultiScaleResNet_supernet import MultiScaleResNetSupernet  # 导入超网模型
 from code.utils.json_io import read_json, write_json  # 导入JSON读写工具
@@ -122,31 +123,37 @@ def _load_checkpoint_meta(path_prefix: Path) -> Dict[str, Any]:  # 定义checkpo
     return {}  # 非字典时返回空字典
 
 
-def _build_epe_metric(pred_tensor: tf.Tensor, label_ph: tf.Tensor) -> tf.Tensor:  # 定义EPE指标构建函数
-    """构建平均端点误差(EPE)指标。"""  # 说明函数用途
-    pred_size = [int(pred_tensor.shape[1]), int(pred_tensor.shape[2])]  # 读取预测输出空间尺寸
-    label_resized = tf.compat.v1.image.resize(label_ph, size=pred_size, method=tf.image.ResizeMethod.BILINEAR)  # 对标签执行同尺寸缩放
-    diff = pred_tensor - label_resized  # 计算预测与标签差值
-    sq = tf.square(diff)  # 计算逐元素平方误差
-    sum_sq = tf.reduce_sum(sq, axis=3)  # 按通道聚合平方误差
-    epe_map = tf.sqrt(sum_sq + 1e-6)  # 计算逐像素端点误差
-    return tf.reduce_mean(epe_map, name="mean_epe")  # 返回平均端点误差
-
-
 def _build_eval_graph(config: Dict[str, Any], batch_size: int) -> Dict[str, Any]:  # 定义评估图构建函数
     """构建超网评估阶段计算图。"""  # 说明函数用途
     data_cfg = config.get("data", {})  # 读取数据配置字典
     input_h = int(data_cfg.get("input_height", 180))  # 读取输入高度配置
     input_w = int(data_cfg.get("input_width", 240))  # 读取输入宽度配置
+    flow_channels = int(data_cfg.get("flow_channels", 2))  # 读取光流通道配置
+    pred_channels = int(flow_channels * 2)  # 计算不确定性版本预测通道数
     input_ph = tf.compat.v1.placeholder(tf.float32, shape=[batch_size, input_h, input_w, 6], name="Input")  # 创建输入占位符
-    label_ph = tf.compat.v1.placeholder(tf.float32, shape=[batch_size, input_h, input_w, 2], name="Label")  # 创建标签占位符
+    label_ph = tf.compat.v1.placeholder(tf.float32, shape=[batch_size, input_h, input_w, flow_channels], name="Label")  # 创建标签占位符
     arch_code_ph = tf.compat.v1.placeholder(tf.int32, shape=[9], name="ArchCode")  # 创建架构编码占位符
     is_training_ph = tf.compat.v1.placeholder(tf.bool, shape=(), name="IsTraining")  # 创建训练标志占位符
-    model = MultiScaleResNetSupernet(input_ph=input_ph, arch_code_ph=arch_code_ph, is_training_ph=is_training_ph, num_out=2, init_neurons=32, expansion_factor=2.0)  # 创建超网模型实例
+    model = MultiScaleResNetSupernet(  # 创建超网模型实例
+        input_ph=input_ph,  # 传入输入占位符
+        arch_code_ph=arch_code_ph,  # 传入架构编码占位符
+        is_training_ph=is_training_ph,  # 传入训练标志占位符
+        num_out=pred_channels,  # 传入输出通道数
+        init_neurons=32,  # 传入初始通道数
+        expansion_factor=2.0,  # 传入通道扩展倍率
+    )
     preds = model.build()  # 构建前向输出
-    epe_tensor = _build_epe_metric(pred_tensor=preds[-1], label_ph=label_ph)  # 构建EPE指标
+    epe_tensor = build_epe_metric(pred_tensor=preds[-1], label_ph=label_ph, num_out=flow_channels)  # 构建EPE指标
     saver = tf.compat.v1.train.Saver(max_to_keep=5)  # 创建Saver对象
-    return {"input_ph": input_ph, "label_ph": label_ph, "arch_code_ph": arch_code_ph, "is_training_ph": is_training_ph, "pred_tensor": preds[-1], "epe": epe_tensor, "saver": saver}  # 返回评估图对象
+    return {  # 返回评估图对象
+        "input_ph": input_ph,  # 返回输入占位符
+        "label_ph": label_ph,  # 返回标签占位符
+        "arch_code_ph": arch_code_ph,  # 返回架构编码占位符
+        "is_training_ph": is_training_ph,  # 返回训练标志占位符
+        "pred_tensor": preds[-1],  # 返回最终尺度预测
+        "epe": epe_tensor,  # 返回EPE指标张量
+        "saver": saver,  # 返回Saver对象
+    }
 
 
 def _run_eval_pool(  # 定义验证池评估函数
@@ -164,10 +171,26 @@ def _run_eval_pool(  # 定义验证池评估函数
         for _ in range(int(bn_recal_batches)):  # 按配置执行BN重估批次
             train_input, _, _, train_label = train_provider.next_batch(batch_size=batch_size)  # 采样训练批数据
             train_input = standardize_image_tensor(train_input)  # 标准化训练输入
-            sess.run(graph_obj["pred_tensor"], feed_dict={graph_obj["input_ph"]: train_input, graph_obj["label_ph"]: train_label, graph_obj["arch_code_ph"]: arch_code, graph_obj["is_training_ph"]: True})  # 触发BN统计更新
+            sess.run(  # 执行前向触发BN统计更新
+                graph_obj["pred_tensor"],  # 指定前向输出张量
+                feed_dict={  # 传入前向数据
+                    graph_obj["input_ph"]: train_input,  # 传入训练输入
+                    graph_obj["label_ph"]: train_label,  # 传入训练标签
+                    graph_obj["arch_code_ph"]: arch_code,  # 传入架构编码
+                    graph_obj["is_training_ph"]: True,  # 指定训练模式
+                },
+            )
         val_input, _, _, val_label = val_provider.next_batch(batch_size=batch_size)  # 采样验证批数据
         val_input = standardize_image_tensor(val_input)  # 标准化验证输入
-        epe_val = sess.run(graph_obj["epe"], feed_dict={graph_obj["input_ph"]: val_input, graph_obj["label_ph"]: val_label, graph_obj["arch_code_ph"]: arch_code, graph_obj["is_training_ph"]: False})  # 执行EPE评估
+        epe_val = sess.run(  # 执行EPE评估
+            graph_obj["epe"],  # 指定EPE张量
+            feed_dict={  # 传入评估数据
+                graph_obj["input_ph"]: val_input,  # 传入验证输入
+                graph_obj["label_ph"]: val_label,  # 传入验证标签
+                graph_obj["arch_code_ph"]: arch_code,  # 传入架构编码
+                graph_obj["is_training_ph"]: False,  # 指定推理模式
+            },
+        )
         epe_values.append(float(epe_val))  # 记录当前子网EPE
     mean_epe = float(np.mean(epe_values)) if epe_values else 0.0  # 计算平均EPE
     std_epe = float(np.std(epe_values)) if epe_values else 0.0  # 计算EPE标准差
@@ -219,8 +242,16 @@ def main() -> int:  # 定义主函数
     pool_info = _load_or_build_eval_pool(output_dir=output_dir, seed=seed, pool_size=pool_size)  # 加载或构建验证池
     eval_pool = pool_info["pool"]  # 读取验证池列表
     coverage = pool_info["coverage"]  # 读取覆盖检查结果
-    train_provider = build_fc2_provider(config=config, split_file_name=str(data_cfg.get("train_list_name", "FC2_train.txt")), seed_offset=0)  # 构建训练采样器
-    val_provider = build_fc2_provider(config=config, split_file_name=str(data_cfg.get("val_list_name", "FC2_test.txt")), seed_offset=999)  # 构建验证采样器
+    train_provider = build_fc2_provider(  # 构建训练采样器
+        config=config,  # 传入配置字典
+        split_file_name=str(data_cfg.get("train_list_name", "FC2_train.txt")),  # 传入训练列表文件名
+        seed_offset=0,  # 传入训练采样随机偏移
+    )
+    val_provider = build_fc2_provider(  # 构建验证采样器
+        config=config,  # 传入配置字典
+        split_file_name=str(data_cfg.get("val_list_name", "FC2_test.txt")),  # 传入验证列表文件名
+        seed_offset=999,  # 传入验证采样随机偏移
+    )
     tf.compat.v1.disable_eager_execution()  # 关闭Eager执行模式
     tf.compat.v1.reset_default_graph()  # 重置默认计算图
     graph_obj = _build_eval_graph(config=config, batch_size=batch_size)  # 构建评估图对象
@@ -232,12 +263,43 @@ def main() -> int:  # 定义主函数
     with tf.compat.v1.Session() as sess:  # 创建TensorFlow会话
         sess.run(tf.compat.v1.global_variables_initializer())  # 初始化全局变量
         graph_obj["saver"].restore(sess, str(checkpoint_prefix))  # 恢复checkpoint权重
-        metrics = _run_eval_pool(sess=sess, graph_obj=graph_obj, train_provider=train_provider, val_provider=val_provider, eval_pool=eval_pool, bn_recal_batches=bn_recal_batches, batch_size=batch_size)  # 执行验证池评估
+        metrics = _run_eval_pool(  # 执行验证池评估
+            sess=sess,  # 传入会话对象
+            graph_obj=graph_obj,  # 传入图对象
+            train_provider=train_provider,  # 传入训练采样器
+            val_provider=val_provider,  # 传入验证采样器
+            eval_pool=eval_pool,  # 传入评估池
+            bn_recal_batches=bn_recal_batches,  # 传入BN重估次数
+            batch_size=batch_size,  # 传入批大小
+        )
     checkpoint_meta = _load_checkpoint_meta(path_prefix=checkpoint_prefix)  # 读取checkpoint元信息
-    result = {"status": "ok", "checkpoint_type": args.checkpoint_type, "checkpoint_path": str(checkpoint_prefix), "checkpoint_meta": checkpoint_meta, "eval_pool_path": str(pool_info["pool_path"]), "eval_pool_coverage_ok": bool(coverage.get("ok", False)), "mean_epe_12": float(metrics["mean_epe_12"]), "std_epe_12": float(metrics["std_epe_12"]), "bn_recal_batches": int(bn_recal_batches), "batch_size": int(batch_size)}  # 组装评估摘要结果
+    result = {  # 组装评估摘要结果
+        "status": "ok",  # 标记评估状态
+        "checkpoint_type": args.checkpoint_type,  # 记录checkpoint类型
+        "checkpoint_path": str(checkpoint_prefix),  # 记录checkpoint路径
+        "checkpoint_meta": checkpoint_meta,  # 记录checkpoint元信息
+        "eval_pool_path": str(pool_info["pool_path"]),  # 记录验证池路径
+        "eval_pool_coverage_ok": bool(coverage.get("ok", False)),  # 记录验证池覆盖状态
+        "mean_epe_12": float(metrics["mean_epe_12"]),  # 记录平均EPE
+        "std_epe_12": float(metrics["std_epe_12"]),  # 记录EPE标准差
+        "bn_recal_batches": int(bn_recal_batches),  # 记录BN重估批次数
+        "batch_size": int(batch_size),  # 记录评估批大小
+    }
     result_path = output_dir / f"supernet_eval_result_{args.checkpoint_type}.json"  # 计算评估结果落盘路径
     write_json(str(result_path), {"summary": result, "per_arch_epe": metrics.get("per_arch_epe", []), "coverage": coverage})  # 写入评估结果文件
-    print(json.dumps({"status": "ok", "result_path": str(result_path), "mean_epe_12": result["mean_epe_12"], "std_epe_12": result["std_epe_12"], "coverage_ok": result["eval_pool_coverage_ok"]}, ensure_ascii=False, indent=2))  # 打印执行摘要
+    print(  # 打印执行摘要
+        json.dumps(  # 序列化输出摘要
+            {  # 构建摘要字典
+                "status": "ok",  # 输出状态
+                "result_path": str(result_path),  # 输出结果路径
+                "mean_epe_12": result["mean_epe_12"],  # 输出平均EPE
+                "std_epe_12": result["std_epe_12"],  # 输出标准差
+                "coverage_ok": result["eval_pool_coverage_ok"],  # 输出覆盖状态
+            },
+            ensure_ascii=False,  # 保留中文字符
+            indent=2,  # 指定缩进
+        )
+    )
     return 0  # 返回成功状态码
 
 
