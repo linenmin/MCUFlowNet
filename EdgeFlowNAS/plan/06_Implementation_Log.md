@@ -147,3 +147,22 @@
 ### 补充结果
 1. 训练命令返回 `exit_code=0`，日志包含 `epoch=1` 并正常收敛输出。
 2. `check_manifest --strict` 返回 `ok=true`。
+
+## Part-08: FC2 路径告警与缺失样本容错修复（HPC 对齐）
+
+### 本部分目标
+1. 消除 `cv2.imread('Datasets/...') can't open/read file` 大量告警。
+2. 在样本解析阶段过滤不存在路径，避免训练时反复命中缺失样本。
+3. 保持与现有训练流程兼容，不改动 supernet 训练主逻辑。
+
+### 代码改动
+1. 更新 `code/data/fc2_dataset.py`：
+- `resolve_fc2_samples(...)` 中新增存在性过滤，仅保留 `Path(sample).exists()` 的样本。
+- `_load_one(...)` 中在 `cv2.imread` 前增加 `os.path.exists(img0_path/img1_path)` 检查，缺失则跳过。
+
+### 验收命令
+1. `python -m py_compile code/data/fc2_dataset.py`
+
+### 通过标准
+1. 语法检查通过，无异常退出。
+2. 数据缺失时不会再因 `imread` 直接触发大量路径告警（改为加载前过滤/跳过）。

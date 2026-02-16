@@ -66,7 +66,8 @@ def resolve_fc2_samples(data_list_dir: str, split_file_name: str, base_path: Opt
         if idx < 0 or idx >= len(dirnames):  # 检查索引是否越界
             continue  # 越界时跳过当前索引
         sample = _resolve_sample_path(base_path=base_path, raw_path=dirnames[idx])  # 解析单个样本路径
-        samples.append(sample)  # 添加解析后的样本路径
+        if Path(sample).exists():  # 仅保留本机真实存在的样本路径
+            samples.append(sample)  # 添加解析后的样本路径
     return samples  # 返回样本路径列表
 
 
@@ -135,6 +136,8 @@ class FC2BatchProvider:  # 定义FC2批采样类
         for _ in range(32):  # 设置最多尝试次数避免死循环
             img0_path = self.samples[self.rng.randint(0, len(self.samples) - 1)]  # 随机采样第一帧路径
             img0_path, img1_path, flow_path = _build_fc2_triplet(img0_path=img0_path)  # 推导样本三元组路径
+            if not os.path.exists(img0_path) or not os.path.exists(img1_path):  # 先做存在性检查避免imread告警
+                continue  # 任一图像缺失时跳过当前尝试
             img0 = cv2.imread(img0_path, cv2.IMREAD_COLOR)  # 读取第一帧图像
             img1 = cv2.imread(img1_path, cv2.IMREAD_COLOR)  # 读取第二帧图像
             if img0 is None or img1 is None:  # 判断图像是否读取失败
