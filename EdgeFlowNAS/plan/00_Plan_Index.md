@@ -1,14 +1,13 @@
-# EdgeFlowNAS 计划索引
+# EdgeFlowNAS 璁″垝绱㈠紩
 
-更新时间: 2026-02-16
+鏇存柊鏃堕棿: 2026-02-16
 
-## 目标
+## 鐩爣
 
-基于 `EdgeFlowNet` 的 Bilinear 骨架，在 `MCUFlowNet/EdgeFlowNAS` 内构建 FairNAS 风格 NAS 方案。当前阶段只推进 **Supernet 训练**，不推进搜索与重训。
+鍩轰簬 `EdgeFlowNet` 鐨?Bilinear 楠ㄦ灦锛屽湪 `MCUFlowNet/EdgeFlowNAS` 鍐呮瀯寤?FairNAS 椋庢牸 NAS 鏂规銆傚綋鍓嶉樁娈靛彧鎺ㄨ繘 **Supernet 璁粌**锛屼笉鎺ㄨ繘鎼滅储涓庨噸璁€?
+## 宸插畬鎴愰槄璇讳笌瀵归綈
 
-## 已完成阅读与对齐
-
-已阅读文档：
+宸查槄璇绘枃妗ｏ細
 
 1. `MCUFlowNet/EdgeFlowNet/sramTest/analysis/00_README.md`
 2. `MCUFlowNet/EdgeFlowNet/sramTest/analysis/01_Architecture_Overview.md`
@@ -19,7 +18,7 @@
 7. `MCUFlowNet/EdgeFlowNet/sramTest/analysis/06_Final_NAS_Strategy.md`
 8. `MCUFlowNet/EdgeFlowNet/sramTest/analysis/07_Appendix.md`
 
-已阅读源码：
+宸查槄璇绘簮鐮侊細
 
 1. `MCUFlowNet/EdgeFlowNet/sramTest/network/MultiScaleResNet_bilinear.py`
 2. `MCUFlowNet/EdgeFlowNet/sramTest/network/MultiScaleResNet_cell.py`
@@ -35,29 +34,23 @@
 12. `FairNAS/models/FairNAS_A.py`
 13. `FairNAS/models/FairNAS_B.py`
 
-## 计划文档序列
+## 璁″垝鏂囨。搴忓垪
 
-1. `00_Plan_Index.md`：索引与进度总览（本文件）
-2. `01_Framework_Options.md`：大框架方案与首轮决策项（已完成）
-3. `02_Supernet_Training_Spec.md`：超网训练专项规格（已完成，主规格文档）
-4. `03_Supernet_Task_Breakdown.md`：任务拆分与验收标准（已完成）
-5. `04_Supernet_Execution_Gates.md`：按执行顺序的门禁清单与测试模板（已完成）
-6. `05_Engineering_File_Management_and_Code_Style.md`：工程级文件管理与代码注释规范（已完成）
+1. `00_Plan_Index.md`锛氱储寮曚笌杩涘害鎬昏锛堟湰鏂囦欢锛?2. `01_Framework_Options.md`锛氬ぇ妗嗘灦鏂规涓庨杞喅绛栭」锛堝凡瀹屾垚锛?3. `02_Supernet_Training_Spec.md`锛氳秴缃戣缁冧笓椤硅鏍硷紙宸插畬鎴愶紝涓昏鏍兼枃妗ｏ級
+4. `03_Supernet_Task_Breakdown.md`锛氫换鍔℃媶鍒嗕笌楠屾敹鏍囧噯锛堝凡瀹屾垚锛?5. `04_Supernet_Execution_Gates.md`锛氭寜鎵ц椤哄簭鐨勯棬绂佹竻鍗曚笌娴嬭瘯妯℃澘锛堝凡瀹屾垚锛?6. `05_Engineering_File_Management_and_Code_Style.md`锛氬伐绋嬬骇鏂囦欢绠＄悊涓庝唬鐮佹敞閲婅鑼冿紙宸插畬鎴愶級
 
-## 当前锁定决策
+## 褰撳墠閿佸畾鍐崇瓥
 
-1. 超网方法：Strict Fairness One-Shot（3-path same-batch 累积后单次更新）。
-2. 训练栈：TF1 兼容链路，代码落地在 `EdgeFlowNAS`。
-3. 数据与分辨率：FC2，随机裁剪到 `180x240`。
-4. 验证来源：`FC2_test`（仅用于 supernet 排名阶段）。
-5. 优化器：`Adam + cosine decay`。
-6. 正则与稳定化：`weight_decay=4e-5`，`grad_clip_global_norm=5.0`。
-7. BN：共享 BN，评估前重估 `8 batches`。
-8. 验证池：固定 `12` 子网，分层覆盖采样。
-9. 评估与停止：每 epoch 评估，`patience=15`，`min_delta=0.002`。
-10. 预算与复现：`200 epochs`，单种子固定。
+1. 瓒呯綉鏂规硶锛歋trict Fairness One-Shot锛?-path same-batch 绱Н鍚庡崟娆℃洿鏂帮級銆?2. 璁粌鏍堬細TF1 鍏煎閾捐矾锛屼唬鐮佽惤鍦板湪 `EdgeFlowNAS`銆?3. 鏁版嵁涓庡垎杈ㄧ巼锛欶C2锛岄殢鏈鸿鍓埌 `180x240`銆?4. 楠岃瘉鏉ユ簮锛歚FC2_test`锛堜粎鐢ㄤ簬 supernet 鎺掑悕闃舵锛夈€?5. 浼樺寲鍣細`Adam + cosine decay`銆?6. 姝ｅ垯涓庣ǔ瀹氬寲锛歚weight_decay=4e-5`锛宍grad_clip_global_norm=5.0`銆?7. BN锛氬叡浜?BN锛岃瘎浼板墠閲嶄及 `8 batches`銆?8. 楠岃瘉姹狅細鍥哄畾 `12` 瀛愮綉锛屽垎灞傝鐩栭噰鏍枫€?9. 璇勪及涓庡仠姝細姣?epoch 璇勪及锛宍patience=15`锛宍min_delta=0.002`銆?10. 棰勭畻涓庡鐜帮細`200 epochs`锛屽崟绉嶅瓙鍥哄畾銆?
+## 褰撳墠鐘舵€?
+1. 宸插畬鎴愶細璁″垝妗嗘灦銆佽秴缃戣鏍笺€佷换鍔℃媶鍒嗐€侀獙鏀堕棬绂佹ā鏉裤€佸伐绋嬬骇鏂囦欢绠＄悊瑙勮寖銆?2. 涓嬩竴姝ワ細鍏堟寜 `05` 瀹屾垚鐩綍涓庡嚱鏁版媶鍒嗭紝鍐嶆寜 `04` 鐨?Gate-1 鍒?Gate-4 浠ｇ爜钀藉湴涓庢湰鏈?smoke銆?
+## 补充文档（新增）
 
-## 当前状态
+1. `06_Implementation_Log.md`：分阶段实现与验收日志。
+2. `07_User_Manual.md`：Supernet 训练与评估详细使用手册。
 
-1. 已完成：计划框架、超网规格、任务拆分、验收门禁模板、工程级文件管理规范。
-2. 下一步：先按 `05` 完成目录与函数拆分，再按 `04` 的 Gate-1 到 Gate-4 代码落地与本机 smoke。
+## 当前状态（更新）
+
+1. Gate-1 ~ Gate-4 已完成代码实现与本机验收。
+2. 已补齐产物校验工具与 HPC 模板脚本。
+3. 下一阶段可进入 NAS 搜索与候选重训规划（不在当前范围内）。

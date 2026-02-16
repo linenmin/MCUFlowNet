@@ -4,6 +4,7 @@
 set -euo pipefail  # 开启严格模式
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"  # 计算项目根目录
+PYTHON_BIN="${PYTHON_BIN:-python}"  # 读取Python可执行文件环境变量
 CONFIG_PATH="${CONFIG_PATH:-configs/supernet_fc2_180x240.yaml}"  # 读取配置路径环境变量
 GPU_DEVICE="${GPU_DEVICE:-0}"  # 读取GPU编号环境变量
 NUM_EPOCHS="${NUM_EPOCHS:-200}"  # 读取训练轮数环境变量
@@ -14,10 +15,17 @@ EXPERIMENT_NAME="${EXPERIMENT_NAME:-}"  # 读取实验名环境变量
 RESUME_EXPERIMENT_NAME="${RESUME_EXPERIMENT_NAME:-}"  # 读取恢复实验名环境变量
 LOAD_CHECKPOINT="${LOAD_CHECKPOINT:-0}"  # 读取是否加载断点环境变量
 FAST_MODE="${FAST_MODE:-0}"  # 读取快速模式环境变量
+DRY_RUN="${DRY_RUN:-0}"  # 读取是否启用dry-run环境变量
 
 cd "${PROJECT_ROOT}"  # 切换到项目根目录
 
-CMD=(python wrappers/run_supernet_train.py)  # 初始化训练命令数组
+if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then  # 检查默认Python命令是否存在
+  if command -v python3 >/dev/null 2>&1; then  # 检查python3命令是否存在
+    PYTHON_BIN="python3"  # 回退到python3命令
+  fi  # 结束python3回退分支
+fi  # 结束Python命令存在性分支
+
+CMD=("${PYTHON_BIN}" wrappers/run_supernet_train.py)  # 初始化训练命令数组
 CMD+=(--config "${CONFIG_PATH}")  # 添加配置文件参数
 CMD+=(--gpu_device "${GPU_DEVICE}")  # 添加GPU参数
 CMD+=(--num_epochs "${NUM_EPOCHS}")  # 添加轮数参数
@@ -40,6 +48,10 @@ fi  # 结束断点恢复分支
 if [[ "${FAST_MODE}" == "1" ]]; then  # 判断是否启用快速模式
   CMD+=(--fast_mode)  # 追加快速模式参数
 fi  # 结束快速模式分支
+
+if [[ "${DRY_RUN}" == "1" ]]; then  # 判断是否启用dry-run模式
+  CMD+=(--dry_run)  # 追加dry-run参数
+fi  # 结束dry-run分支
 
 echo "[EdgeFlowNAS][HPC] Running command:"  # 输出命令提示
 printf ' %q' "${CMD[@]}"  # 按可复制格式打印命令
