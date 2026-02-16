@@ -6,7 +6,7 @@ from pathlib import Path  # 导入路径工具
 
 import yaml  # 导入YAML模块
 
-from code.nas.eval_pool_builder import build_eval_pool  # 导入验证池构建函数
+from code.nas.eval_pool_builder import build_eval_pool, check_eval_pool_coverage  # 导入验证池构建与覆盖检查函数
 from code.utils.json_io import write_json  # 导入JSON写入工具
 
 
@@ -44,12 +44,19 @@ def main() -> int:  # 定义主函数
     pool_size = int(config.get("eval", {}).get("eval_pool_size", 12))  # 读取验证池大小
     seed = int(config.get("runtime", {}).get("seed", 42))  # 读取随机种子
     pool = build_eval_pool(seed=seed, size=pool_size)  # 构建固定验证子网池
+    coverage = check_eval_pool_coverage(pool=pool)  # 执行验证池覆盖检查
     bn_info = _build_bn_info(batches=args.bn_recal_batches)  # 构建占位BN重估摘要
     output_root = Path(config.get("runtime", {}).get("output_root", "outputs/supernet"))  # 读取输出目录
     output_root.mkdir(parents=True, exist_ok=True)  # 确保输出目录存在
     eval_pool_path = output_root / "eval_pool_12.json"  # 计算验证池输出路径
-    write_json(str(eval_pool_path), {"pool": pool, "bn_recal": bn_info})  # 写入验证池与BN信息
-    print(json.dumps({"status": "ok", "eval_pool_path": str(eval_pool_path)}, ensure_ascii=False, indent=2))  # 打印执行摘要
+    write_json(str(eval_pool_path), {"pool": pool, "coverage": coverage, "bn_recal": bn_info})  # 写入验证池与覆盖信息
+    print(  # 打印执行摘要
+        json.dumps(  # 输出结构化摘要
+            {"status": "ok", "eval_pool_path": str(eval_pool_path), "coverage_ok": bool(coverage["ok"])},  # 组织摘要字段
+            ensure_ascii=False,  # 保留中文字符
+            indent=2,  # 设置缩进格式
+        )
+    )
     return 0  # 返回成功状态
 
 
