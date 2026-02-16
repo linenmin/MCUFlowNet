@@ -77,3 +77,51 @@
 1. 状态：已完成并通过自检。
 2. 覆盖检查：`coverage.ok = true`。
 3. 公平计数：训练短跑中 `fairness_gap=0`。
+
+## Part-03（真实 TF1 Supernet 图与严格公平训练步）
+
+### 本部分目标
+
+1. 将占位网络替换为真实 TF1 Bilinear supernet 图。
+2. 将占位训练循环替换为真实 `3-path same-batch` 梯度累积更新。
+3. 将数据层替换为 FC2 采样器（带合成数据兜底）。
+4. 在 `tf_work_hpc` 环境完成可运行的 1 epoch 短跑验证。
+
+### 代码改动清单
+
+1. 网络层：
+- 新增 `code/network/decorators.py` 与 `code/network/base_layers.py`。
+- 重写 `code/network/MultiScaleResNet_supernet.py`：
+  - 4 个 backbone 深度选择块（Deep1/2/3）。
+  - 5 个 head 卷积核选择块（7/5/3）。
+  - 输出尺度固定为 `45x60 / 90x120 / 180x240`。
+2. 数据层：
+- 重写 `code/data/fc2_dataset.py`：支持 `FC2_dirnames + split index` 解析、`.flo` 读取、随机裁剪、缺依赖时合成样本兜底。
+- 重写 `code/data/dataloader_builder.py`：构建 train/val provider。
+- 重写 `code/data/transforms_180x240.py`：输入标准化到 `[-1,1]`。
+3. 训练执行层：
+- 重写 `code/engine/train_step.py`：多尺度 L1 损失与权重衰减拼接。
+- 重写 `code/engine/eval_step.py`：EPE 指标构建。
+- 重写 `code/engine/bn_recalibration.py`：会话级 BN 重估流程。
+- 重写 `code/engine/supernet_trainer.py`：真实 TF1 图构建、严格公平累积更新、固定 eval pool 评估、早停/日志/artifact 输出。
+4. 入口与配置：
+- 更新 `code/app/train_supernet_app.py`：延迟导入训练模块，支持无 `PyYAML` 环境的轻量 YAML 解析。
+- 更新 `wrappers/run_supernet_train.py`：新增 `--steps_per_epoch`、`--base_path`。
+- 更新 `configs/supernet_fc2_180x240.yaml`：补充 `steps_per_epoch/base_path/train_list_name/allow_synthetic_fallback`。
+5. 验证工具：
+- 重写 `code/nas/model_shape_check.py`，改为真实 TF1 图推理检查。
+
+### 验收命令
+
+1. `python wrappers/run_supernet_train.py --help`
+2. `python wrappers/run_supernet_train.py --config configs/supernet_fc2_180x240.yaml --dry_run`
+3. `python -m code.utils.check_comments --root code --strict`
+4. `python -m code.utils.check_layering --root code --rules configs/layering_rules.yaml`
+5. `conda run -n tf_work_hpc python -m code.nas.model_shape_check --h 180 --w 240 --batch 2 --samples 2`
+6. `conda run -n tf_work_hpc python wrappers/run_supernet_train.py --config configs/supernet_fc2_180x240.yaml --num_epochs 1 --steps_per_epoch 1 --batch_size 2 --fast_mode`
+
+### 结果记录
+
+1. 状态：已完成并通过自检。
+2. 形状检查：`out_1_4=45x60`，`out_1_2=90x120`，`out_1_1=180x240`。
+3. 训练短跑：`tf_work_hpc` 环境完成 `1 epoch`，日志显示严格公平循环与评估输出正常。

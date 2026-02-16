@@ -1,9 +1,12 @@
-"""180x240 变换占位定义。"""  # 定义模块用途
+"""180x240 变换工具。"""  # 定义模块用途
 
-from typing import Dict  # 导入类型注解
+import numpy as np  # 导入NumPy模块
 
 
-def build_transforms(height: int, width: int) -> Dict[str, int]:  # 定义变换构建函数
-    """构建固定分辨率变换描述。"""  # 说明函数用途
-    return {"height": int(height), "width": int(width)}  # 返回占位变换配置
+def standardize_image_tensor(image_tensor: np.ndarray) -> np.ndarray:  # 定义图像标准化函数
+    """将图像张量从[0,255]映射到[-1,1]。"""  # 说明函数用途
+    normalized = image_tensor.astype(np.float32) / 255.0  # 归一化到[0,1]
+    centered = normalized - 0.5  # 平移到[-0.5,0.5]
+    scaled = centered * 2.0  # 缩放到[-1,1]
+    return scaled.astype(np.float32)  # 返回标准化张量
 

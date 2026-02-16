@@ -25,12 +25,14 @@ def _build_overrides(args: argparse.Namespace) -> Dict[str, Any]:  # 定义参�
     overrides: Dict[str, Any] = {}  # 初始化覆写字典
     _put_override(overrides, "train.gpu_device", args.gpu_device)  # 写入GPU覆写
     _put_override(overrides, "train.num_epochs", args.num_epochs)  # 写入轮数覆写
+    _put_override(overrides, "train.steps_per_epoch", args.steps_per_epoch)  # 写入每轮步数覆写
     _put_override(overrides, "train.batch_size", args.batch_size)  # 写入批大小覆写
     _put_override(overrides, "train.lr", args.lr)  # 写入学习率覆写
     _put_override(overrides, "train.supernet_mode", args.supernet_mode)  # 写入超网模式覆写
     _put_override(overrides, "runtime.experiment_name", args.experiment_name)  # 写入实验名覆写
     _put_override(overrides, "data.dataset", args.dataset)  # 写入数据集覆写
     _put_override(overrides, "data.data_list", args.data_list)  # 写入数据列表覆写
+    _put_override(overrides, "data.base_path", args.base_path)  # 写入数据根路径覆写
     _put_override(overrides, "checkpoint.resume_experiment_name", args.resume_experiment_name)  # 写入恢复实验名覆写
     if args.fast_mode:  # 判断是否开启快速模式
         _put_override(overrides, "train.fast_mode", True)  # 写入快速模式覆写
@@ -45,10 +47,12 @@ def _build_parser() -> argparse.ArgumentParser:  # 定义参数解析器构建�
     parser.add_argument("--config", default="configs/supernet_fc2_180x240.yaml", help="path to supernet config yaml")  # 添加配置路径参数
     parser.add_argument("--gpu_device", type=int, default=None, help="GPU index, set -1 for CPU")  # 添加GPU参数
     parser.add_argument("--num_epochs", type=int, default=None, help="number of training epochs")  # 添加轮数参数
+    parser.add_argument("--steps_per_epoch", type=int, default=None, help="steps per epoch")  # 添加每轮步数参数
     parser.add_argument("--batch_size", type=int, default=None, help="mini-batch size")  # 添加批大小参数
     parser.add_argument("--lr", type=float, default=None, help="learning rate")  # 添加学习率参数
     parser.add_argument("--dataset", default=None, help="dataset name, e.g. FC2")  # 添加数据集参数
     parser.add_argument("--data_list", default=None, help="directory containing list files")  # 添加数据列表参数
+    parser.add_argument("--base_path", default=None, help="optional dataset base path")  # 添加数据根路径参数
     parser.add_argument("--experiment_name", default=None, help="experiment name under outputs")  # 添加实验名参数
     parser.add_argument("--resume_experiment_name", default=None, help="resume source experiment name")  # 添加恢复实验名参数
     parser.add_argument("--supernet_mode", default=None, help="supernet mode name")  # 添加超网模式参数
@@ -73,4 +77,3 @@ def main() -> int:  # 定义主函数
 
 if __name__ == "__main__":  # 判断是否为脚本直运行
     raise SystemExit(main())  # 以主函数返回码退出
-
