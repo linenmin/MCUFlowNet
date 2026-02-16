@@ -116,13 +116,14 @@ def _build_graph(config: Dict[str, Any]) -> Dict[str, object]:  # 定义训练�
     batch_size = int(train_cfg.get("batch_size", 32))  # 读取批大小配置
     input_h = int(data_cfg.get("input_height", 180))  # 读取输入高度配置
     input_w = int(data_cfg.get("input_width", 240))  # 读取输入宽度配置
-    input_ph = tf.compat.v1.placeholder(tf.float32, shape=[batch_size, input_h, input_w, 6], name="Input")  # 创建输入占位符
+    input_ph = tf.compat.v1.placeholder(tf.float32, shape=[None, input_h, input_w, 6], name="Input")  # 创建输入占位符
     flow_channels = int(data_cfg.get("flow_channels", 2))  # 读取光流输出通道配置
     pred_channels = int(flow_channels * 2)  # 计算不确定性版本预测通道数
-    label_ph = tf.compat.v1.placeholder(tf.float32, shape=[batch_size, input_h, input_w, flow_channels], name="Label")  # 创建标签占位符
+    label_ph = tf.compat.v1.placeholder(tf.float32, shape=[None, input_h, input_w, flow_channels], name="Label")  # 创建标签占位符
     arch_code_ph = tf.compat.v1.placeholder(tf.int32, shape=[9], name="ArchCode")  # 创建架构编码占位符
     is_training_ph = tf.compat.v1.placeholder(tf.bool, shape=(), name="IsTraining")  # 创建训练标志占位符
     lr_ph = tf.compat.v1.placeholder(tf.float32, shape=(), name="LearningRate")  # 创建学习率占位符
+    accum_divisor_ph = tf.compat.v1.placeholder(tf.float32, shape=(), name="AccumDivisor")  # ???????????
     model = MultiScaleResNetSupernet(input_ph=input_ph, arch_code_ph=arch_code_ph, is_training_ph=is_training_ph, num_out=pred_channels, init_neurons=32, expansion_factor=2.0)  # 创建超网模型实例
     preds = model.build()  # 构建超网前向输出
     loss_tensor = build_multiscale_uncertainty_loss(preds=preds, label_ph=label_ph, num_out=flow_channels)  # 构建多尺度不确定性损失
@@ -143,12 +144,12 @@ def _build_graph(config: Dict[str, Any]) -> Dict[str, object]:  # 定义训练�
     bn_updates = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.UPDATE_OPS)  # 获取BN更新操作集合
     with tf.control_dependencies(add_ops + bn_updates):  # 绑定累积与BN更新依赖
         accum_op = tf.no_op(name="strict_accum_done")  # 创建累积完成占位操作
-    avg_grads = [accum_var / 3.0 for accum_var in accum_vars]  # 计算平均梯度列表
-    with tf.control_dependencies([accum_op]):  # 绑定累积完成依赖
-        apply_op = optimizer.apply_gradients(list(zip(avg_grads, vars_)), name="strict_apply")  # 创建梯度应用操作
+    avg_divisor = tf.maximum(accum_divisor_ph, 1.0, name="strict_avg_divisor")  # ??????
+    avg_grads = [accum_var / avg_divisor for accum_var in accum_vars]  # ????????
+    apply_op = optimizer.apply_gradients(list(zip(avg_grads, vars_)), name="strict_apply")  # ????????
     epe_tensor = build_epe_metric(pred_tensor=preds[-1], label_ph=label_ph, num_out=flow_channels)  # 构建最终尺度EPE指标
     saver = tf.compat.v1.train.Saver(max_to_keep=5)  # 创建Saver对象
-    return {"input_ph": input_ph, "label_ph": label_ph, "arch_code_ph": arch_code_ph, "is_training_ph": is_training_ph, "lr_ph": lr_ph, "preds": preds, "loss": loss_tensor, "epe": epe_tensor, "global_grad_norm": global_norm, "zero_ops": zero_ops, "accum_op": accum_op, "apply_op": apply_op, "saver": saver}  # 返回图对象字典
+    return {"input_ph": input_ph, "label_ph": label_ph, "arch_code_ph": arch_code_ph, "is_training_ph": is_training_ph, "lr_ph": lr_ph, "accum_divisor_ph": accum_divisor_ph, "preds": preds, "loss": loss_tensor, "epe": epe_tensor, "global_grad_norm": global_norm, "zero_ops": zero_ops, "accum_op": accum_op, "apply_op": apply_op, "saver": saver}  # 返回图对象字典
 
 
 def _run_eval_epoch(  # 定义评估轮执行函数
@@ -215,6 +216,11 @@ def train_supernet(config: Dict[str, Any]) -> int:  # 定义超网训练主函�
     logger = build_logger("edgeflownas_supernet", str(experiment_dir / "train.log"))  # 创建日志器
     logger.info("start strict-fairness supernet training")  # 记录训练开始日志
     batch_size = int(train_cfg.get("batch_size", 32))  # 读取批大小配置
+    micro_batch_size = int(train_cfg.get("micro_batch_size", batch_size))  # ????????
+    if micro_batch_size <= 0:  # ??????????
+        micro_batch_size = batch_size  # ???????
+    micro_batch_size = min(micro_batch_size, batch_size)  # ?????????
+    logger.info("batch_size=%d micro_batch_size=%d", batch_size, micro_batch_size)  # ?????
     num_epochs = int(train_cfg.get("num_epochs", 200))  # 读取训练轮数配置
     steps_per_epoch = int(train_cfg.get("steps_per_epoch", 50))  # 读取每轮步数配置
     base_lr = float(train_cfg.get("lr", 1e-4))  # 读取基础学习率配置
@@ -247,12 +253,28 @@ def train_supernet(config: Dict[str, Any]) -> int:  # 定义超网训练主函�
                 _update_fairness_counts(counts=fairness_counts, cycle_codes=cycle_codes)  # 更新公平计数
                 input_batch, _, _, label_batch = train_provider.next_batch(batch_size=batch_size)  # 采样训练批数据
                 input_batch = standardize_image_tensor(input_batch)  # 执行输入标准化
-                current_lr = cosine_lr(base_lr=base_lr, step_idx=global_step, total_steps=total_steps)  # 计算当前学习率
-                sess.run(graph_obj["zero_ops"])  # 清零梯度累积变量
-                for arch_code in cycle_codes:  # 遍历周期内3条路径
-                    sess.run(graph_obj["accum_op"], feed_dict={graph_obj["input_ph"]: input_batch, graph_obj["label_ph"]: label_batch, graph_obj["arch_code_ph"]: arch_code, graph_obj["is_training_ph"]: True, graph_obj["lr_ph"]: current_lr})  # 执行单路径梯度累积
-                loss_val, grad_norm_val, _ = sess.run([graph_obj["loss"], graph_obj["global_grad_norm"], graph_obj["apply_op"]], feed_dict={graph_obj["input_ph"]: input_batch, graph_obj["label_ph"]: label_batch, graph_obj["arch_code_ph"]: cycle_codes[0], graph_obj["is_training_ph"]: True, graph_obj["lr_ph"]: current_lr})  # 执行参数更新并抓取指标
-                global_step += 1  # 递增全局步计数
+                current_lr = cosine_lr(base_lr=base_lr, step_idx=global_step, total_steps=total_steps)  # ???????
+                micro_slices = [(start, min(start + micro_batch_size, batch_size)) for start in range(0, batch_size, micro_batch_size)]  # ??????
+                accum_runs = int(len(cycle_codes) * len(micro_slices))  # ????????
+                sess.run(graph_obj["zero_ops"])  # ????????
+                loss_val = 0.0  # ???????
+                grad_norm_val = 0.0  # ?????????
+                for arch_idx, arch_code in enumerate(cycle_codes):  # ???????
+                    for micro_idx, (start_idx, end_idx) in enumerate(micro_slices):  # ??????
+                        feed = {  # ????????
+                            graph_obj["input_ph"]: input_batch[start_idx:end_idx],  # ??????
+                            graph_obj["label_ph"]: label_batch[start_idx:end_idx],  # ??????
+                            graph_obj["arch_code_ph"]: arch_code,  # ??????
+                            graph_obj["is_training_ph"]: True,  # ??????
+                            graph_obj["lr_ph"]: current_lr,  # ?????
+                        }
+                        is_last_accum = bool(arch_idx == len(cycle_codes) - 1 and micro_idx == len(micro_slices) - 1)  # ??????????
+                        if is_last_accum:  # ?????????????
+                            loss_val, grad_norm_val, _ = sess.run([graph_obj["loss"], graph_obj["global_grad_norm"], graph_obj["accum_op"]], feed_dict=feed)  # ?????????
+                        else:  # ??????????
+                            sess.run(graph_obj["accum_op"], feed_dict=feed)  # ??????
+                sess.run(graph_obj["apply_op"], feed_dict={graph_obj["lr_ph"]: current_lr, graph_obj["accum_divisor_ph"]: float(accum_runs)})  # ??????
+                global_step += 1  # ???????
             eval_info = _run_eval_epoch(sess=sess, graph_obj=graph_obj, train_provider=train_provider, val_provider=val_provider, eval_pool=eval_pool, bn_recal_batches=bn_recal_batches, batch_size=batch_size)  # 执行整轮评估
             row = {"epoch": int(epoch_idx), "mean_epe_12": float(eval_info["mean_epe_12"]), "std_epe_12": float(eval_info["std_epe_12"]), "fairness_gap": float(_fairness_gap(fairness_counts)), "lr": float(cosine_lr(base_lr=base_lr, step_idx=global_step, total_steps=total_steps)), "bn_recal_batches": float(bn_recal_batches)}  # 组装评估行记录
             eval_rows.append(row)  # 记录当前轮评估结果

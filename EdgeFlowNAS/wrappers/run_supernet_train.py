@@ -27,6 +27,7 @@ def _build_overrides(args: argparse.Namespace) -> Dict[str, Any]:  # 定义参�
     _put_override(overrides, "train.num_epochs", args.num_epochs)  # 写入轮数覆写
     _put_override(overrides, "train.steps_per_epoch", args.steps_per_epoch)  # 写入每轮步数覆写
     _put_override(overrides, "train.batch_size", args.batch_size)  # 写入批大小覆写
+    _put_override(overrides, "train.micro_batch_size", args.micro_batch_size)  # 写入微批大小覆写
     _put_override(overrides, "train.lr", args.lr)  # 写入学习率覆写
     _put_override(overrides, "train.supernet_mode", args.supernet_mode)  # 写入超网模式覆写
     _put_override(overrides, "runtime.experiment_name", args.experiment_name)  # 写入实验名覆写
@@ -49,6 +50,7 @@ def _build_parser() -> argparse.ArgumentParser:  # 定义参数解析器构建�
     parser.add_argument("--num_epochs", type=int, default=None, help="number of training epochs")  # 添加轮数参数
     parser.add_argument("--steps_per_epoch", type=int, default=None, help="steps per epoch")  # 添加每轮步数参数
     parser.add_argument("--batch_size", type=int, default=None, help="mini-batch size")  # 添加批大小参数
+    parser.add_argument("--micro_batch_size", type=int, default=None, help="micro batch size for gradient accumulation")  # 添加微批大小参数
     parser.add_argument("--lr", type=float, default=None, help="learning rate")  # 添加学习率参数
     parser.add_argument("--dataset", default=None, help="dataset name, e.g. FC2")  # 添加数据集参数
     parser.add_argument("--data_list", default=None, help="directory containing list files")  # 添加数据列表参数

@@ -8,6 +8,7 @@ train:  # 定义训练参数分组
   num_epochs: 200  # 定义训练总轮数
   steps_per_epoch: 50  # 定义每轮训练步数
   batch_size: 32  # 定义默认批大小
+  micro_batch_size: 8  # 定义显存友好的微批大小
   lr: 1.0e-4  # 定义基础学习率
   optimizer: "adam"  # 定义优化器类型
   lr_schedule: "cosine"  # 定义学习率调度策略

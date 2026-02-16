@@ -166,3 +166,33 @@
 ### 通过标准
 1. 语法检查通过，无异常退出。
 2. 数据缺失时不会再因 `imread` 直接触发大量路径告警（改为加载前过滤/跳过）。
+
+## Part-09: 显存优化与累积逻辑修复（OOM 对应）
+
+### 本部分目标
+1. 修复 strict-fairness 更新阶段的额外反向累积触发问题。
+2. 增加微批训练能力，在保持全局 batch 的同时降低显存峰值。
+3. 保持现有训练入口兼容，支持命令行快速覆写微批参数。
+
+### 代码改动
+1. 更新 `code/engine/supernet_trainer.py`：
+- 输入/标签占位符批维改为 `None`，支持微批切片喂入。
+- 新增 `accum_divisor_ph`，将平均梯度分母由固定 `3` 改为动态值。
+- 取消 `apply_op` 对 `accum_op` 的图依赖，避免更新阶段重复触发一次累积反传。
+- 训练循环新增 `micro_batch_size` 切片逻辑：每个 fairness 周期按微批分段执行累积，再统一 `apply`。
+- 记录日志字段 `batch_size` 与 `micro_batch_size`。
+2. 更新 `wrappers/run_supernet_train.py`：
+- 新增参数 `--micro_batch_size`。
+- 将该参数写入 `train.micro_batch_size` 覆写。
+3. 更新 `configs/supernet_fc2_180x240.yaml`：
+- 新增默认项 `train.micro_batch_size: 8`（全局 `batch_size=32` 保持不变）。
+
+### 验收命令
+1. `python -m py_compile code/engine/supernet_trainer.py wrappers/run_supernet_train.py`
+2. `python wrappers/run_supernet_train.py --help`
+3. `python wrappers/run_supernet_train.py --config configs/supernet_fc2_180x240.yaml --dry_run --micro_batch_size 4`
+
+### 通过标准
+1. 语法检查通过。
+2. CLI 帮助中出现 `--micro_batch_size`。
+3. dry-run 输出中 `train.micro_batch_size` 能被正确覆写。
