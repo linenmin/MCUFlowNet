@@ -1,6 +1,7 @@
 """BN 重估执行工具。"""  # 定义模块用途
-
 from typing import Dict, List  # 导入类型注解
+
+from code.data.transforms_180x240 import standardize_image_tensor  # 导入输入标准化函数
 
 
 def run_bn_recalibration_session(  # 定义BN重估会话函数
@@ -18,17 +19,6 @@ def run_bn_recalibration_session(  # 定义BN重估会话函数
     """在会话中执行BN统计重估。"""  # 说明函数用途
     for _ in range(int(recal_batches)):  # 按重估批次数循环
         input_batch, _, _, label_batch = batch_provider.next_batch(batch_size=batch_size)  # 采样重估批数据
-        sess.run(  # 执行前向以触发BN统计更新
-            forward_fetch,  # 指定前向张量抓取
-            feed_dict={  # 传入重估喂入字典
-                input_ph: input_batch,  # 传入输入批数据
-                label_ph: label_batch,  # 传入标签批数据
-                arch_code_ph: arch_code,  # 传入目标架构编码
-                is_training_ph: True,  # 开启训练模式以更新BN统计
-            },
-        )
-    return {  # 返回重估摘要字典
-        "bn_recal_batches": float(recal_batches),  # 写入重估批次数
-        "bn_mean_shift": 0.0,  # 占位返回均值变化
-        "bn_var_shift": 0.0,  # 占位返回方差变化
-    }
+        input_batch = standardize_image_tensor(input_batch)  # 执行输入标准化
+        sess.run(forward_fetch, feed_dict={input_ph: input_batch, label_ph: label_batch, arch_code_ph: arch_code, is_training_ph: True})  # 执行前向以触发BN统计更新
+    return {"bn_recal_batches": float(recal_batches), "bn_mean_shift": 0.0, "bn_var_shift": 0.0}  # 返回重估摘要字典
