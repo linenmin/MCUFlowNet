@@ -161,7 +161,12 @@ def TrainOperation(InputPH, I1PH, I2PH, Label1PH, Label2PH, args):
         ModelSize = tu.CalculateModelSize(1)
 
         PrettyPrint(args, NumParams, NumFlops, ModelSize, VN, OverideKbInput=True)
-        Writer = tf.compat.v1.summary.FileWriter(args.LogsPath, graph=tf.compat.v1.get_default_graph())
+        if args.LatestFile is not None:
+            # 断点续训：不传 graph，避免创建包含冗余 graph 的新 event 文件
+            Writer = tf.compat.v1.summary.FileWriter(args.LogsPath)
+        else:
+            # 新训练：写入 graph 定义
+            Writer = tf.compat.v1.summary.FileWriter(args.LogsPath, graph=tf.compat.v1.get_default_graph())
 
         if args.SaveTestModel:
             SaveName = os.path.join(args.CheckPointPath, str(0) + 'a' + str(0) + 'model.ckpt')
