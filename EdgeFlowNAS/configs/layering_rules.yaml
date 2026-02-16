@@ -1,0 +1,19 @@
+rules:  # 定义分层规则集合
+  - source: "code/network"  # 定义源层路径
+    forbidden_prefixes:  # 定义禁止导入前缀列表
+      - "code.engine"  # 禁止网络层导入执行层
+      - "code.app"  # 禁止网络层导入应用层
+      - "wrappers"  # 禁止网络层导入命令层
+  - source: "code/nas"  # 定义源层路径
+    forbidden_prefixes:  # 定义禁止导入前缀列表
+      - "code.engine"  # 禁止NAS层导入执行层
+      - "code.app"  # 禁止NAS层导入应用层
+      - "wrappers"  # 禁止NAS层导入命令层
+  - source: "code/utils"  # 定义源层路径
+    forbidden_prefixes:  # 定义禁止导入前缀列表
+      - "code.network"  # 禁止工具层导入网络层
+      - "code.nas"  # 禁止工具层导入NAS层
+      - "code.engine"  # 禁止工具层导入执行层
+      - "code.data"  # 禁止工具层导入数据层
+      - "code.app"  # 禁止工具层导入应用层
+

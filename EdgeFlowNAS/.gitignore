@@ -1,0 +1,8 @@
+# 忽略Python缓存目录
+__pycache__/
+# 忽略Python字节码文件
+*.pyc
+# 忽略训练输出目录
+outputs/supernet/**
+# 保留输出目录占位文件
+!outputs/supernet/.gitkeep
