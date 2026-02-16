@@ -7,6 +7,7 @@ from typing import Any, Dict, List  # 导入类型注解
 
 import numpy as np  # 导入NumPy模块
 import tensorflow as tf  # 导入TensorFlow模块
+from tqdm import tqdm  # 导入训练进度条工具
 
 from code.data.dataloader_builder import build_fc2_provider  # 导入FC2数据加载器构建函数
 from code.data.transforms_180x240 import standardize_image_tensor  # 导入输入标准化函数
@@ -248,7 +249,8 @@ def train_supernet(config: Dict[str, Any]) -> int:  # 定义超网训练主函�
         early_stop.best_metric = float(restore_state["best_metric"])  # 恢复最佳指标状态
         early_stop.bad_epochs = int(restore_state["bad_epochs"])  # 恢复未提升轮数状态
         for epoch_idx in range(start_epoch, num_epochs + 1):  # 按轮数执行训练
-            for _ in range(steps_per_epoch):  # 按每轮步数执行迭代
+            step_iterator = tqdm(range(steps_per_epoch), total=steps_per_epoch, desc=f"train epoch {epoch_idx}/{num_epochs}", leave=False)  # 创建当前epoch的步级进度条
+            for _ in step_iterator:  # 按每轮步数执行迭代并刷新进度条
                 cycle_codes = generate_fair_cycle(rng=sampler_rng, num_blocks=9)  # 生成当前公平周期编码
                 _update_fairness_counts(counts=fairness_counts, cycle_codes=cycle_codes)  # 更新公平计数
                 input_batch, _, _, label_batch = train_provider.next_batch(batch_size=batch_size)  # 采样训练批数据
@@ -275,6 +277,8 @@ def train_supernet(config: Dict[str, Any]) -> int:  # 定义超网训练主函�
                             sess.run(graph_obj["accum_op"], feed_dict=feed)  # ??????
                 sess.run(graph_obj["apply_op"], feed_dict={graph_obj["lr_ph"]: current_lr, graph_obj["accum_divisor_ph"]: float(accum_runs)})  # ??????
                 global_step += 1  # ???????
+                step_iterator.set_postfix(loss=f"{float(loss_val):.4f}", lr=f"{float(current_lr):.2e}")  # 实时展示loss和学习率
+            step_iterator.close()  # 关闭当前epoch进度条
             eval_info = _run_eval_epoch(sess=sess, graph_obj=graph_obj, train_provider=train_provider, val_provider=val_provider, eval_pool=eval_pool, bn_recal_batches=bn_recal_batches, batch_size=batch_size)  # 执行整轮评估
             row = {"epoch": int(epoch_idx), "mean_epe_12": float(eval_info["mean_epe_12"]), "std_epe_12": float(eval_info["std_epe_12"]), "fairness_gap": float(_fairness_gap(fairness_counts)), "lr": float(cosine_lr(base_lr=base_lr, step_idx=global_step, total_steps=total_steps)), "bn_recal_batches": float(bn_recal_batches)}  # 组装评估行记录
             eval_rows.append(row)  # 记录当前轮评估结果

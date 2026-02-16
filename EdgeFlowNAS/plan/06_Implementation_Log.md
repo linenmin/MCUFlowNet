@@ -196,3 +196,25 @@
 1. 语法检查通过。
 2. CLI 帮助中出现 `--micro_batch_size`。
 3. dry-run 输出中 `train.micro_batch_size` 能被正确覆写。
+## Part-10: Supernet 训练进度条（console 可视化）
+
+### 本部分目标
+1. 在不改变训练语义的前提下，为 supernet 训练增加简洁步级进度条。
+2. 进度条实时显示当前 step 的 `loss` 与 `lr`，方便在终端监看训练状态。
+3. 保持与现有 `train.log` 兼容，日志输出路径与格式不变。
+
+### 代码改动
+1. 更新 `code/engine/supernet_trainer.py`:
+- 新增 `from tqdm import tqdm`。
+- 在每个 epoch 内将 `for _ in range(steps_per_epoch)` 替换为 `tqdm(...)` 迭代器。
+- 每步更新 `postfix(loss, lr)`。
+- 每个 epoch 结束后显式 `close()` 进度条。
+
+### 验收命令
+1. `python -m py_compile code/engine/supernet_trainer.py`
+2. `python wrappers/run_supernet_train.py --config configs/supernet_fc2_180x240.yaml --num_epochs 1 --steps_per_epoch 1 --batch_size 2 --fast_mode`
+
+### 通过标准
+1. 训练启动后终端可见 `train epoch x/y` 进度条。
+2. 进度条中可见 `loss`、`lr` 的实时后缀信息。
+3. 训练完成后 `train.log` 仍正常写入 epoch 级日志。
