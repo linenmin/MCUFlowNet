@@ -1,41 +1,40 @@
-runtime:  # 定义运行参数分组
-  experiment_name: "edgeflownas_supernet_fc2_180x240"  # 定义实验名称
-  output_root: "outputs/supernet"  # 定义输出根目录
-  seed: 42  # 定义固定随机种子
+runtime:
+  experiment_name: "edgeflownas_supernet_fc2_180x240"
+  output_root: "outputs/supernet"
+  seed: 42
 
-train:  # 定义训练参数分组
-  gpu_device: 0  # 定义默认GPU编号
-  num_epochs: 200  # 定义训练总轮数
-  steps_per_epoch: 50  # 定义每轮训练步数
-  batch_size: 32  # 定义默认批大小
-  micro_batch_size: 8  # 定义显存友好的微批大小
-  lr: 1.0e-4  # 定义基础学习率
-  optimizer: "adam"  # 定义优化器类型
-  lr_schedule: "cosine"  # 定义学习率调度策略
-  weight_decay: 4.0e-5  # 定义权重衰减
-  grad_clip_global_norm: 5.0  # 定义全局梯度裁剪阈值
-  supernet_mode: "strict_fairness"  # 定义超网训练模式
-  uncertainty_type: "LinearSoftplus"  # 定义不确定性训练类型
-  fast_mode: false  # 定义是否开启快速模式
+train:
+  gpu_device: 0
+  num_epochs: 200
+  steps_per_epoch: 50
+  batch_size: 32
+  micro_batch_size: 8
+  lr: 1.0e-4
+  optimizer: "adam"
+  lr_schedule: "cosine"
+  weight_decay: 4.0e-5
+  grad_clip_global_norm: 5.0
+  supernet_mode: "strict_fairness"
+  uncertainty_type: "LinearSoftplus"
+  fast_mode: false
 
-data:  # 定义数据参数分组
-  dataset: "FC2"  # 定义数据集名称
-  data_list: "../EdgeFlowNet/code/dataset_paths"  # 定义数据列表目录
-  base_path: "../"  # 定义数据根路径前缀
-  train_list_name: "FC2_train.txt"  # 定义训练划分文件名
-  val_list_name: "FC2_test.txt"  # 定义验证列表文件名
-  input_height: 180  # 定义输入高度
-  input_width: 240  # 定义输入宽度
-  flow_channels: 2  # 定义光流标签通道数
-  allow_synthetic_fallback: true  # 定义是否允许合成样本兜底
+data:
+  dataset: "FC2"
+  base_path: "../"
+  train_dir: "Datasets/FlyingChairs2/train"
+  val_dir: "Datasets/FlyingChairs2/val"
+  input_height: 180
+  input_width: 240
+  flow_channels: 2
 
-eval:  # 定义评估参数分组
-  eval_every_epoch: 1  # 定义评估频率
-  eval_pool_size: 12  # 定义验证子网池大小
-  bn_recal_batches: 8  # 定义BN重估批次数
-  early_stop_patience: 15  # 定义早停耐心轮数
-  early_stop_min_delta: 0.002  # 定义早停最小改善阈值
+eval:
+  eval_every_epoch: 1
+  eval_pool_size: 12
+  bn_recal_batches: 8
+  early_stop_patience: 15
+  early_stop_min_delta: 0.002
 
-checkpoint:  # 定义断点参数分组
-  load_checkpoint: false  # 定义是否加载断点
-  resume_experiment_name: ""  # 定义恢复实验名
+checkpoint:
+  load_checkpoint: false
+  resume_experiment_name: ""
+  reset_early_stop_on_resume: false
