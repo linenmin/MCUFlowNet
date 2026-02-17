@@ -31,7 +31,7 @@ eval:
   eval_every_epoch: 1
   eval_pool_size: 12
   bn_recal_batches: 8
-  early_stop_patience: 15
+  early_stop_patience: 30
   early_stop_min_delta: 0.002
 
 checkpoint:
