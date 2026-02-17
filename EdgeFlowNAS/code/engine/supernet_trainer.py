@@ -117,6 +117,8 @@ def _write_eval_history(csv_path: Path, rows: List[Dict[str, float]]) -> None:
         "bn_recal_batches",
         "train_loss_epoch_avg",
         "train_grad_norm_epoch_avg",
+        "clip_trigger_count",
+        "clip_trigger_rate",
     ]
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=headers)
@@ -163,7 +165,9 @@ def _build_graph(config: Dict[str, Any]) -> Dict[str, object]:
     grads_and_vars = optimizer.compute_gradients(loss_tensor)
     grads = [grad for grad, _ in grads_and_vars if grad is not None]
     vars_ = [var for grad, var in grads_and_vars if grad is not None]
-    clipped, global_norm = tf.clip_by_global_norm(grads, clip_norm=float(train_cfg.get("grad_clip_global_norm", 5.0)))
+    clip_norm = float(train_cfg.get("grad_clip_global_norm", 5.0))
+    clipped, global_norm = tf.clip_by_global_norm(grads, clip_norm=clip_norm)
+    clip_trigger = tf.cast(tf.greater(global_norm, clip_norm), tf.int32, name="strict_clip_trigger")
 
     accum_vars = []
     zero_ops = []
@@ -202,6 +206,8 @@ def _build_graph(config: Dict[str, Any]) -> Dict[str, object]:
         "loss": loss_tensor,
         "epe": epe_tensor,
         "global_grad_norm": global_norm,
+        "clip_trigger": clip_trigger,
+        "clip_norm": clip_norm,
         "zero_ops": zero_ops,
         "accum_op": accum_op,
         "apply_op": apply_op,
@@ -340,6 +346,7 @@ def train_supernet(config: Dict[str, Any]) -> int:
     patience = int(eval_cfg.get("early_stop_patience", 15))
     min_delta = float(eval_cfg.get("early_stop_min_delta", 0.002))
     logger.info("eval_every_epoch=%d", eval_every_epoch)
+    logger.info("grad_clip_global_norm=%.4f", float(train_cfg.get("grad_clip_global_norm", 5.0)))
 
     train_provider = build_fc2_provider(config=config, split="train", seed_offset=0)
     val_provider = build_fc2_provider(config=config, split="val", seed_offset=999)
@@ -392,6 +399,8 @@ def train_supernet(config: Dict[str, Any]) -> int:
             epoch_loss_sum = 0.0
             epoch_grad_norm_sum = 0.0
             epoch_step_count = 0
+            epoch_clip_trigger_count = 0
+            epoch_clip_check_count = 0
             for _ in step_iterator:
                 cycle_codes = generate_fair_cycle(rng=sampler_rng, num_blocks=9)
                 _update_fairness_counts(counts=fairness_counts, cycle_codes=cycle_codes)
@@ -423,12 +432,17 @@ def train_supernet(config: Dict[str, Any]) -> int:
                             arch_idx == len(cycle_codes) - 1 and micro_idx == len(micro_slices) - 1
                         )
                         if is_last_accum:
-                            loss_val, grad_norm_val, _ = sess.run(
-                                [graph_obj["loss"], graph_obj["global_grad_norm"], graph_obj["accum_op"]],
+                            loss_val, grad_norm_val, clip_trigger_val, _ = sess.run(
+                                [graph_obj["loss"], graph_obj["global_grad_norm"], graph_obj["clip_trigger"], graph_obj["accum_op"]],
                                 feed_dict=feed,
                             )
                         else:
-                            sess.run(graph_obj["accum_op"], feed_dict=feed)
+                            clip_trigger_val, _ = sess.run(
+                                [graph_obj["clip_trigger"], graph_obj["accum_op"]],
+                                feed_dict=feed,
+                            )
+                        epoch_clip_trigger_count += int(clip_trigger_val)
+                        epoch_clip_check_count += 1
 
                 sess.run(
                     graph_obj["apply_op"],
@@ -446,6 +460,7 @@ def train_supernet(config: Dict[str, Any]) -> int:
             step_iterator.close()
             train_loss_epoch_avg = epoch_loss_sum / max(1, epoch_step_count)
             train_grad_norm_epoch_avg = epoch_grad_norm_sum / max(1, epoch_step_count)
+            clip_trigger_rate = float(epoch_clip_trigger_count) / max(1, epoch_clip_check_count)
             should_eval = bool(epoch_idx % eval_every_epoch == 0)
             if should_eval:
                 eval_info = _run_eval_epoch(
@@ -466,6 +481,8 @@ def train_supernet(config: Dict[str, Any]) -> int:
                     "bn_recal_batches": float(bn_recal_batches),
                     "train_loss_epoch_avg": float(train_loss_epoch_avg),
                     "train_grad_norm_epoch_avg": float(train_grad_norm_epoch_avg),
+                    "clip_trigger_count": float(epoch_clip_trigger_count),
+                    "clip_trigger_rate": float(clip_trigger_rate),
                 }
                 eval_rows.append(row)
                 improved = update_early_stop(state=early_stop, metric=row["mean_epe_12"], min_delta=min_delta)
@@ -496,13 +513,15 @@ def train_supernet(config: Dict[str, Any]) -> int:
                         extra_payload={"row": row},
                     )
                 logger.info(
-                    "epoch=%d loss=%.6f mean_epe_12=%.6f std_epe_12=%.6f fairness_gap=%.2f grad_norm=%.4f",
+                    "epoch=%d loss=%.6f mean_epe_12=%.6f std_epe_12=%.6f fairness_gap=%.2f grad_norm=%.4f clip_count=%d clip_rate=%.4f",
                     epoch_idx,
                     float(train_loss_epoch_avg),
                     row["mean_epe_12"],
                     row["std_epe_12"],
                     row["fairness_gap"],
                     float(train_grad_norm_epoch_avg),
+                    int(epoch_clip_trigger_count),
+                    float(clip_trigger_rate),
                 )
                 if early_stop.bad_epochs >= patience:
                     logger.info("early stop triggered at epoch=%d", epoch_idx)
@@ -523,14 +542,18 @@ def train_supernet(config: Dict[str, Any]) -> int:
                         "eval_every_epoch": int(eval_every_epoch),
                         "train_loss_epoch_avg": float(train_loss_epoch_avg),
                         "train_grad_norm_epoch_avg": float(train_grad_norm_epoch_avg),
+                        "clip_trigger_count": int(epoch_clip_trigger_count),
+                        "clip_trigger_rate": float(clip_trigger_rate),
                     },
                 )
                 logger.info(
-                    "epoch=%d loss=%.6f eval=skipped fairness_gap=%.2f grad_norm=%.4f",
+                    "epoch=%d loss=%.6f eval=skipped fairness_gap=%.2f grad_norm=%.4f clip_count=%d clip_rate=%.4f",
                     epoch_idx,
                     float(train_loss_epoch_avg),
                     float(_fairness_gap(fairness_counts)),
                     float(train_grad_norm_epoch_avg),
+                    int(epoch_clip_trigger_count),
+                    float(clip_trigger_rate),
                 )
 
     _write_eval_history(csv_path=experiment_dir / "eval_epe_history.csv", rows=eval_rows)
