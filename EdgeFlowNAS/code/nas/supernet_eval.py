@@ -2,6 +2,7 @@
 
 import argparse
 import json
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -82,6 +83,39 @@ def _load_config(path_like: str) -> Dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("config top level must be a mapping")
     return payload
+
+
+def _set_nested(config: Dict[str, Any], key_path: str, value: Any) -> None:
+    """Set nested config value by dot-separated key path."""
+    keys = key_path.split(".")
+    cursor = config
+    for key in keys[:-1]:
+        if key not in cursor or not isinstance(cursor[key], dict):
+            cursor[key] = {}
+        cursor = cursor[key]
+    cursor[keys[-1]] = value
+
+
+def _put_override(overrides: Dict[str, Any], key_path: str, value: Optional[Any]) -> None:
+    """Append one override when value is provided."""
+    if value is None:
+        return
+    overrides[key_path] = value
+
+
+def _apply_cli_overrides(config: Dict[str, Any], args: argparse.Namespace) -> Dict[str, Any]:
+    """Apply CLI overrides without editing YAML manually."""
+    overrides: Dict[str, Any] = {}
+    _put_override(overrides, "runtime.experiment_name", args.experiment_name)
+    _put_override(overrides, "data.base_path", args.base_path)
+    _put_override(overrides, "data.train_dir", args.train_dir)
+    _put_override(overrides, "data.val_dir", args.val_dir)
+    _put_override(overrides, "train.batch_size", args.train_batch_size)
+    _put_override(overrides, "runtime.seed", args.seed)
+    merged = deepcopy(config)
+    for key_path, value in overrides.items():
+        _set_nested(merged, key_path, value)
+    return merged
 
 
 def _resolve_output_dir(config: Dict[str, Any]) -> Path:
@@ -227,6 +261,13 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--bn_recal_batches", type=int, default=None, help="override bn recalibration batches")
     parser.add_argument("--checkpoint_type", choices=["best", "last"], default="best", help="checkpoint type to evaluate")
     parser.add_argument("--batch_size", type=int, default=None, help="override eval batch size")
+    parser.add_argument("--experiment_name", default=None, help="override runtime.experiment_name")
+    parser.add_argument("--base_path", default=None, help="override data.base_path")
+    parser.add_argument("--train_dir", default=None, help="override data.train_dir")
+    parser.add_argument("--val_dir", default=None, help="override data.val_dir")
+    parser.add_argument("--train_batch_size", type=int, default=None, help="override train.batch_size in config")
+    parser.add_argument("--seed", type=int, default=None, help="override runtime.seed")
+    parser.add_argument("--cpu_only", action="store_true", help="force CPU eval by hiding GPUs")
     return parser
 
 
@@ -237,7 +278,7 @@ def main() -> int:
     if not args.eval_only:
         parser.error("supernet_eval requires --eval_only")
 
-    config = _load_config(args.config)
+    config = _apply_cli_overrides(config=_load_config(args.config), args=args)
     runtime_cfg = config.get("runtime", {})
     train_cfg = config.get("train", {})
     eval_cfg = config.get("eval", {})
@@ -258,6 +299,12 @@ def main() -> int:
         raise RuntimeError(f"train sample count is 0; source={train_provider.source_dir}")
     if len(val_provider) == 0:
         raise RuntimeError(f"val sample count is 0; source={val_provider.source_dir}")
+
+    if args.cpu_only:
+        try:
+            tf.config.set_visible_devices([], "GPU")
+        except Exception:
+            pass
 
     tf.compat.v1.disable_eager_execution()
     tf.compat.v1.reset_default_graph()
