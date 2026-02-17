@@ -198,13 +198,11 @@ def _build_graph(config: Dict[str, Any]) -> Dict[str, object]:
     grads = [grad for grad, _ in grads_and_vars if grad is not None]
     vars_ = [var for grad, var in grads_and_vars if grad is not None]
     clip_norm = float(train_cfg.get("grad_clip_global_norm", 5.0))
-    clipped, global_norm = tf.clip_by_global_norm(grads, clip_norm=clip_norm)
-    clip_trigger = tf.cast(tf.greater(global_norm, clip_norm), tf.int32, name="strict_clip_trigger")
 
     accum_vars = []
     zero_ops = []
     add_ops = []
-    for idx, (grad, var) in enumerate(zip(clipped, vars_)):
+    for idx, (grad, var) in enumerate(zip(grads, vars_)):
         accum_var = tf.compat.v1.get_variable(
             name=f"strict_accum_{idx}",
             shape=var.shape,
@@ -222,7 +220,9 @@ def _build_graph(config: Dict[str, Any]) -> Dict[str, object]:
 
     avg_divisor = tf.maximum(accum_divisor_ph, 1.0, name="strict_avg_divisor")
     avg_grads = [accum_var / avg_divisor for accum_var in accum_vars]
-    apply_op = optimizer.apply_gradients(list(zip(avg_grads, vars_)), name="strict_apply")
+    clipped_avg_grads, global_norm = tf.clip_by_global_norm(avg_grads, clip_norm=clip_norm)
+    clip_trigger = tf.cast(tf.greater(global_norm, clip_norm), tf.int32, name="strict_clip_trigger")
+    apply_op = optimizer.apply_gradients(list(zip(clipped_avg_grads, vars_)), name="strict_apply")
 
     epe_tensor = build_epe_metric(pred_tensor=preds[-1], label_ph=label_ph, num_out=flow_channels)
     saver = tf.compat.v1.train.Saver(max_to_keep=5)
@@ -486,28 +486,23 @@ def train_supernet(config: Dict[str, Any]) -> int:
                             arch_idx == len(cycle_codes) - 1 and micro_idx == len(micro_slices) - 1
                         )
                         if is_last_accum:
-                            loss_val, grad_norm_val, clip_trigger_val, _ = sess.run(
-                                [graph_obj["loss"], graph_obj["global_grad_norm"], graph_obj["clip_trigger"], graph_obj["accum_op"]],
+                            loss_val, _ = sess.run(
+                                [graph_obj["loss"], graph_obj["accum_op"]],
                                 feed_dict=feed,
                             )
-                            grad_norm_micro = float(grad_norm_val)
                         else:
-                            grad_norm_micro, clip_trigger_val, _ = sess.run(
-                                [graph_obj["global_grad_norm"], graph_obj["clip_trigger"], graph_obj["accum_op"]],
-                                feed_dict=feed,
-                            )
-                            grad_norm_micro = float(grad_norm_micro)
-                        epoch_grad_norm_values.append(float(grad_norm_micro))
-                        epoch_clip_trigger_count += int(clip_trigger_val)
-                        epoch_clip_check_count += 1
+                            sess.run(graph_obj["accum_op"], feed_dict=feed)
 
-                sess.run(
-                    graph_obj["apply_op"],
+                grad_norm_val, clip_trigger_val, _ = sess.run(
+                    [graph_obj["global_grad_norm"], graph_obj["clip_trigger"], graph_obj["apply_op"]],
                     feed_dict={
                         graph_obj["lr_ph"]: current_lr,
                         graph_obj["accum_divisor_ph"]: float(accum_runs),
                     },
                 )
+                epoch_grad_norm_values.append(float(grad_norm_val))
+                epoch_clip_trigger_count += int(clip_trigger_val)
+                epoch_clip_check_count += 1
                 global_step += 1
                 epoch_loss_sum += float(loss_val)
                 epoch_grad_norm_sum += float(grad_norm_val)

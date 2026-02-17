@@ -13,7 +13,7 @@ train:
   optimizer: "adam"
   lr_schedule: "cosine"
   weight_decay: 4.0e-5
-  grad_clip_global_norm: 5.0
+  grad_clip_global_norm: 200.0
   supernet_mode: "strict_fairness"
   uncertainty_type: "LinearSoftplus"
   fast_mode: false
