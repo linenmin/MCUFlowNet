@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 import tensorflow as tf
+from tqdm import tqdm
 
 from code.data.dataloader_builder import build_fc2_provider
 from code.data.transforms_180x240 import standardize_image_tensor
@@ -205,32 +206,39 @@ def _run_eval_pool(
 ) -> Dict[str, Any]:
     """Run BN recalibration and EPE on fixed eval pool."""
     epe_values = []
-    for arch_code in eval_pool:
-        for _ in range(int(bn_recal_batches)):
-            train_input, _, _, train_label = train_provider.next_batch(batch_size=batch_size)
-            train_input = standardize_image_tensor(train_input)
-            sess.run(
-                graph_obj["pred_tensor"],
+    bn_batches = int(bn_recal_batches)
+    total_steps = max(1, len(eval_pool) * (bn_batches + 1))
+    with tqdm(total=total_steps, desc="supernet eval", unit="step") as progress:
+        for arch_idx, arch_code in enumerate(eval_pool, start=1):
+            for _ in range(bn_batches):
+                train_input, _, _, train_label = train_provider.next_batch(batch_size=batch_size)
+                train_input = standardize_image_tensor(train_input)
+                sess.run(
+                    graph_obj["pred_tensor"],
+                    feed_dict={
+                        graph_obj["input_ph"]: train_input,
+                        graph_obj["label_ph"]: train_label,
+                        graph_obj["arch_code_ph"]: arch_code,
+                        graph_obj["is_training_ph"]: True,
+                    },
+                )
+                progress.update(1)
+
+            val_input, _, _, val_label = val_provider.next_batch(batch_size=batch_size)
+            val_input = standardize_image_tensor(val_input)
+            epe_val = sess.run(
+                graph_obj["epe"],
                 feed_dict={
-                    graph_obj["input_ph"]: train_input,
-                    graph_obj["label_ph"]: train_label,
+                    graph_obj["input_ph"]: val_input,
+                    graph_obj["label_ph"]: val_label,
                     graph_obj["arch_code_ph"]: arch_code,
-                    graph_obj["is_training_ph"]: True,
+                    graph_obj["is_training_ph"]: False,
                 },
             )
-
-        val_input, _, _, val_label = val_provider.next_batch(batch_size=batch_size)
-        val_input = standardize_image_tensor(val_input)
-        epe_val = sess.run(
-            graph_obj["epe"],
-            feed_dict={
-                graph_obj["input_ph"]: val_input,
-                graph_obj["label_ph"]: val_label,
-                graph_obj["arch_code_ph"]: arch_code,
-                graph_obj["is_training_ph"]: False,
-            },
-        )
-        epe_values.append(float(epe_val))
+            epe_float = float(epe_val)
+            epe_values.append(epe_float)
+            progress.update(1)
+            progress.set_postfix(arch=f"{arch_idx}/{len(eval_pool)}", epe=f"{epe_float:.4f}")
 
     mean_epe = float(np.mean(epe_values)) if epe_values else 0.0
     std_epe = float(np.std(epe_values)) if epe_values else 0.0
