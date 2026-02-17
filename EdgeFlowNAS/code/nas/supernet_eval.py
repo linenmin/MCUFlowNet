@@ -2,7 +2,9 @@
 
 import argparse
 import json
+import multiprocessing as mp
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -247,6 +249,137 @@ def _run_eval_pool(
     return {"mean_epe_12": mean_epe, "std_epe_12": std_epe, "per_arch_epe": epe_values}
 
 
+def _run_one_arch_eval(
+    sess,
+    graph_obj: Dict[str, Any],
+    train_provider,
+    val_provider,
+    arch_code: List[int],
+    bn_recal_batches: int,
+    batch_size: int,
+) -> float:
+    """Run BN recalibration + val EPE for one arch."""
+    for _ in range(int(bn_recal_batches)):
+        train_input, _, _, train_label = train_provider.next_batch(batch_size=batch_size)
+        train_input = standardize_image_tensor(train_input)
+        sess.run(
+            graph_obj["pred_tensor"],
+            feed_dict={
+                graph_obj["input_ph"]: train_input,
+                graph_obj["label_ph"]: train_label,
+                graph_obj["arch_code_ph"]: arch_code,
+                graph_obj["is_training_ph"]: True,
+            },
+        )
+    val_input, _, _, val_label = val_provider.next_batch(batch_size=batch_size)
+    val_input = standardize_image_tensor(val_input)
+    epe_val = sess.run(
+        graph_obj["epe"],
+        feed_dict={
+            graph_obj["input_ph"]: val_input,
+            graph_obj["label_ph"]: val_label,
+            graph_obj["arch_code_ph"]: arch_code,
+            graph_obj["is_training_ph"]: False,
+        },
+    )
+    return float(epe_val)
+
+
+def _split_arch_chunks(eval_pool: List[List[int]], num_chunks: int) -> List[List[List[int]]]:
+    """Split arch list into balanced chunks."""
+    buckets: List[List[List[int]]] = [[] for _ in range(max(1, int(num_chunks)))]
+    for idx, arch_code in enumerate(eval_pool):
+        buckets[idx % len(buckets)].append(arch_code)
+    return [chunk for chunk in buckets if chunk]
+
+
+def _eval_arch_chunk_worker(
+    config: Dict[str, Any],
+    checkpoint_prefix: str,
+    arch_chunk: List[List[int]],
+    bn_recal_batches: int,
+    batch_size: int,
+    worker_id: int,
+    cpu_only: bool,
+) -> List[Dict[str, Any]]:
+    """Evaluate a chunk of arch codes in one worker process."""
+    if cpu_only:
+        try:
+            tf.config.set_visible_devices([], "GPU")
+        except Exception:
+            pass
+
+    tf.compat.v1.disable_eager_execution()
+    tf.compat.v1.reset_default_graph()
+    graph_obj = _build_eval_graph(config=config, batch_size=batch_size)
+    train_provider = build_fc2_provider(config=config, split="train", seed_offset=1000 + int(worker_id))
+    val_provider = build_fc2_provider(config=config, split="val", seed_offset=2000 + int(worker_id))
+
+    if len(train_provider) == 0:
+        raise RuntimeError(f"worker={worker_id} train sample count is 0; source={train_provider.source_dir}")
+    if len(val_provider) == 0:
+        raise RuntimeError(f"worker={worker_id} val sample count is 0; source={val_provider.source_dir}")
+
+    outputs: List[Dict[str, Any]] = []
+    with tf.compat.v1.Session() as sess:
+        sess.run(tf.compat.v1.global_variables_initializer())
+        graph_obj["saver"].restore(sess, checkpoint_prefix)
+        for arch_code in arch_chunk:
+            epe_val = _run_one_arch_eval(
+                sess=sess,
+                graph_obj=graph_obj,
+                train_provider=train_provider,
+                val_provider=val_provider,
+                arch_code=arch_code,
+                bn_recal_batches=bn_recal_batches,
+                batch_size=batch_size,
+            )
+            outputs.append({"arch_code": [int(item) for item in arch_code], "epe": float(epe_val)})
+    return outputs
+
+
+def _run_eval_pool_parallel(
+    config: Dict[str, Any],
+    checkpoint_prefix: Path,
+    eval_pool: List[List[int]],
+    bn_recal_batches: int,
+    batch_size: int,
+    num_workers: int,
+    cpu_only: bool,
+) -> Dict[str, Any]:
+    """Run eval pool using multi-process arch parallelism."""
+    chunks = _split_arch_chunks(eval_pool=eval_pool, num_chunks=max(1, int(num_workers)))
+    arch_to_epe: Dict[tuple, float] = {}
+    ctx = mp.get_context("spawn")
+    with ProcessPoolExecutor(max_workers=len(chunks), mp_context=ctx) as executor:
+        future_to_worker = {
+            executor.submit(
+                _eval_arch_chunk_worker,
+                config,
+                str(checkpoint_prefix),
+                chunk,
+                int(bn_recal_batches),
+                int(batch_size),
+                worker_id,
+                bool(cpu_only),
+            ): worker_id
+            for worker_id, chunk in enumerate(chunks, start=1)
+        }
+        with tqdm(total=len(eval_pool), desc=f"supernet eval x{len(chunks)}", unit="arch") as progress:
+            for future in as_completed(future_to_worker):
+                worker_outputs = future.result()
+                for item in worker_outputs:
+                    arch_key = tuple(int(x) for x in item["arch_code"])
+                    arch_to_epe[arch_key] = float(item["epe"])
+                progress.update(len(worker_outputs))
+                progress.set_postfix(done=f"{len(arch_to_epe)}/{len(eval_pool)}")
+
+    epe_values = [float(arch_to_epe[tuple(int(x) for x in arch_code)]) for arch_code in eval_pool]
+    mean_epe = float(np.mean(epe_values)) if epe_values else 0.0
+    std_epe = float(np.std(epe_values)) if epe_values else 0.0
+    return {"mean_epe_12": mean_epe, "std_epe_12": std_epe, "per_arch_epe": epe_values}
+
+
 def _load_or_build_eval_pool(output_dir: Path, seed: int, pool_size: int) -> Dict[str, Any]:
     """Load existing eval pool or build a new one."""
     pool_path = output_dir / f"eval_pool_{pool_size}.json"
@@ -278,6 +411,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--train_batch_size", type=int, default=None, help="override train.batch_size in config")
     parser.add_argument("--seed", type=int, default=None, help="override runtime.seed")
     parser.add_argument("--cpu_only", action="store_true", help="force CPU eval by hiding GPUs")
+    parser.add_argument("--num_workers", type=int, default=1, help="arch-eval worker processes")
     return parser
 
 
@@ -299,6 +433,7 @@ def main() -> int:
     pool_size = int(eval_cfg.get("eval_pool_size", 12))
     bn_recal_batches = int(args.bn_recal_batches) if args.bn_recal_batches is not None else int(eval_cfg.get("bn_recal_batches", 8))
     batch_size = int(args.batch_size) if args.batch_size is not None else int(train_cfg.get("batch_size", 32))
+    num_workers = max(1, int(args.num_workers))
 
     output_dir = _resolve_output_dir(config=config)
     pool_info = _load_or_build_eval_pool(output_dir=output_dir, seed=seed, pool_size=pool_size)
@@ -312,33 +447,44 @@ def main() -> int:
     if len(val_provider) == 0:
         raise RuntimeError(f"val sample count is 0; source={val_provider.source_dir}")
 
-    if args.cpu_only:
-        try:
-            tf.config.set_visible_devices([], "GPU")
-        except Exception:
-            pass
-
-    tf.compat.v1.disable_eager_execution()
-    tf.compat.v1.reset_default_graph()
-    graph_obj = _build_eval_graph(config=config, batch_size=batch_size)
-
     checkpoint_paths = _build_checkpoint_paths(experiment_dir=output_dir)
     chosen_prefix = checkpoint_paths[args.checkpoint_type]
     checkpoint_prefix = _find_existing_checkpoint(path_prefix=chosen_prefix)
     if checkpoint_prefix is None:
         raise RuntimeError(f"checkpoint not found: {chosen_prefix}")
+    workers_used = min(num_workers, max(1, len(eval_pool)))
+    if workers_used <= 1:
+        if args.cpu_only:
+            try:
+                tf.config.set_visible_devices([], "GPU")
+            except Exception:
+                pass
 
-    with tf.compat.v1.Session() as sess:
-        sess.run(tf.compat.v1.global_variables_initializer())
-        graph_obj["saver"].restore(sess, str(checkpoint_prefix))
-        metrics = _run_eval_pool(
-            sess=sess,
-            graph_obj=graph_obj,
-            train_provider=train_provider,
-            val_provider=val_provider,
+        tf.compat.v1.disable_eager_execution()
+        tf.compat.v1.reset_default_graph()
+        graph_obj = _build_eval_graph(config=config, batch_size=batch_size)
+
+        with tf.compat.v1.Session() as sess:
+            sess.run(tf.compat.v1.global_variables_initializer())
+            graph_obj["saver"].restore(sess, str(checkpoint_prefix))
+            metrics = _run_eval_pool(
+                sess=sess,
+                graph_obj=graph_obj,
+                train_provider=train_provider,
+                val_provider=val_provider,
+                eval_pool=eval_pool,
+                bn_recal_batches=bn_recal_batches,
+                batch_size=batch_size,
+            )
+    else:
+        metrics = _run_eval_pool_parallel(
+            config=config,
+            checkpoint_prefix=checkpoint_prefix,
             eval_pool=eval_pool,
             bn_recal_batches=bn_recal_batches,
             batch_size=batch_size,
+            num_workers=workers_used,
+            cpu_only=bool(args.cpu_only),
         )
 
     elapsed_seconds = float(time.perf_counter() - start_perf)
@@ -356,6 +502,8 @@ def main() -> int:
         "std_epe_12": float(metrics["std_epe_12"]),
         "bn_recal_batches": int(bn_recal_batches),
         "batch_size": int(batch_size),
+        "num_workers_requested": int(num_workers),
+        "num_workers_used": int(workers_used),
         "train_samples": len(train_provider),
         "val_samples": len(val_provider),
         "started_at_utc": started_at.isoformat(),
@@ -375,6 +523,7 @@ def main() -> int:
                 "mean_epe_12": result["mean_epe_12"],
                 "std_epe_12": result["std_epe_12"],
                 "coverage_ok": result["eval_pool_coverage_ok"],
+                "num_workers_used": result["num_workers_used"],
                 "elapsed_seconds": result["elapsed_seconds"],
                 "elapsed_hms": result["elapsed_hms"],
             },

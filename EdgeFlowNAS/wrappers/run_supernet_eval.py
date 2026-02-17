@@ -23,6 +23,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--checkpoint_type", choices=["best", "last"], default="last", help="checkpoint type")
     parser.add_argument("--batch_size", type=int, default=None, help="eval batch size")
     parser.add_argument("--bn_recal_batches", type=int, default=None, help="bn recalibration batches")
+    parser.add_argument("--num_workers", type=int, default=None, help="parallel worker processes for arch eval")
 
     parser.add_argument("--experiment_name", default=None, help="override runtime.experiment_name")
     parser.add_argument("--base_path", default=None, help="override data.base_path")
@@ -53,6 +54,7 @@ def main() -> int:
     ]
     _append_opt(cmd, "--batch_size", args.batch_size)
     _append_opt(cmd, "--bn_recal_batches", args.bn_recal_batches)
+    _append_opt(cmd, "--num_workers", args.num_workers)
     _append_opt(cmd, "--experiment_name", args.experiment_name)
     _append_opt(cmd, "--base_path", args.base_path)
     _append_opt(cmd, "--train_dir", args.train_dir)
