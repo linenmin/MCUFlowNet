@@ -81,18 +81,68 @@ def _random_crop_triplet(
     return img0_c, img1_c, flow_c
 
 
+def _center_crop_triplet(
+    img0: np.ndarray,
+    img1: np.ndarray,
+    flow: np.ndarray,
+    crop_h: int,
+    crop_w: int,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Center crop for paired frames and flow."""
+    h, w = img0.shape[0], img0.shape[1]
+    if h < crop_h or w < crop_w:
+        raise ValueError(f"input too small for crop: {h}x{w} vs {crop_h}x{crop_w}")
+    top = (h - crop_h) // 2
+    left = (w - crop_w) // 2
+    img0_c = img0[top : top + crop_h, left : left + crop_w, :]
+    img1_c = img1[top : top + crop_h, left : left + crop_w, :]
+    flow_c = flow[top : top + crop_h, left : left + crop_w, :]
+    return img0_c, img1_c, flow_c
+
+
 class FC2BatchProvider:
     """Provide FC2 training/validation batches."""
 
-    def __init__(self, samples: List[str], crop_h: int, crop_w: int, seed: int = 42, source_dir: str = ""):
+    def __init__(
+        self,
+        samples: List[str],
+        crop_h: int,
+        crop_w: int,
+        seed: int = 42,
+        source_dir: str = "",
+        sampling_mode: str = "random",
+        crop_mode: str = "random",
+    ):
         self.samples = list(samples)
         self.crop_h = int(crop_h)
         self.crop_w = int(crop_w)
         self.source_dir = str(source_dir)
         self.rng = random.Random(int(seed))
+        self.sampling_mode = str(sampling_mode).strip().lower()
+        self.crop_mode = str(crop_mode).strip().lower()
+        if self.sampling_mode not in ("random", "sequential"):
+            raise ValueError(f"unsupported sampling_mode: {sampling_mode}")
+        if self.crop_mode not in ("random", "center"):
+            raise ValueError(f"unsupported crop_mode: {crop_mode}")
+        self._cursor = 0
 
     def __len__(self) -> int:
         return len(self.samples)
+
+    def reset_cursor(self, index: int = 0) -> None:
+        """Reset sequential cursor for deterministic eval batching."""
+        if not self.samples:
+            self._cursor = 0
+            return
+        self._cursor = int(index) % len(self.samples)
+
+    def _next_sample_path(self) -> str:
+        """Pick one sample path according to sampling mode."""
+        if self.sampling_mode == "random":
+            return self.samples[self.rng.randint(0, len(self.samples) - 1)]
+        sample_path = self.samples[self._cursor]
+        self._cursor = (self._cursor + 1) % len(self.samples)
+        return sample_path
 
     def _load_one(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Load one valid sample triplet and crop."""
@@ -104,8 +154,9 @@ class FC2BatchProvider:
         if cv2 is None:
             raise RuntimeError("OpenCV not available")
 
-        for _ in range(64):
-            img0_path = self.samples[self.rng.randint(0, len(self.samples) - 1)]
+        retry_limit = max(64, len(self.samples))
+        for _ in range(retry_limit):
+            img0_path = self._next_sample_path()
             img0_path, img1_path, flow_path = _build_fc2_triplet(img0_path=img0_path)
             if not os.path.exists(img0_path) or not os.path.exists(img1_path) or not os.path.exists(flow_path):
                 continue
@@ -125,13 +176,21 @@ class FC2BatchProvider:
             flow = np.clip(flow, a_min=-50.0, a_max=50.0).astype(np.float32)
 
             try:
-                return _random_crop_triplet(
+                if self.crop_mode == "random":
+                    return _random_crop_triplet(
+                        img0=img0,
+                        img1=img1,
+                        flow=flow,
+                        crop_h=self.crop_h,
+                        crop_w=self.crop_w,
+                        rng=self.rng,
+                    )
+                return _center_crop_triplet(
                     img0=img0,
                     img1=img1,
                     flow=flow,
                     crop_h=self.crop_h,
                     crop_w=self.crop_w,
-                    rng=self.rng,
                 )
             except Exception:
                 continue

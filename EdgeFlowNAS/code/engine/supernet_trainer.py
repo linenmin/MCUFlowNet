@@ -106,7 +106,34 @@ def _fairness_gap(counts: Dict[str, Dict[str, int]]) -> int:
     return int(gap)
 
 
-def _write_eval_history(csv_path: Path, rows: List[Dict[str, float]]) -> None:
+def _build_arch_ranking(eval_pool: List[List[int]], per_arch_epe: List[float]) -> List[Dict[str, Any]]:
+    """Build per-arch rank summary sorted by EPE ascending."""
+    indexed = []
+    for arch_idx, (arch_code, epe_val) in enumerate(zip(eval_pool, per_arch_epe)):
+        indexed.append((int(arch_idx), [int(v) for v in arch_code], float(epe_val)))
+    indexed.sort(key=lambda item: (item[2], item[0]))
+    ranking = []
+    for rank_idx, (arch_idx, arch_code, epe_val) in enumerate(indexed, start=1):
+        ranking.append(
+            {
+                "rank": int(rank_idx),
+                "arch_index": int(arch_idx),
+                "arch_code": arch_code,
+                "epe": float(epe_val),
+            }
+        )
+    return ranking
+
+
+def _format_arch_ranking(ranking: List[Dict[str, Any]]) -> str:
+    """Format rank list as one compact log field."""
+    chunks = []
+    for item in ranking:
+        chunks.append(f"{int(item['rank'])}:{int(item['arch_index'])}:{float(item['epe']):.4f}")
+    return "|".join(chunks)
+
+
+def _write_eval_history(csv_path: Path, rows: List[Dict[str, Any]]) -> None:
     """Write epoch-level eval history."""
     headers = [
         "epoch",
@@ -115,10 +142,15 @@ def _write_eval_history(csv_path: Path, rows: List[Dict[str, float]]) -> None:
         "fairness_gap",
         "lr",
         "bn_recal_batches",
+        "eval_batches_per_arch",
         "train_loss_epoch_avg",
         "train_grad_norm_epoch_avg",
+        "train_grad_norm_p50",
+        "train_grad_norm_p90",
+        "train_grad_norm_p99",
         "clip_trigger_count",
         "clip_trigger_rate",
+        "arch_rank_12",
     ]
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=headers)
@@ -223,10 +255,14 @@ def _run_eval_epoch(
     eval_pool: List[List[int]],
     bn_recal_batches: int,
     batch_size: int,
-) -> Dict[str, float]:
+    eval_batches_per_arch: int,
+) -> Dict[str, Any]:
     """Run one eval epoch on a fixed architecture pool."""
-    epe_values = []
+    per_arch_epe = []
+    eval_batches = max(1, int(eval_batches_per_arch))
     for arch_code in eval_pool:
+        if hasattr(train_provider, "reset_cursor"):
+            train_provider.reset_cursor(0)
         run_bn_recalibration_session(
             sess=sess,
             forward_fetch=graph_obj["preds"][-1],
@@ -239,21 +275,33 @@ def _run_eval_epoch(
             batch_size=batch_size,
             recal_batches=bn_recal_batches,
         )
-        input_batch, _, _, label_batch = val_provider.next_batch(batch_size=batch_size)
-        input_batch = standardize_image_tensor(input_batch)
-        epe_val = sess.run(
-            graph_obj["epe"],
-            feed_dict={
-                graph_obj["input_ph"]: input_batch,
-                graph_obj["label_ph"]: label_batch,
-                graph_obj["arch_code_ph"]: arch_code,
-                graph_obj["is_training_ph"]: False,
-            },
-        )
-        epe_values.append(float(epe_val))
-    mean_epe = float(np.mean(epe_values)) if epe_values else 0.0
-    std_epe = float(np.std(epe_values)) if epe_values else 0.0
-    return {"mean_epe_12": mean_epe, "std_epe_12": std_epe}
+        if hasattr(val_provider, "reset_cursor"):
+            val_provider.reset_cursor(0)
+        arch_batch_epes = []
+        for _ in range(eval_batches):
+            input_batch, _, _, label_batch = val_provider.next_batch(batch_size=batch_size)
+            input_batch = standardize_image_tensor(input_batch)
+            epe_val = sess.run(
+                graph_obj["epe"],
+                feed_dict={
+                    graph_obj["input_ph"]: input_batch,
+                    graph_obj["label_ph"]: label_batch,
+                    graph_obj["arch_code_ph"]: arch_code,
+                    graph_obj["is_training_ph"]: False,
+                },
+            )
+            arch_batch_epes.append(float(epe_val))
+        arch_epe_mean = float(np.mean(arch_batch_epes)) if arch_batch_epes else 0.0
+        per_arch_epe.append(arch_epe_mean)
+    mean_epe = float(np.mean(per_arch_epe)) if per_arch_epe else 0.0
+    std_epe = float(np.std(per_arch_epe)) if per_arch_epe else 0.0
+    arch_ranking = _build_arch_ranking(eval_pool=eval_pool, per_arch_epe=per_arch_epe)
+    return {
+        "mean_epe_12": mean_epe,
+        "std_epe_12": std_epe,
+        "per_arch_epe": per_arch_epe,
+        "arch_ranking": arch_ranking,
+    }
 
 
 def _default_restore_state() -> Dict[str, Any]:
@@ -342,20 +390,25 @@ def train_supernet(config: Dict[str, Any]) -> int:
     base_lr = float(train_cfg.get("lr", 1e-4))
     bn_recal_batches = int(eval_cfg.get("bn_recal_batches", 8))
     eval_pool_size = int(eval_cfg.get("eval_pool_size", 12))
+    eval_batches_per_arch = max(1, int(eval_cfg.get("eval_batches_per_arch", 4)))
     eval_every_epoch = max(1, int(eval_cfg.get("eval_every_epoch", 1)))
     patience = int(eval_cfg.get("early_stop_patience", 15))
     min_delta = float(eval_cfg.get("early_stop_min_delta", 0.002))
     logger.info("eval_every_epoch=%d", eval_every_epoch)
+    logger.info("eval_batches_per_arch=%d", eval_batches_per_arch)
     logger.info("grad_clip_global_norm=%.4f", float(train_cfg.get("grad_clip_global_norm", 5.0)))
 
-    train_provider = build_fc2_provider(config=config, split="train", seed_offset=0)
-    val_provider = build_fc2_provider(config=config, split="val", seed_offset=999)
+    train_provider = build_fc2_provider(config=config, split="train", seed_offset=0, provider_mode="train")
+    eval_train_provider = build_fc2_provider(config=config, split="train", seed_offset=1000, provider_mode="eval")
+    eval_val_provider = build_fc2_provider(config=config, split="val", seed_offset=999, provider_mode="eval")
     logger.info("train_source=%s train_samples=%d", train_provider.source_dir, len(train_provider))
-    logger.info("val_source=%s val_samples=%d", val_provider.source_dir, len(val_provider))
+    logger.info("val_source=%s val_samples=%d", eval_val_provider.source_dir, len(eval_val_provider))
 
     if len(train_provider) == 0:
         raise RuntimeError("train sample count is 0; aborting")
-    if len(val_provider) == 0:
+    if len(eval_train_provider) == 0:
+        raise RuntimeError("eval train sample count is 0; aborting")
+    if len(eval_val_provider) == 0:
         raise RuntimeError("val sample count is 0; aborting")
 
     eval_pool = build_eval_pool(seed=seed, size=eval_pool_size, num_blocks=9)
@@ -401,6 +454,7 @@ def train_supernet(config: Dict[str, Any]) -> int:
             epoch_step_count = 0
             epoch_clip_trigger_count = 0
             epoch_clip_check_count = 0
+            epoch_grad_norm_values: List[float] = []
             for _ in step_iterator:
                 cycle_codes = generate_fair_cycle(rng=sampler_rng, num_blocks=9)
                 _update_fairness_counts(counts=fairness_counts, cycle_codes=cycle_codes)
@@ -436,11 +490,14 @@ def train_supernet(config: Dict[str, Any]) -> int:
                                 [graph_obj["loss"], graph_obj["global_grad_norm"], graph_obj["clip_trigger"], graph_obj["accum_op"]],
                                 feed_dict=feed,
                             )
+                            grad_norm_micro = float(grad_norm_val)
                         else:
-                            clip_trigger_val, _ = sess.run(
-                                [graph_obj["clip_trigger"], graph_obj["accum_op"]],
+                            grad_norm_micro, clip_trigger_val, _ = sess.run(
+                                [graph_obj["global_grad_norm"], graph_obj["clip_trigger"], graph_obj["accum_op"]],
                                 feed_dict=feed,
                             )
+                            grad_norm_micro = float(grad_norm_micro)
+                        epoch_grad_norm_values.append(float(grad_norm_micro))
                         epoch_clip_trigger_count += int(clip_trigger_val)
                         epoch_clip_check_count += 1
 
@@ -460,18 +517,28 @@ def train_supernet(config: Dict[str, Any]) -> int:
             step_iterator.close()
             train_loss_epoch_avg = epoch_loss_sum / max(1, epoch_step_count)
             train_grad_norm_epoch_avg = epoch_grad_norm_sum / max(1, epoch_step_count)
+            if epoch_grad_norm_values:
+                train_grad_norm_p50 = float(np.percentile(epoch_grad_norm_values, 50))
+                train_grad_norm_p90 = float(np.percentile(epoch_grad_norm_values, 90))
+                train_grad_norm_p99 = float(np.percentile(epoch_grad_norm_values, 99))
+            else:
+                train_grad_norm_p50 = 0.0
+                train_grad_norm_p90 = 0.0
+                train_grad_norm_p99 = 0.0
             clip_trigger_rate = float(epoch_clip_trigger_count) / max(1, epoch_clip_check_count)
             should_eval = bool(epoch_idx % eval_every_epoch == 0)
             if should_eval:
                 eval_info = _run_eval_epoch(
                     sess=sess,
                     graph_obj=graph_obj,
-                    train_provider=train_provider,
-                    val_provider=val_provider,
+                    train_provider=eval_train_provider,
+                    val_provider=eval_val_provider,
                     eval_pool=eval_pool,
                     bn_recal_batches=bn_recal_batches,
                     batch_size=batch_size,
+                    eval_batches_per_arch=eval_batches_per_arch,
                 )
+                arch_rank_12 = _format_arch_ranking(eval_info.get("arch_ranking", []))
                 row = {
                     "epoch": int(epoch_idx),
                     "mean_epe_12": float(eval_info["mean_epe_12"]),
@@ -479,10 +546,15 @@ def train_supernet(config: Dict[str, Any]) -> int:
                     "fairness_gap": float(_fairness_gap(fairness_counts)),
                     "lr": float(cosine_lr(base_lr=base_lr, step_idx=global_step, total_steps=total_steps)),
                     "bn_recal_batches": float(bn_recal_batches),
+                    "eval_batches_per_arch": float(eval_batches_per_arch),
                     "train_loss_epoch_avg": float(train_loss_epoch_avg),
                     "train_grad_norm_epoch_avg": float(train_grad_norm_epoch_avg),
+                    "train_grad_norm_p50": float(train_grad_norm_p50),
+                    "train_grad_norm_p90": float(train_grad_norm_p90),
+                    "train_grad_norm_p99": float(train_grad_norm_p99),
                     "clip_trigger_count": float(epoch_clip_trigger_count),
                     "clip_trigger_rate": float(clip_trigger_rate),
+                    "arch_rank_12": arch_rank_12,
                 }
                 eval_rows.append(row)
                 improved = update_early_stop(state=early_stop, metric=row["mean_epe_12"], min_delta=min_delta)
@@ -513,15 +585,17 @@ def train_supernet(config: Dict[str, Any]) -> int:
                         extra_payload={"row": row},
                     )
                 logger.info(
-                    "epoch=%d loss=%.6f mean_epe_12=%.6f std_epe_12=%.6f fairness_gap=%.2f grad_norm=%.4f clip_count=%d clip_rate=%.4f",
+                    "epoch=%d loss=%.6f mean_epe_12=%.6f std_epe_12=%.6f fairness_gap=%.2f grad_norm=%.4f grad_p90=%.4f clip_count=%d clip_rate=%.4f arch_rank_12=%s",
                     epoch_idx,
                     float(train_loss_epoch_avg),
                     row["mean_epe_12"],
                     row["std_epe_12"],
                     row["fairness_gap"],
                     float(train_grad_norm_epoch_avg),
+                    float(train_grad_norm_p90),
                     int(epoch_clip_trigger_count),
                     float(clip_trigger_rate),
+                    arch_rank_12,
                 )
                 if early_stop.bad_epochs >= patience:
                     logger.info("early stop triggered at epoch=%d", epoch_idx)
@@ -542,16 +616,20 @@ def train_supernet(config: Dict[str, Any]) -> int:
                         "eval_every_epoch": int(eval_every_epoch),
                         "train_loss_epoch_avg": float(train_loss_epoch_avg),
                         "train_grad_norm_epoch_avg": float(train_grad_norm_epoch_avg),
+                        "train_grad_norm_p50": float(train_grad_norm_p50),
+                        "train_grad_norm_p90": float(train_grad_norm_p90),
+                        "train_grad_norm_p99": float(train_grad_norm_p99),
                         "clip_trigger_count": int(epoch_clip_trigger_count),
                         "clip_trigger_rate": float(clip_trigger_rate),
                     },
                 )
                 logger.info(
-                    "epoch=%d loss=%.6f eval=skipped fairness_gap=%.2f grad_norm=%.4f clip_count=%d clip_rate=%.4f",
+                    "epoch=%d loss=%.6f eval=skipped fairness_gap=%.2f grad_norm=%.4f grad_p90=%.4f clip_count=%d clip_rate=%.4f",
                     epoch_idx,
                     float(train_loss_epoch_avg),
                     float(_fairness_gap(fairness_counts)),
                     float(train_grad_norm_epoch_avg),
+                    float(train_grad_norm_p90),
                     int(epoch_clip_trigger_count),
                     float(clip_trigger_rate),
                 )

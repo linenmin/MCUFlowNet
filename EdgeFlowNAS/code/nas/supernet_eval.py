@@ -199,6 +199,25 @@ def _build_eval_graph(config: Dict[str, Any], batch_size: int) -> Dict[str, Any]
     }
 
 
+def _build_arch_ranking(eval_pool: List[List[int]], per_arch_epe: List[float]) -> List[Dict[str, Any]]:
+    """Build per-arch rank summary sorted by EPE ascending."""
+    indexed = []
+    for arch_idx, (arch_code, epe_val) in enumerate(zip(eval_pool, per_arch_epe)):
+        indexed.append((int(arch_idx), [int(v) for v in arch_code], float(epe_val)))
+    indexed.sort(key=lambda item: (item[2], item[0]))
+    ranking = []
+    for rank_idx, (arch_idx, arch_code, epe_val) in enumerate(indexed, start=1):
+        ranking.append(
+            {
+                "rank": int(rank_idx),
+                "arch_index": int(arch_idx),
+                "arch_code": arch_code,
+                "epe": float(epe_val),
+            }
+        )
+    return ranking
+
+
 def _run_eval_pool(
     sess,
     graph_obj: Dict[str, Any],
@@ -207,13 +226,17 @@ def _run_eval_pool(
     eval_pool: List[List[int]],
     bn_recal_batches: int,
     batch_size: int,
+    eval_batches_per_arch: int,
 ) -> Dict[str, Any]:
     """Run BN recalibration and EPE on fixed eval pool."""
-    epe_values = []
+    per_arch_epe = []
     bn_batches = int(bn_recal_batches)
-    total_steps = max(1, len(eval_pool) * (bn_batches + 1))
+    eval_batches = max(1, int(eval_batches_per_arch))
+    total_steps = max(1, len(eval_pool) * (bn_batches + eval_batches))
     with tqdm(total=total_steps, desc="supernet eval", unit="step") as progress:
         for arch_idx, arch_code in enumerate(eval_pool, start=1):
+            if hasattr(train_provider, "reset_cursor"):
+                train_provider.reset_cursor(0)
             for _ in range(bn_batches):
                 train_input, _, _, train_label = train_provider.next_batch(batch_size=batch_size)
                 train_input = standardize_image_tensor(train_input)
@@ -228,25 +251,31 @@ def _run_eval_pool(
                 )
                 progress.update(1)
 
-            val_input, _, _, val_label = val_provider.next_batch(batch_size=batch_size)
-            val_input = standardize_image_tensor(val_input)
-            epe_val = sess.run(
-                graph_obj["epe"],
-                feed_dict={
-                    graph_obj["input_ph"]: val_input,
-                    graph_obj["label_ph"]: val_label,
-                    graph_obj["arch_code_ph"]: arch_code,
-                    graph_obj["is_training_ph"]: False,
-                },
-            )
-            epe_float = float(epe_val)
-            epe_values.append(epe_float)
-            progress.update(1)
-            progress.set_postfix(arch=f"{arch_idx}/{len(eval_pool)}", epe=f"{epe_float:.4f}")
+            if hasattr(val_provider, "reset_cursor"):
+                val_provider.reset_cursor(0)
+            arch_batch_epes = []
+            for _ in range(eval_batches):
+                val_input, _, _, val_label = val_provider.next_batch(batch_size=batch_size)
+                val_input = standardize_image_tensor(val_input)
+                epe_val = sess.run(
+                    graph_obj["epe"],
+                    feed_dict={
+                        graph_obj["input_ph"]: val_input,
+                        graph_obj["label_ph"]: val_label,
+                        graph_obj["arch_code_ph"]: arch_code,
+                        graph_obj["is_training_ph"]: False,
+                    },
+                )
+                arch_batch_epes.append(float(epe_val))
+                progress.update(1)
+            arch_epe_mean = float(np.mean(arch_batch_epes)) if arch_batch_epes else 0.0
+            per_arch_epe.append(arch_epe_mean)
+            progress.set_postfix(arch=f"{arch_idx}/{len(eval_pool)}", epe=f"{arch_epe_mean:.4f}")
 
-    mean_epe = float(np.mean(epe_values)) if epe_values else 0.0
-    std_epe = float(np.std(epe_values)) if epe_values else 0.0
-    return {"mean_epe_12": mean_epe, "std_epe_12": std_epe, "per_arch_epe": epe_values}
+    mean_epe = float(np.mean(per_arch_epe)) if per_arch_epe else 0.0
+    std_epe = float(np.std(per_arch_epe)) if per_arch_epe else 0.0
+    arch_ranking = _build_arch_ranking(eval_pool=eval_pool, per_arch_epe=per_arch_epe)
+    return {"mean_epe_12": mean_epe, "std_epe_12": std_epe, "per_arch_epe": per_arch_epe, "arch_ranking": arch_ranking}
 
 
 def _run_one_arch_eval(
@@ -257,8 +286,11 @@ def _run_one_arch_eval(
     arch_code: List[int],
     bn_recal_batches: int,
     batch_size: int,
+    eval_batches_per_arch: int,
 ) -> float:
     """Run BN recalibration + val EPE for one arch."""
+    if hasattr(train_provider, "reset_cursor"):
+        train_provider.reset_cursor(0)
     for _ in range(int(bn_recal_batches)):
         train_input, _, _, train_label = train_provider.next_batch(batch_size=batch_size)
         train_input = standardize_image_tensor(train_input)
@@ -271,18 +303,24 @@ def _run_one_arch_eval(
                 graph_obj["is_training_ph"]: True,
             },
         )
-    val_input, _, _, val_label = val_provider.next_batch(batch_size=batch_size)
-    val_input = standardize_image_tensor(val_input)
-    epe_val = sess.run(
-        graph_obj["epe"],
-        feed_dict={
-            graph_obj["input_ph"]: val_input,
-            graph_obj["label_ph"]: val_label,
-            graph_obj["arch_code_ph"]: arch_code,
-            graph_obj["is_training_ph"]: False,
-        },
-    )
-    return float(epe_val)
+    if hasattr(val_provider, "reset_cursor"):
+        val_provider.reset_cursor(0)
+    eval_batches = max(1, int(eval_batches_per_arch))
+    arch_batch_epes = []
+    for _ in range(eval_batches):
+        val_input, _, _, val_label = val_provider.next_batch(batch_size=batch_size)
+        val_input = standardize_image_tensor(val_input)
+        epe_val = sess.run(
+            graph_obj["epe"],
+            feed_dict={
+                graph_obj["input_ph"]: val_input,
+                graph_obj["label_ph"]: val_label,
+                graph_obj["arch_code_ph"]: arch_code,
+                graph_obj["is_training_ph"]: False,
+            },
+        )
+        arch_batch_epes.append(float(epe_val))
+    return float(np.mean(arch_batch_epes)) if arch_batch_epes else 0.0
 
 
 def _split_arch_chunks(eval_pool: List[List[int]], num_chunks: int) -> List[List[List[int]]]:
@@ -299,6 +337,7 @@ def _eval_arch_chunk_worker(
     arch_chunk: List[List[int]],
     bn_recal_batches: int,
     batch_size: int,
+    eval_batches_per_arch: int,
     worker_id: int,
     cpu_only: bool,
 ) -> List[Dict[str, Any]]:
@@ -312,8 +351,8 @@ def _eval_arch_chunk_worker(
     tf.compat.v1.disable_eager_execution()
     tf.compat.v1.reset_default_graph()
     graph_obj = _build_eval_graph(config=config, batch_size=batch_size)
-    train_provider = build_fc2_provider(config=config, split="train", seed_offset=1000 + int(worker_id))
-    val_provider = build_fc2_provider(config=config, split="val", seed_offset=2000 + int(worker_id))
+    train_provider = build_fc2_provider(config=config, split="train", seed_offset=1000 + int(worker_id), provider_mode="eval")
+    val_provider = build_fc2_provider(config=config, split="val", seed_offset=2000 + int(worker_id), provider_mode="eval")
 
     if len(train_provider) == 0:
         raise RuntimeError(f"worker={worker_id} train sample count is 0; source={train_provider.source_dir}")
@@ -333,6 +372,7 @@ def _eval_arch_chunk_worker(
                 arch_code=arch_code,
                 bn_recal_batches=bn_recal_batches,
                 batch_size=batch_size,
+                eval_batches_per_arch=eval_batches_per_arch,
             )
             outputs.append({"arch_code": [int(item) for item in arch_code], "epe": float(epe_val)})
     return outputs
@@ -344,6 +384,7 @@ def _run_eval_pool_parallel(
     eval_pool: List[List[int]],
     bn_recal_batches: int,
     batch_size: int,
+    eval_batches_per_arch: int,
     num_workers: int,
     cpu_only: bool,
 ) -> Dict[str, Any]:
@@ -360,6 +401,7 @@ def _run_eval_pool_parallel(
                 chunk,
                 int(bn_recal_batches),
                 int(batch_size),
+                int(eval_batches_per_arch),
                 worker_id,
                 bool(cpu_only),
             ): worker_id
@@ -377,7 +419,8 @@ def _run_eval_pool_parallel(
     epe_values = [float(arch_to_epe[tuple(int(x) for x in arch_code)]) for arch_code in eval_pool]
     mean_epe = float(np.mean(epe_values)) if epe_values else 0.0
     std_epe = float(np.std(epe_values)) if epe_values else 0.0
-    return {"mean_epe_12": mean_epe, "std_epe_12": std_epe, "per_arch_epe": epe_values}
+    arch_ranking = _build_arch_ranking(eval_pool=eval_pool, per_arch_epe=epe_values)
+    return {"mean_epe_12": mean_epe, "std_epe_12": std_epe, "per_arch_epe": epe_values, "arch_ranking": arch_ranking}
 
 
 def _load_or_build_eval_pool(output_dir: Path, seed: int, pool_size: int) -> Dict[str, Any]:
@@ -402,6 +445,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", required=True, help="path to supernet config yaml")
     parser.add_argument("--eval_only", action="store_true", help="run eval only flow")
     parser.add_argument("--bn_recal_batches", type=int, default=None, help="override bn recalibration batches")
+    parser.add_argument("--eval_batches_per_arch", type=int, default=None, help="override eval batches per arch")
     parser.add_argument("--checkpoint_type", choices=["best", "last"], default="best", help="checkpoint type to evaluate")
     parser.add_argument("--batch_size", type=int, default=None, help="override eval batch size")
     parser.add_argument("--experiment_name", default=None, help="override runtime.experiment_name")
@@ -432,6 +476,9 @@ def main() -> int:
     seed = int(runtime_cfg.get("seed", 42))
     pool_size = int(eval_cfg.get("eval_pool_size", 12))
     bn_recal_batches = int(args.bn_recal_batches) if args.bn_recal_batches is not None else int(eval_cfg.get("bn_recal_batches", 8))
+    eval_batches_per_arch = (
+        int(args.eval_batches_per_arch) if args.eval_batches_per_arch is not None else int(eval_cfg.get("eval_batches_per_arch", 4))
+    )
     batch_size = int(args.batch_size) if args.batch_size is not None else int(train_cfg.get("batch_size", 32))
     num_workers = max(1, int(args.num_workers))
 
@@ -440,8 +487,8 @@ def main() -> int:
     eval_pool = pool_info["pool"]
     coverage = pool_info["coverage"]
 
-    train_provider = build_fc2_provider(config=config, split="train", seed_offset=0)
-    val_provider = build_fc2_provider(config=config, split="val", seed_offset=999)
+    train_provider = build_fc2_provider(config=config, split="train", seed_offset=0, provider_mode="eval")
+    val_provider = build_fc2_provider(config=config, split="val", seed_offset=999, provider_mode="eval")
     if len(train_provider) == 0:
         raise RuntimeError(f"train sample count is 0; source={train_provider.source_dir}")
     if len(val_provider) == 0:
@@ -475,6 +522,7 @@ def main() -> int:
                 eval_pool=eval_pool,
                 bn_recal_batches=bn_recal_batches,
                 batch_size=batch_size,
+                eval_batches_per_arch=eval_batches_per_arch,
             )
     else:
         metrics = _run_eval_pool_parallel(
@@ -483,6 +531,7 @@ def main() -> int:
             eval_pool=eval_pool,
             bn_recal_batches=bn_recal_batches,
             batch_size=batch_size,
+            eval_batches_per_arch=eval_batches_per_arch,
             num_workers=workers_used,
             cpu_only=bool(args.cpu_only),
         )
@@ -501,6 +550,7 @@ def main() -> int:
         "mean_epe_12": float(metrics["mean_epe_12"]),
         "std_epe_12": float(metrics["std_epe_12"]),
         "bn_recal_batches": int(bn_recal_batches),
+        "eval_batches_per_arch": int(eval_batches_per_arch),
         "batch_size": int(batch_size),
         "num_workers_requested": int(num_workers),
         "num_workers_used": int(workers_used),
@@ -513,7 +563,15 @@ def main() -> int:
     }
 
     result_path = output_dir / f"supernet_eval_result_{args.checkpoint_type}.json"
-    write_json(str(result_path), {"summary": result, "per_arch_epe": metrics.get("per_arch_epe", []), "coverage": coverage})
+    write_json(
+        str(result_path),
+        {
+            "summary": result,
+            "per_arch_epe": metrics.get("per_arch_epe", []),
+            "arch_ranking": metrics.get("arch_ranking", []),
+            "coverage": coverage,
+        },
+    )
 
     print(
         json.dumps(
@@ -524,6 +582,7 @@ def main() -> int:
                 "std_epe_12": result["std_epe_12"],
                 "coverage_ok": result["eval_pool_coverage_ok"],
                 "num_workers_used": result["num_workers_used"],
+                "eval_batches_per_arch": result["eval_batches_per_arch"],
                 "elapsed_seconds": result["elapsed_seconds"],
                 "elapsed_hms": result["elapsed_hms"],
             },

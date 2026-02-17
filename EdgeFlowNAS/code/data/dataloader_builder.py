@@ -16,10 +16,13 @@ def _resolve_source_dir(base_path: str, split_dir: str) -> str:
     return str(split.resolve())
 
 
-def build_fc2_provider(config: Dict, split: str, seed_offset: int = 0) -> FC2BatchProvider:
+def build_fc2_provider(config: Dict, split: str, seed_offset: int = 0, provider_mode: str = "train") -> FC2BatchProvider:
     """Build FC2 batch provider from folder split."""
     if split not in ("train", "val"):
         raise ValueError(f"split must be train or val, got: {split}")
+    mode = str(provider_mode).strip().lower()
+    if mode not in ("train", "eval"):
+        raise ValueError(f"provider_mode must be train or eval, got: {provider_mode}")
 
     data_cfg = config.get("data", {})
     runtime_cfg = config.get("runtime", {})
@@ -36,5 +39,7 @@ def build_fc2_provider(config: Dict, split: str, seed_offset: int = 0) -> FC2Bat
         crop_w=int(data_cfg.get("input_width", 240)),
         seed=int(runtime_cfg.get("seed", 42)) + int(seed_offset),
         source_dir=source_dir,
+        sampling_mode="random" if mode == "train" else "sequential",
+        crop_mode="random" if mode == "train" else "center",
     )
     return provider
