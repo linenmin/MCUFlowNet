@@ -108,7 +108,16 @@ def _fairness_gap(counts: Dict[str, Dict[str, int]]) -> int:
 
 def _write_eval_history(csv_path: Path, rows: List[Dict[str, float]]) -> None:
     """Write epoch-level eval history."""
-    headers = ["epoch", "mean_epe_12", "std_epe_12", "fairness_gap", "lr", "bn_recal_batches"]
+    headers = [
+        "epoch",
+        "mean_epe_12",
+        "std_epe_12",
+        "fairness_gap",
+        "lr",
+        "bn_recal_batches",
+        "train_loss_epoch_avg",
+        "train_grad_norm_epoch_avg",
+    ]
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=headers)
         writer.writeheader()
@@ -249,6 +258,7 @@ def _default_restore_state() -> Dict[str, Any]:
         "fairness_counts": _init_fairness_counts(num_blocks=9),
         "best_metric": float("inf"),
         "bad_epochs": 0,
+        "last_metric": float("inf"),
     }
 
 
@@ -279,10 +289,12 @@ def _try_restore_training_state(
     fairness_counts = _sanitize_fairness_counts(raw_counts=meta.get("fairness_counts", {}), num_blocks=9)
     best_metric = float(meta.get("best_metric", float("inf")))
     bad_epochs = int(meta.get("bad_epochs", 0))
+    last_metric = float(meta.get("metric", best_metric))
 
     if bool(checkpoint_cfg.get("reset_early_stop_on_resume", False)):
         best_metric = float("inf")
         bad_epochs = 0
+        last_metric = float("inf")
         logger.info("reset early-stop state on resume")
 
     logger.info("resume checkpoint=%s start_epoch=%d global_step=%d", str(resume_prefix), start_epoch, global_step)
@@ -292,6 +304,7 @@ def _try_restore_training_state(
         "fairness_counts": fairness_counts,
         "best_metric": best_metric,
         "bad_epochs": bad_epochs,
+        "last_metric": last_metric,
     }
 
 
@@ -323,8 +336,10 @@ def train_supernet(config: Dict[str, Any]) -> int:
     base_lr = float(train_cfg.get("lr", 1e-4))
     bn_recal_batches = int(eval_cfg.get("bn_recal_batches", 8))
     eval_pool_size = int(eval_cfg.get("eval_pool_size", 12))
+    eval_every_epoch = max(1, int(eval_cfg.get("eval_every_epoch", 1)))
     patience = int(eval_cfg.get("early_stop_patience", 15))
     min_delta = float(eval_cfg.get("early_stop_min_delta", 0.002))
+    logger.info("eval_every_epoch=%d", eval_every_epoch)
 
     train_provider = build_fc2_provider(config=config, split="train", seed_offset=0)
     val_provider = build_fc2_provider(config=config, split="val", seed_offset=999)
@@ -361,14 +376,22 @@ def train_supernet(config: Dict[str, Any]) -> int:
         fairness_counts = _sanitize_fairness_counts(raw_counts=restore_state["fairness_counts"], num_blocks=9)
         early_stop.best_metric = float(restore_state["best_metric"])
         early_stop.bad_epochs = int(restore_state["bad_epochs"])
+        last_eval_metric = float(restore_state.get("last_metric", early_stop.best_metric))
+        if not np.isfinite(last_eval_metric):
+            last_eval_metric = float(early_stop.best_metric) if np.isfinite(early_stop.best_metric) else float("inf")
+        epochs_ran = 0
 
         for epoch_idx in range(start_epoch, num_epochs + 1):
+            epochs_ran += 1
             step_iterator = tqdm(
                 range(steps_per_epoch),
                 total=steps_per_epoch,
                 desc=f"train epoch {epoch_idx}/{num_epochs}",
                 leave=False,
             )
+            epoch_loss_sum = 0.0
+            epoch_grad_norm_sum = 0.0
+            epoch_step_count = 0
             for _ in step_iterator:
                 cycle_codes = generate_fair_cycle(rng=sampler_rng, num_blocks=9)
                 _update_fairness_counts(counts=fairness_counts, cycle_codes=cycle_codes)
@@ -415,68 +438,100 @@ def train_supernet(config: Dict[str, Any]) -> int:
                     },
                 )
                 global_step += 1
+                epoch_loss_sum += float(loss_val)
+                epoch_grad_norm_sum += float(grad_norm_val)
+                epoch_step_count += 1
                 step_iterator.set_postfix(loss=f"{float(loss_val):.4f}", lr=f"{float(current_lr):.2e}")
 
             step_iterator.close()
-
-            eval_info = _run_eval_epoch(
-                sess=sess,
-                graph_obj=graph_obj,
-                train_provider=train_provider,
-                val_provider=val_provider,
-                eval_pool=eval_pool,
-                bn_recal_batches=bn_recal_batches,
-                batch_size=batch_size,
-            )
-            row = {
-                "epoch": int(epoch_idx),
-                "mean_epe_12": float(eval_info["mean_epe_12"]),
-                "std_epe_12": float(eval_info["std_epe_12"]),
-                "fairness_gap": float(_fairness_gap(fairness_counts)),
-                "lr": float(cosine_lr(base_lr=base_lr, step_idx=global_step, total_steps=total_steps)),
-                "bn_recal_batches": float(bn_recal_batches),
-            }
-            eval_rows.append(row)
-
-            improved = update_early_stop(state=early_stop, metric=row["mean_epe_12"], min_delta=min_delta)
-            save_checkpoint(
-                sess=sess,
-                saver=graph_obj["saver"],
-                path_prefix=checkpoint_paths["last"],
-                epoch=epoch_idx,
-                metric=row["mean_epe_12"],
-                global_step=global_step,
-                best_metric=early_stop.best_metric,
-                bad_epochs=early_stop.bad_epochs,
-                fairness_counts=fairness_counts,
-                extra_payload={"row": row},
-            )
-            if improved:
+            train_loss_epoch_avg = epoch_loss_sum / max(1, epoch_step_count)
+            train_grad_norm_epoch_avg = epoch_grad_norm_sum / max(1, epoch_step_count)
+            should_eval = bool(epoch_idx % eval_every_epoch == 0)
+            if should_eval:
+                eval_info = _run_eval_epoch(
+                    sess=sess,
+                    graph_obj=graph_obj,
+                    train_provider=train_provider,
+                    val_provider=val_provider,
+                    eval_pool=eval_pool,
+                    bn_recal_batches=bn_recal_batches,
+                    batch_size=batch_size,
+                )
+                row = {
+                    "epoch": int(epoch_idx),
+                    "mean_epe_12": float(eval_info["mean_epe_12"]),
+                    "std_epe_12": float(eval_info["std_epe_12"]),
+                    "fairness_gap": float(_fairness_gap(fairness_counts)),
+                    "lr": float(cosine_lr(base_lr=base_lr, step_idx=global_step, total_steps=total_steps)),
+                    "bn_recal_batches": float(bn_recal_batches),
+                    "train_loss_epoch_avg": float(train_loss_epoch_avg),
+                    "train_grad_norm_epoch_avg": float(train_grad_norm_epoch_avg),
+                }
+                eval_rows.append(row)
+                improved = update_early_stop(state=early_stop, metric=row["mean_epe_12"], min_delta=min_delta)
+                last_eval_metric = float(row["mean_epe_12"])
                 save_checkpoint(
                     sess=sess,
                     saver=graph_obj["saver"],
-                    path_prefix=checkpoint_paths["best"],
+                    path_prefix=checkpoint_paths["last"],
                     epoch=epoch_idx,
-                    metric=row["mean_epe_12"],
+                    metric=last_eval_metric,
                     global_step=global_step,
                     best_metric=early_stop.best_metric,
                     bad_epochs=early_stop.bad_epochs,
                     fairness_counts=fairness_counts,
                     extra_payload={"row": row},
                 )
-
-            logger.info(
-                "epoch=%d loss=%.6f mean_epe_12=%.6f std_epe_12=%.6f fairness_gap=%.2f grad_norm=%.4f",
-                epoch_idx,
-                float(loss_val),
-                row["mean_epe_12"],
-                row["std_epe_12"],
-                row["fairness_gap"],
-                float(grad_norm_val),
-            )
-            if early_stop.bad_epochs >= patience:
-                logger.info("early stop triggered at epoch=%d", epoch_idx)
-                break
+                if improved:
+                    save_checkpoint(
+                        sess=sess,
+                        saver=graph_obj["saver"],
+                        path_prefix=checkpoint_paths["best"],
+                        epoch=epoch_idx,
+                        metric=last_eval_metric,
+                        global_step=global_step,
+                        best_metric=early_stop.best_metric,
+                        bad_epochs=early_stop.bad_epochs,
+                        fairness_counts=fairness_counts,
+                        extra_payload={"row": row},
+                    )
+                logger.info(
+                    "epoch=%d loss=%.6f mean_epe_12=%.6f std_epe_12=%.6f fairness_gap=%.2f grad_norm=%.4f",
+                    epoch_idx,
+                    float(train_loss_epoch_avg),
+                    row["mean_epe_12"],
+                    row["std_epe_12"],
+                    row["fairness_gap"],
+                    float(train_grad_norm_epoch_avg),
+                )
+                if early_stop.bad_epochs >= patience:
+                    logger.info("early stop triggered at epoch=%d", epoch_idx)
+                    break
+            else:
+                save_checkpoint(
+                    sess=sess,
+                    saver=graph_obj["saver"],
+                    path_prefix=checkpoint_paths["last"],
+                    epoch=epoch_idx,
+                    metric=float(last_eval_metric),
+                    global_step=global_step,
+                    best_metric=early_stop.best_metric,
+                    bad_epochs=early_stop.bad_epochs,
+                    fairness_counts=fairness_counts,
+                    extra_payload={
+                        "eval_skipped": True,
+                        "eval_every_epoch": int(eval_every_epoch),
+                        "train_loss_epoch_avg": float(train_loss_epoch_avg),
+                        "train_grad_norm_epoch_avg": float(train_grad_norm_epoch_avg),
+                    },
+                )
+                logger.info(
+                    "epoch=%d loss=%.6f eval=skipped fairness_gap=%.2f grad_norm=%.4f",
+                    epoch_idx,
+                    float(train_loss_epoch_avg),
+                    float(_fairness_gap(fairness_counts)),
+                    float(train_grad_norm_epoch_avg),
+                )
 
     _write_eval_history(csv_path=experiment_dir / "eval_epe_history.csv", rows=eval_rows)
     write_json(str(experiment_dir / "fairness_counts.json"), fairness_counts)
@@ -487,7 +542,9 @@ def train_supernet(config: Dict[str, Any]) -> int:
     report_path = experiment_dir / "supernet_training_report.md"
     report_path.write_text(
         "# Supernet Training Report\n\n"
-        f"- epochs_finished: {len(eval_rows)}\n"
+        f"- epochs_finished: {epochs_ran}\n"
+        f"- eval_epochs: {len(eval_rows)}\n"
+        f"- eval_every_epoch: {eval_every_epoch}\n"
         f"- best_metric: {early_stop.best_metric}\n"
         f"- final_fairness_gap: {_fairness_gap(fairness_counts)}\n"
         f"- eval_pool_coverage_ok: {bool(eval_pool_cov['ok'])}\n"
