@@ -2,7 +2,9 @@
 
 import argparse
 import json
+import time
 from copy import deepcopy
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -285,6 +287,8 @@ def main() -> int:
     args = parser.parse_args()
     if not args.eval_only:
         parser.error("supernet_eval requires --eval_only")
+    started_at = datetime.now(timezone.utc)
+    start_perf = time.perf_counter()
 
     config = _apply_cli_overrides(config=_load_config(args.config), args=args)
     runtime_cfg = config.get("runtime", {})
@@ -337,6 +341,9 @@ def main() -> int:
             batch_size=batch_size,
         )
 
+    elapsed_seconds = float(time.perf_counter() - start_perf)
+    elapsed_hms = time.strftime("%H:%M:%S", time.gmtime(int(round(elapsed_seconds))))
+    finished_at = datetime.now(timezone.utc)
     checkpoint_meta = _load_checkpoint_meta(path_prefix=checkpoint_prefix)
     result = {
         "status": "ok",
@@ -351,6 +358,10 @@ def main() -> int:
         "batch_size": int(batch_size),
         "train_samples": len(train_provider),
         "val_samples": len(val_provider),
+        "started_at_utc": started_at.isoformat(),
+        "finished_at_utc": finished_at.isoformat(),
+        "elapsed_seconds": elapsed_seconds,
+        "elapsed_hms": elapsed_hms,
     }
 
     result_path = output_dir / f"supernet_eval_result_{args.checkpoint_type}.json"
@@ -364,6 +375,8 @@ def main() -> int:
                 "mean_epe_12": result["mean_epe_12"],
                 "std_epe_12": result["std_epe_12"],
                 "coverage_ok": result["eval_pool_coverage_ok"],
+                "elapsed_seconds": result["elapsed_seconds"],
+                "elapsed_hms": result["elapsed_hms"],
             },
             ensure_ascii=False,
             indent=2,
