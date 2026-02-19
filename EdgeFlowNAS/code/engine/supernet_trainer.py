@@ -1,6 +1,7 @@
 """Supernet training engine."""
 
 import csv
+import math
 import random
 import subprocess
 from pathlib import Path
@@ -26,9 +27,9 @@ from code.nas.eval_pool_builder import build_eval_pool, check_eval_pool_coverage
 from code.nas.fair_sampler import generate_fair_cycle
 from code.network.MultiScaleResNet_supernet import MultiScaleResNetSupernet
 from code.optim.lr_scheduler import cosine_lr
-from code.utils.json_io import write_json
+from code.utils.json_io import read_json, write_json
 from code.utils.logger import build_logger
-from code.utils.manifest import build_manifest
+from code.utils.manifest import build_manifest, build_run_manifest, compare_run_manifest
 from code.utils.path_utils import ensure_directory, project_root
 from code.utils.seed import set_global_seed
 
@@ -51,6 +52,41 @@ def _resolve_resume_dir(config: Dict[str, Any], experiment_dir: Path) -> Path:
         return experiment_dir
     output_root = runtime_cfg.get("output_root", "outputs/supernet")
     return project_root() / output_root / resume_name
+
+
+def _apply_gpu_device_setting(train_cfg: Dict[str, Any], logger) -> None:
+    """Apply gpu_device config before creating TF session."""
+    raw_value = train_cfg.get("gpu_device", None)
+    if raw_value is None:
+        logger.info("gpu_device=auto (use TensorFlow default device visibility)")
+        return
+    gpu_device = int(raw_value)
+    if gpu_device < 0:
+        try:
+            tf.config.set_visible_devices([], "GPU")
+            logger.info("gpu_device=%d -> force CPU mode", gpu_device)
+            return
+        except Exception as exc:
+            raise RuntimeError(f"failed to force CPU mode for gpu_device={gpu_device}: {exc}") from exc
+
+    all_gpus = tf.config.list_physical_devices("GPU")
+    if not all_gpus:
+        logger.warning("gpu_device=%d requested but no visible GPU found; fallback to CPU/TF default", gpu_device)
+        return
+    if gpu_device >= len(all_gpus):
+        raise RuntimeError(
+            f"gpu_device={gpu_device} out of range; visible GPU count={len(all_gpus)}"
+        )
+
+    try:
+        tf.config.set_visible_devices(all_gpus[gpu_device], "GPU")
+        try:
+            tf.config.experimental.set_memory_growth(all_gpus[gpu_device], True)
+        except Exception:
+            logger.warning("set_memory_growth failed for gpu_device=%d; continue without memory growth", gpu_device)
+        logger.info("gpu_device=%d applied (visible GPUs=%d)", gpu_device, len(all_gpus))
+    except Exception as exc:
+        raise RuntimeError(f"failed to apply gpu_device={gpu_device}: {exc}") from exc
 
 
 def _git_commit_hash() -> str:
@@ -316,6 +352,26 @@ def _default_restore_state() -> Dict[str, Any]:
     }
 
 
+def _validate_resume_run_manifest(config: Dict[str, Any], resume_dir: Path, logger) -> None:
+    """Validate resume checkpoint compatibility with run manifest."""
+    resume_manifest_path = resume_dir / "run_manifest.json"
+    if not resume_manifest_path.exists():
+        logger.warning("resume manifest not found: %s (skip compatibility check)", str(resume_manifest_path))
+        return
+    resume_manifest = read_json(str(resume_manifest_path))
+    if not isinstance(resume_manifest, dict):
+        raise RuntimeError(f"resume manifest is not a valid dict: {resume_manifest_path}")
+    current_manifest = build_run_manifest(config=config, git_commit=_git_commit_hash())
+    mismatches = compare_run_manifest(current_manifest=current_manifest, resume_manifest=resume_manifest)
+    if mismatches:
+        mismatch_text = "\n".join(f"- {item}" for item in mismatches)
+        raise RuntimeError(
+            "resume run_manifest mismatch detected:\n"
+            f"{mismatch_text}\n"
+            "please use a checkpoint with matching data/model semantics"
+        )
+
+
 def _try_restore_training_state(
     sess,
     saver: tf.compat.v1.train.Saver,
@@ -329,6 +385,7 @@ def _try_restore_training_state(
         return _default_restore_state()
 
     resume_dir = _resolve_resume_dir(config=config, experiment_dir=experiment_dir)
+    _validate_resume_run_manifest(config=config, resume_dir=resume_dir, logger=logger)
     resume_paths = build_checkpoint_paths(str(resume_dir))
     resume_prefix = find_existing_checkpoint(path_prefix=resume_paths["last"])
     if resume_prefix is None:
@@ -377,6 +434,7 @@ def train_supernet(config: Dict[str, Any]) -> int:
     experiment_dir = _resolve_output_dir(config)
     logger = build_logger("edgeflownas_supernet", str(experiment_dir / "train.log"))
     logger.info("start strict-fairness supernet training")
+    _apply_gpu_device_setting(train_cfg=train_cfg, logger=logger)
 
     batch_size = int(train_cfg.get("batch_size", 32))
     micro_batch_size = int(train_cfg.get("micro_batch_size", batch_size))
@@ -386,7 +444,9 @@ def train_supernet(config: Dict[str, Any]) -> int:
     logger.info("batch_size=%d micro_batch_size=%d", batch_size, micro_batch_size)
 
     num_epochs = int(train_cfg.get("num_epochs", 200))
-    steps_per_epoch = int(train_cfg.get("steps_per_epoch", 50))
+    epoch_mode = str(train_cfg.get("epoch_mode", "fixed_steps")).strip().lower()
+    if epoch_mode not in ("fixed_steps", "full_pass"):
+        raise ValueError(f"unsupported epoch_mode: {epoch_mode}")
     base_lr = float(train_cfg.get("lr", 1e-4))
     bn_recal_batches = int(eval_cfg.get("bn_recal_batches", 8))
     eval_pool_size = int(eval_cfg.get("eval_pool_size", 12))
@@ -411,6 +471,21 @@ def train_supernet(config: Dict[str, Any]) -> int:
     if len(eval_val_provider) == 0:
         raise RuntimeError("val sample count is 0; aborting")
 
+    if epoch_mode == "full_pass":
+        steps_per_epoch = int(math.ceil(float(len(train_provider)) / float(max(1, batch_size))))
+        if str(getattr(train_provider, "sampling_mode", "")).lower() != "shuffle_no_replacement":
+            raise RuntimeError("epoch_mode=full_pass requires train_sampling_mode=shuffle_no_replacement")
+    else:
+        steps_per_epoch = int(train_cfg.get("steps_per_epoch", 50))
+    steps_per_epoch = max(1, int(steps_per_epoch))
+    logger.info(
+        "epoch_mode=%s train_sampling_mode=%s train_samples=%d steps_per_epoch=%d",
+        epoch_mode,
+        str(getattr(train_provider, "sampling_mode", "unknown")),
+        len(train_provider),
+        steps_per_epoch,
+    )
+
     eval_pool = build_eval_pool(seed=seed, size=eval_pool_size, num_blocks=9)
     eval_pool_cov = check_eval_pool_coverage(pool=eval_pool, num_blocks=9)
     write_json(str(experiment_dir / f"eval_pool_{eval_pool_size}.json"), {"pool": eval_pool, "coverage": eval_pool_cov})
@@ -421,6 +496,9 @@ def train_supernet(config: Dict[str, Any]) -> int:
     eval_rows = []
     sampler_rng = random.Random(seed)
     total_steps = max(1, num_epochs * max(1, steps_per_epoch))
+
+    run_manifest = build_run_manifest(config=config, git_commit=_git_commit_hash())
+    write_json(str(experiment_dir / "run_manifest.json"), run_manifest)
 
     with tf.compat.v1.Session() as sess:
         sess.run(tf.compat.v1.global_variables_initializer())
@@ -443,6 +521,9 @@ def train_supernet(config: Dict[str, Any]) -> int:
 
         for epoch_idx in range(start_epoch, num_epochs + 1):
             epochs_ran += 1
+            if hasattr(train_provider, "start_epoch"):
+                # 每个 epoch 开始前刷新无放回采样顺序。
+                train_provider.start_epoch(shuffle=True)
             step_iterator = tqdm(
                 range(steps_per_epoch),
                 total=steps_per_epoch,

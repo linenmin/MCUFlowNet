@@ -120,11 +120,14 @@ class FC2BatchProvider:
         self.rng = random.Random(int(seed))
         self.sampling_mode = str(sampling_mode).strip().lower()
         self.crop_mode = str(crop_mode).strip().lower()
-        if self.sampling_mode not in ("random", "sequential"):
+        if self.sampling_mode not in ("random", "sequential", "shuffle_no_replacement"):
             raise ValueError(f"unsupported sampling_mode: {sampling_mode}")
         if self.crop_mode not in ("random", "center"):
             raise ValueError(f"unsupported crop_mode: {crop_mode}")
         self._cursor = 0
+        self._order = list(range(len(self.samples)))
+        if self.sampling_mode == "shuffle_no_replacement":
+            self.start_epoch(shuffle=True)
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -136,10 +139,28 @@ class FC2BatchProvider:
             return
         self._cursor = int(index) % len(self.samples)
 
+    def start_epoch(self, shuffle: bool = True) -> None:
+        """Start one train epoch for no-replacement sampling."""
+        if self.sampling_mode != "shuffle_no_replacement":
+            return
+        self._order = list(range(len(self.samples)))
+        if shuffle:
+            self.rng.shuffle(self._order)
+        self._cursor = 0
+
     def _next_sample_path(self) -> str:
         """Pick one sample path according to sampling mode."""
         if self.sampling_mode == "random":
             return self.samples[self.rng.randint(0, len(self.samples) - 1)]
+        if self.sampling_mode == "shuffle_no_replacement":
+            if not self._order:
+                raise RuntimeError("shuffle_no_replacement order is empty")
+            if self._cursor >= len(self._order):
+                # 同一 epoch 内溢出时循环取头部，保证批次维度稳定。
+                self._cursor = 0
+            sample_path = self.samples[self._order[self._cursor]]
+            self._cursor += 1
+            return sample_path
         sample_path = self.samples[self._cursor]
         self._cursor = (self._cursor + 1) % len(self.samples)
         return sample_path

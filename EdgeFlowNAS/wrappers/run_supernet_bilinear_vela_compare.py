@@ -22,7 +22,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", default="configs/supernet_fc2_180x240.yaml", help="path to supernet config yaml")
     parser.add_argument("--checkpoint_type", choices=["best", "last"], default="best", help="checkpoint type")
     parser.add_argument("--skip_checkpoint", action="store_true", help="export supernet with random init")
-    parser.add_argument("--arch_code", default="0,0,0,0,0,1,0,0,0", help="supernet arch code")
+    parser.add_argument("--arch_code", default="0,0,0,0,2,1,2,2,2", help="supernet arch code")
     parser.add_argument("--output_tag", default=None, help="suffix tag for output folder")
     parser.add_argument("--vela_mode", choices=["basic", "verbose"], default=None, help="vela mode")
     parser.add_argument("--vela_optimise", choices=["Performance", "Size"], default=None, help="vela optimise mode")

@@ -51,20 +51,20 @@ class MultiScaleResNetSupernet(BaseLayers):
             return self._select_by_index([out1, out2, out3], choice_idx, name="deep_select")
 
     def _head_choice_conv(self, inputs, filters, choice_idx, name):
-        """Kernel choice conv: 7x7 / 5x5 / 3x3."""
+        """Kernel choice conv: 3x3 / 5x5 / 7x7."""
         with tf.compat.v1.variable_scope(name):
             conv7 = self.conv(inputs=inputs, filters=filters, kernel_size=(7, 7), strides=(1, 1), activation=None, name="k7")
             conv5 = self.conv(inputs=inputs, filters=filters, kernel_size=(5, 5), strides=(1, 1), activation=None, name="k5")
             conv3 = self.conv(inputs=inputs, filters=filters, kernel_size=(3, 3), strides=(1, 1), activation=None, name="k3")
-            return self._select_by_index([conv7, conv5, conv3], choice_idx, name="kernel_select")
+            return self._select_by_index([conv3, conv5, conv7], choice_idx, name="kernel_select")
 
     def _head_choice_resize_conv(self, inputs, filters, choice_idx, name):
-        """Kernel choice resize-conv: upsample x2 then conv."""
+        """Kernel choice resize-conv: upsample x2 then conv (3x3 / 5x5 / 7x7)."""
         with tf.compat.v1.variable_scope(name):
             conv7 = self.resize_conv(inputs=inputs, filters=filters, kernel_size=(7, 7), name="k7")
             conv5 = self.resize_conv(inputs=inputs, filters=filters, kernel_size=(5, 5), name="k5")
             conv3 = self.resize_conv(inputs=inputs, filters=filters, kernel_size=(3, 3), name="k3")
-            return self._select_by_index([conv7, conv5, conv3], choice_idx, name="kernel_select")
+            return self._select_by_index([conv3, conv5, conv7], choice_idx, name="kernel_select")
 
     def build(self):
         """Build supernet forward graph."""

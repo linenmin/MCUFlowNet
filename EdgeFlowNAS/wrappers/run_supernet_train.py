@@ -43,8 +43,6 @@ def _build_overrides(args: argparse.Namespace) -> Dict[str, Any]:
         _put_override(overrides, "checkpoint.load_checkpoint", True)
     if args.reset_early_stop_on_resume:
         _put_override(overrides, "checkpoint.reset_early_stop_on_resume", True)
-    if args.fast_mode:
-        _put_override(overrides, "train.fast_mode", True)
     return overrides
 
 
@@ -75,7 +73,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="reset early-stop counters when resuming",
     )
 
-    parser.add_argument("--fast_mode", action="store_true", help="enable fast mode")
     parser.add_argument("--dry_run", action="store_true", help="print merged config and exit")
     return parser
 

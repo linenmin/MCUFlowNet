@@ -5,7 +5,7 @@ import json  # 导入JSON模块
 from typing import Dict, List  # 导入类型注解
 
 DEPTH_LABELS = {0: "Deep1", 1: "Deep2", 2: "Deep3"}  # 定义深度标签映射
-KERNEL_LABELS = {0: "7x7Conv", 1: "5x5Conv", 2: "3x3Conv"}  # 定义卷积核标签映射
+KERNEL_LABELS = {0: "3x3Conv", 1: "5x5Conv", 2: "7x7Conv"}  # 定义卷积核标签映射
 BACKBONE_KEYS = ["EB0", "EB1", "DB0", "DB1"]  # 定义骨干块顺序
 HEAD_KEYS = ["H0Out", "H1", "H1Out", "H2", "H2Out"]  # 定义头部块顺序
 
@@ -43,7 +43,7 @@ def run_self_test() -> Dict[str, str]:  # 定义自测函数
     decoded = decode_arch_code(example)  # 解码示例编码
     assert decoded["backbone"]["EB0"] == "Deep1"  # 断言EB0映射正确
     assert decoded["backbone"]["EB1"] == "Deep2"  # 断言EB1映射正确
-    assert decoded["head"]["H1Out"] == "3x3Conv"  # 断言H1Out映射正确
+    assert decoded["head"]["H1Out"] == "7x7Conv"  # 断言H1Out映射正确
     try:  # 尝试解析错误长度编码
         decode_arch_code([0] * 8)  # 输入8维编码触发异常
     except ValueError as exc:  # 捕获长度异常
@@ -80,4 +80,3 @@ def main() -> int:  # 定义主函数
 
 if __name__ == "__main__":  # 判断是否为脚本直运行
     raise SystemExit(main())  # 以主函数返回码退出
-

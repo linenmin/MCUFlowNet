@@ -88,7 +88,7 @@ class _FixedSubnetForExport(BaseLayers):
             conv7 = self.conv(inputs=inputs, filters=filters, kernel_size=(7, 7), strides=(1, 1), activation=None, name="k7")
             conv5 = self.conv(inputs=inputs, filters=filters, kernel_size=(5, 5), strides=(1, 1), activation=None, name="k5")
             conv3 = self.conv(inputs=inputs, filters=filters, kernel_size=(3, 3), strides=(1, 1), activation=None, name="k3")
-            return [conv7, conv5, conv3][choice]
+            return [conv3, conv5, conv7][choice]
 
     def _head_choice_resize_conv(self, inputs, filters, choice_idx: int, name: str):
         """Select upsample+conv kernel by python branch to prune inactive kernels."""
@@ -101,7 +101,7 @@ class _FixedSubnetForExport(BaseLayers):
             conv7 = self.resize_conv(inputs=inputs, filters=filters, kernel_size=(7, 7), name="k7")
             conv5 = self.resize_conv(inputs=inputs, filters=filters, kernel_size=(5, 5), name="k5")
             conv3 = self.resize_conv(inputs=inputs, filters=filters, kernel_size=(3, 3), name="k3")
-            return [conv7, conv5, conv3][choice]
+            return [conv3, conv5, conv7][choice]
 
     def build(self):
         """Build fixed subnet graph with checkpoint-compatible scopes."""
@@ -214,8 +214,9 @@ def compute_complexity_scores(arch_code: Sequence[int]) -> Dict[str, float]:
         raise ValueError("arch_code length must be 9")  # 长度不为 9 抛异常
     code = [int(item) for item in arch_code]  # 转成 int 列表
     depth_score = float(sum(code[:4]))  # 前四位越大表示骨干越重。
-    kernel_light_score = float(sum(code[4:]))  # 后五位越大表示头部越轻。
-    kernel_heavy_score = float(sum(2 - item for item in code[4:]))  # 统一成越大越重方向。
+    # 新编码规则: 0/1/2 = 3x3/5x5/7x7，后五位越大表示头部越重。
+    kernel_heavy_score = float(sum(code[4:]))  # 统一成越大越重方向。
+    kernel_light_score = float(sum(2 - item for item in code[4:]))  # 越大越轻方向。
     total_score = float(depth_score + kernel_heavy_score)  # 总复杂度代理分数。
     return {
         "depth_score": depth_score,  # 骨干复杂度

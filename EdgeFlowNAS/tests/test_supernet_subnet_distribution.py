@@ -33,8 +33,8 @@ class TestSubnetDistributionHelpers(unittest.TestCase):
 
     def test_complexity_score_direction(self) -> None:
         """Complexity proxy should align heavy direction across blocks."""
-        light = [0, 0, 0, 0, 2, 2, 2, 2, 2]  # shallow + smallest kernels
-        heavy = [2, 2, 2, 2, 0, 0, 0, 0, 0]  # deep + largest kernels
+        light = [0, 0, 0, 0, 0, 0, 0, 0, 0]  # shallow + smallest kernels
+        heavy = [2, 2, 2, 2, 2, 2, 2, 2, 2]  # deep + largest kernels
         light_score = compute_complexity_scores(light)["complexity_score"]
         heavy_score = compute_complexity_scores(heavy)["complexity_score"]
         self.assertGreater(heavy_score, light_score)

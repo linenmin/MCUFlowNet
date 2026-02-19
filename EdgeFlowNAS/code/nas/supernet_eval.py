@@ -17,7 +17,7 @@ from tqdm import tqdm
 from code.data.dataloader_builder import build_fc2_provider
 from code.data.transforms_180x240 import standardize_image_tensor
 from code.engine.eval_step import build_epe_metric
-from code.nas.eval_pool_builder import build_eval_pool, check_eval_pool_coverage
+from code.nas.eval_pool_builder import BILINEAR_BASELINE_ARCH_CODE, build_eval_pool, check_eval_pool_coverage
 from code.network.MultiScaleResNet_supernet import MultiScaleResNetSupernet
 from code.utils.json_io import read_json, write_json
 from code.utils.path_utils import ensure_directory, project_root
@@ -426,10 +426,18 @@ def _run_eval_pool_parallel(
 def _load_or_build_eval_pool(output_dir: Path, seed: int, pool_size: int) -> Dict[str, Any]:
     """Load existing eval pool or build a new one."""
     pool_path = output_dir / f"eval_pool_{pool_size}.json"
+    baseline_key = tuple(int(item) for item in BILINEAR_BASELINE_ARCH_CODE)
     if pool_path.exists():
         payload = read_json(str(pool_path))
         if isinstance(payload, dict) and isinstance(payload.get("pool", None), list):
             pool = payload["pool"]
+            pool_keys = {tuple(int(item) for item in code) for code in pool}
+            if baseline_key not in pool_keys:
+                # 评估池语义升级后强制重建，保证包含 bilinear 对齐子网。
+                pool = build_eval_pool(seed=seed, size=pool_size, num_blocks=9)
+                coverage = check_eval_pool_coverage(pool=pool, num_blocks=9)
+                write_json(str(pool_path), {"pool": pool, "coverage": coverage})
+                return {"pool": pool, "coverage": coverage, "pool_path": pool_path}
             coverage = payload.get("coverage", check_eval_pool_coverage(pool=pool, num_blocks=9))
             return {"pool": pool, "coverage": coverage, "pool_path": pool_path}
 

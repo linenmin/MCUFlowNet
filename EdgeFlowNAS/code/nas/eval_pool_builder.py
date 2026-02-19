@@ -5,6 +5,8 @@ import json  # 导入JSON模块
 import random  # 导入随机模块
 from typing import Dict, List  # 导入类型注解
 
+BILINEAR_BASELINE_ARCH_CODE = [0, 0, 0, 0, 2, 1, 2, 2, 2]  # 0/1/2=3x3/5x5/7x7
+
 
 def _seed_codes(num_blocks: int) -> List[List[int]]:  # 定义种子编码函数
     """构造覆盖性更强的基础编码集合。"""  # 说明函数用途
@@ -15,6 +17,9 @@ def _seed_codes(num_blocks: int) -> List[List[int]]:  # 定义种子编码函数
     codes.append([(idx % 3) for idx in range(num_blocks)])  # 添加顺序轮转编码
     codes.append([((2 - idx) % 3) for idx in range(num_blocks)])  # 添加逆序轮转编码
     codes.append([((idx + 1) % 3) for idx in range(num_blocks)])  # 添加偏移轮转编码
+    if num_blocks == 9:
+        # 在前六个固定编码后，追加一个与 bilinear 基准对齐的固定子网。
+        codes.append([int(item) for item in BILINEAR_BASELINE_ARCH_CODE])
     return codes  # 返回基础编码集合
 
 

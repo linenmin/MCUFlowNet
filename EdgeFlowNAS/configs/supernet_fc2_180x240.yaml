@@ -6,7 +6,10 @@ runtime:
 train:
   gpu_device: 0
   num_epochs: 200
+  epoch_mode: "full_pass"
   steps_per_epoch: 50
+  train_sampling_mode: "shuffle_no_replacement"
+  train_crop_mode: "random"
   batch_size: 32
   micro_batch_size: 8
   lr: 1.0e-4
@@ -16,7 +19,6 @@ train:
   grad_clip_global_norm: 200.0
   supernet_mode: "strict_fairness"
   uncertainty_type: "LinearSoftplus"
-  fast_mode: false
 
 data:
   dataset: "FC2"
@@ -32,7 +34,7 @@ eval:
   eval_pool_size: 12
   bn_recal_batches: 8
   eval_batches_per_arch: 4
-  early_stop_patience: 100
+  early_stop_patience: 200
   early_stop_min_delta: 0.002
 
 checkpoint:
