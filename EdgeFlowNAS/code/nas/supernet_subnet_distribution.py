@@ -90,6 +90,19 @@ class _FixedSubnetForExport(BaseLayers):
             conv3 = self.conv(inputs=inputs, filters=filters, kernel_size=(3, 3), strides=(1, 1), activation=None, name="k3")
             return [conv7, conv5, conv3][choice]
 
+    def _head_choice_resize_conv(self, inputs, filters, choice_idx: int, name: str):
+        """Select upsample+conv kernel by python branch to prune inactive kernels."""
+        choice = int(choice_idx)
+        if choice not in (0, 1, 2):
+            raise ValueError(f"invalid head choice: {choice_idx}")
+        import tensorflow as tf
+
+        with tf.compat.v1.variable_scope(name):
+            conv7 = self.resize_conv(inputs=inputs, filters=filters, kernel_size=(7, 7), name="k7")
+            conv5 = self.resize_conv(inputs=inputs, filters=filters, kernel_size=(5, 5), name="k5")
+            conv3 = self.resize_conv(inputs=inputs, filters=filters, kernel_size=(3, 3), name="k3")
+            return [conv7, conv5, conv3][choice]
+
     def build(self):
         """Build fixed subnet graph with checkpoint-compatible scopes."""
         if self._preds is not None:
@@ -102,10 +115,12 @@ class _FixedSubnetForExport(BaseLayers):
         c3 = int(c2 * self.expansion_factor)
         c4 = int(c3 / self.expansion_factor)
         c5 = int(c4 / self.expansion_factor)
+        h1_filters = max(1, int(c5 / self.expansion_factor))
+        h2_filters = max(1, int(h1_filters / self.expansion_factor))
 
         with tf.compat.v1.variable_scope("supernet_backbone"):
-            net = self.conv_bn_relu(inputs=self.input_ph, filters=self.init_neurons, kernel_size=(7, 7), strides=(1, 1), name="E0")
-            net = self.conv_bn_relu(inputs=net, filters=c1, kernel_size=(5, 5), strides=(1, 1), name="E1")
+            net = self.conv_bn_relu(inputs=self.input_ph, filters=self.init_neurons, kernel_size=(7, 7), strides=(2, 2), name="E0")
+            net = self.conv_bn_relu(inputs=net, filters=c1, kernel_size=(5, 5), strides=(2, 2), name="E1")
             net = self._deep_choice_block(inputs=net, filters=c1, choice_idx=arch[0], name="EB0")
 
             net = self.conv(inputs=net, filters=c2, kernel_size=(3, 3), strides=(2, 2), activation=None, name="Down1Conv")
@@ -128,12 +143,12 @@ class _FixedSubnetForExport(BaseLayers):
             net_high = self.relu(inputs=net_high, name="Up2ReLU")
 
         with tf.compat.v1.variable_scope("supernet_head"):
-            out_1_4 = self._head_choice_conv(inputs=net_low, filters=self.num_out, choice_idx=arch[4], name="H0Out")
-            h1 = self._head_choice_conv(inputs=net_mid, filters=c4, choice_idx=arch[5], name="H1")
+            out_1_4 = self._head_choice_conv(inputs=net_high, filters=self.num_out, choice_idx=arch[4], name="H0Out")
+            h1 = self._head_choice_resize_conv(inputs=net_high, filters=h1_filters, choice_idx=arch[5], name="H1")
             h1 = self.bn(inputs=h1, name="H1BN")
             h1 = self.relu(inputs=h1, name="H1ReLU")
             out_1_2 = self._head_choice_conv(inputs=h1, filters=self.num_out, choice_idx=arch[6], name="H1Out")
-            h2 = self._head_choice_conv(inputs=net_high, filters=c5, choice_idx=arch[7], name="H2")
+            h2 = self._head_choice_resize_conv(inputs=h1, filters=h2_filters, choice_idx=arch[7], name="H2")
             h2 = self.bn(inputs=h2, name="H2BN")
             h2 = self.relu(inputs=h2, name="H2ReLU")
             out_1_1 = self._head_choice_conv(inputs=h2, filters=self.num_out, choice_idx=arch[8], name="H2Out")
@@ -405,11 +420,12 @@ def _accum_preds(pred_list):
 
 def _build_tflite_for_arch(
     config: Dict[str, Any],
-    checkpoint_prefix: Path,
+    checkpoint_prefix: Optional[Path],
     arch_code: Sequence[int],
     tflite_path: Path,
     rep_dataset_samples: int,
     quantize_int8: bool,  # 是否导出 INT8 量化模型
+    restore_checkpoint: bool = True,
 ) -> None:
     """Export one fixed-arch subnet to TFLite."""  # 将固定架构子网导出为 TFLite 模型
     if BaseLayers is object:
@@ -447,7 +463,10 @@ def _build_tflite_for_arch(
 
         with tf.compat.v1.Session(graph=graph) as sess:  # 创建会话绑定到该图
             sess.run(tf.compat.v1.global_variables_initializer())  # 初始化变量
-            saver.restore(sess, str(checkpoint_prefix))  # 从 checkpoint 恢复权重
+            if restore_checkpoint:
+                if checkpoint_prefix is None:
+                    raise RuntimeError("checkpoint_prefix is required when restore_checkpoint=True")
+                saver.restore(sess, str(checkpoint_prefix))  # 从 checkpoint 恢复权重
             converter = tf.compat.v1.lite.TFLiteConverter.from_session(sess, [input_ph], [output_tensor])  # 创建 TFLite 转换器
             if quantize_int8:  # 如果需要 INT8 量化
                 converter.optimizations = [tf.lite.Optimize.DEFAULT]  # 打开默认优化

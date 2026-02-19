@@ -160,6 +160,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="compare supernet subnet vs bilinear baseline with vela")
     parser.add_argument("--config", default="configs/supernet_fc2_180x240.yaml", help="path to supernet config yaml")
     parser.add_argument("--checkpoint_type", choices=["best", "last"], default="best", help="checkpoint type for supernet export")
+    parser.add_argument("--skip_checkpoint", action="store_true", help="export supernet with random init (no checkpoint restore)")
     parser.add_argument("--arch_code", default="0,0,0,0,0,1,0,0,0", help="supernet arch code")
     parser.add_argument("--output_tag", default="", help="optional suffix for output folder")
     parser.add_argument("--vela_mode", choices=["basic", "verbose"], default="verbose", help="vela mode")
@@ -188,12 +189,16 @@ def main() -> int:
     config = _apply_cli_overrides(config=_load_config(args.config), args=args)
     output_root = _resolve_output_dir(config=config)
 
-    ckpt_paths = _build_checkpoint_paths(experiment_dir=output_root)
-    chosen = ckpt_paths[str(args.checkpoint_type)]
-    checkpoint_prefix = _find_existing_checkpoint(path_prefix=chosen)
-    if checkpoint_prefix is None:
-        raise RuntimeError(f"checkpoint not found: {chosen}")
-    checkpoint_prefix = Path(checkpoint_prefix)
+    checkpoint_prefix: Optional[Path] = None
+    checkpoint_meta: Dict[str, Any] = {}
+    if not bool(args.skip_checkpoint):
+        ckpt_paths = _build_checkpoint_paths(experiment_dir=output_root)
+        chosen = ckpt_paths[str(args.checkpoint_type)]
+        found = _find_existing_checkpoint(path_prefix=chosen)
+        if found is None:
+            raise RuntimeError(f"checkpoint not found: {chosen}")
+        checkpoint_prefix = Path(found)
+        checkpoint_meta = _load_checkpoint_meta(path_prefix=checkpoint_prefix)
 
     arch_code = _parse_arch_code(args.arch_code)
     tag = str(args.output_tag).strip()
@@ -219,6 +224,7 @@ def main() -> int:
         tflite_path=supernet_tflite,
         rep_dataset_samples=rep_dataset_samples,
         quantize_int8=quantize_int8,
+        restore_checkpoint=not bool(args.skip_checkpoint),
     )
     supernet_vela = _run_vela_for_arch(
         tflite_path=supernet_tflite,
@@ -265,8 +271,9 @@ def main() -> int:
     result = {
         "status": "ok",
         "checkpoint_type": str(args.checkpoint_type),
-        "checkpoint_path": str(checkpoint_prefix),
-        "checkpoint_meta": _load_checkpoint_meta(path_prefix=checkpoint_prefix),
+        "checkpoint_path": (str(checkpoint_prefix) if checkpoint_prefix is not None else ""),
+        "checkpoint_meta": checkpoint_meta,
+        "skip_checkpoint": bool(args.skip_checkpoint),
         "started_at_utc": started_at.isoformat(),
         "finished_at_utc": finished_at.isoformat(),
         "elapsed_seconds": elapsed_seconds,

@@ -21,6 +21,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="run one supernet-subnet vs bilinear vela comparison")
     parser.add_argument("--config", default="configs/supernet_fc2_180x240.yaml", help="path to supernet config yaml")
     parser.add_argument("--checkpoint_type", choices=["best", "last"], default="best", help="checkpoint type")
+    parser.add_argument("--skip_checkpoint", action="store_true", help="export supernet with random init")
     parser.add_argument("--arch_code", default="0,0,0,0,0,1,0,0,0", help="supernet arch code")
     parser.add_argument("--output_tag", default=None, help="suffix tag for output folder")
     parser.add_argument("--vela_mode", choices=["basic", "verbose"], default=None, help="vela mode")
@@ -59,6 +60,8 @@ def main() -> int:
     _append_opt(cmd, "--vela_mode", args.vela_mode)
     _append_opt(cmd, "--vela_optimise", args.vela_optimise)
     _append_opt(cmd, "--vela_rep_dataset_samples", args.vela_rep_dataset_samples)
+    if args.skip_checkpoint:
+        cmd.append("--skip_checkpoint")
     if args.vela_float32:
         cmd.append("--vela_float32")
     if args.vela_verbose_log:
@@ -82,4 +85,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
