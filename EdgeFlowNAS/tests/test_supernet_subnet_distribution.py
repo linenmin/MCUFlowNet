@@ -4,6 +4,8 @@ import unittest
 
 from code.nas.supernet_subnet_distribution import (
     ARCH_SPACE_SIZE,
+    _compute_metric_summary,
+    _safe_fps,
     compute_complexity_scores,
     sample_arch_pool,
 )
@@ -36,6 +38,21 @@ class TestSubnetDistributionHelpers(unittest.TestCase):
         light_score = compute_complexity_scores(light)["complexity_score"]
         heavy_score = compute_complexity_scores(heavy)["complexity_score"]
         self.assertGreater(heavy_score, light_score)
+
+    def test_safe_fps(self) -> None:
+        """FPS conversion should be stable and reject invalid input."""
+        self.assertAlmostEqual(_safe_fps(10.0), 100.0)
+        self.assertIsNone(_safe_fps(0.0))
+        self.assertIsNone(_safe_fps(-1.0))
+        self.assertIsNone(_safe_fps(None))
+
+    def test_metric_summary_counts(self) -> None:
+        """Metric summary should skip invalid values and keep counts."""
+        summary = _compute_metric_summary([1.0, None, 3.0, float("nan")])
+        self.assertEqual(summary["count_total"], 4)
+        self.assertEqual(summary["count_valid"], 2)
+        self.assertEqual(summary["count_invalid"], 2)
+        self.assertAlmostEqual(summary["mean"], 2.0)
 
 
 if __name__ == "__main__":

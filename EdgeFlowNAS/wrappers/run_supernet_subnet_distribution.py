@@ -31,8 +31,17 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--num_workers", type=int, default=None, help="parallel worker processes")
     parser.add_argument("--cpu_only", action="store_true", help="force CPU-only eval")
 
-    parser.add_argument("--plots", default=None, help="comma list: hist,ecdf,rank,complexity_scatter,box")
-    parser.add_argument("--hist_bins", type=int, default=None, help="histogram bins")
+    parser.add_argument("--enable_vela", action="store_true", help="enable vela benchmark")
+    parser.add_argument("--vela_mode", choices=["basic", "verbose"], default=None, help="vela mode")
+    parser.add_argument("--vela_optimise", choices=["Performance", "Size"], default=None, help="vela optimise mode")
+    parser.add_argument("--vela_limit", type=int, default=None, help="limit vela runs")
+    parser.add_argument("--vela_rep_dataset_samples", type=int, default=None, help="rep-dataset samples for int8 export")
+    parser.add_argument("--vela_float32", action="store_true", help="export float32 tflite")
+    parser.add_argument("--vela_keep_artifacts", action="store_true", help="keep vela temp folders")
+    parser.add_argument("--vela_verbose_log", action="store_true", help="show vela detailed logs")
+
+    parser.add_argument("--plots", default=None, help="deprecated: use run_supernet_subnet_distribution_plot.py")
+    parser.add_argument("--hist_bins", type=int, default=None, help="deprecated: use run_supernet_subnet_distribution_plot.py")
     parser.add_argument("--top_k", type=int, default=None, help="top/bottom K rows in summary")
     parser.add_argument("--output_tag", default=None, help="suffix tag for output folder")
 
@@ -71,6 +80,19 @@ def main() -> int:
     _append_opt(cmd, "--num_workers", args.num_workers)
     if args.cpu_only:
         cmd.append("--cpu_only")
+
+    if args.enable_vela:
+        cmd.append("--enable_vela")
+    _append_opt(cmd, "--vela_mode", args.vela_mode)
+    _append_opt(cmd, "--vela_optimise", args.vela_optimise)
+    _append_opt(cmd, "--vela_limit", args.vela_limit)
+    _append_opt(cmd, "--vela_rep_dataset_samples", args.vela_rep_dataset_samples)
+    if args.vela_float32:
+        cmd.append("--vela_float32")
+    if args.vela_keep_artifacts:
+        cmd.append("--vela_keep_artifacts")
+    if args.vela_verbose_log:
+        cmd.append("--vela_verbose_log")
 
     _append_opt(cmd, "--plots", args.plots)
     _append_opt(cmd, "--hist_bins", args.hist_bins)

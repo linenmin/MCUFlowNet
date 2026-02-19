@@ -1,88 +1,116 @@
 # 12 BestCkpt 子网扩展抽样分布分析计划
 更新时间: 2026-02-19
 
-## 0. 目标
-1. 明确 `supernet_best.ckpt` 的保存判据。  
-2. 在最佳权重下，抽样更多子网并评估 EPE 分布。  
-3. 输出可复用的统计结果与图表，支持后续横向对比。  
+## 0. 目标与边界
+1. 解释 `supernet_best.ckpt` 的保存判据与恢复语义。
+2. 在 best checkpoint 下做更大规模子网抽样，联合统计 `EPE + FPS + SRAM peak`。
+3. 严格拆分两阶段流程：先产出分析数据文件，再由独立脚本输出 PNG 图表。
+4. 保持 EdgeFlowNAS 现有工程风格，方便后续维护。
 
 ---
 
-## 1. `supernet_best.ckpt` 保存判据
-1. 判据指标是每个 eval epoch 的 `mean_epe_12`（越小越好）。  
-2. 仅当 `mean_epe_12 < (best_metric - early_stop_min_delta)` 时，才覆盖保存 `supernet_best.ckpt`。  
-3. 这意味着“更小但小于阈值幅度”的改进不会更新 best。  
-4. 若恢复训练时使用 `--reset_early_stop_on_resume`，`best_metric` 会重置为 `inf`，之后的 best 记录将以“恢复后的阶段”为基准。  
+## 1. BestCkpt 判据（已确认）
+1. 最优权重依据 `mean_epe_12`（越小越好）。
+2. 仅当 `current < best - early_stop_min_delta` 才会覆盖 best。
+3. `--reset_early_stop_on_resume` 会重置早停状态，恢复训练后重新比较 best。
 
-代码来源:
+代码位置:
 - `MCUFlowNet/EdgeFlowNAS/code/engine/early_stop.py`
 - `MCUFlowNet/EdgeFlowNAS/code/engine/supernet_trainer.py`
 
 ---
 
-## 2. 脚本范围与输出
+## 2. 本轮确认选项
+1. 可视化方案: `Option A + epe_vs_fps`。
+2. 核心图表:
+- `epe_hist.png`
+- `fps_hist.png`
+- `sram_hist.png`
+- `epe_rank_curve.png`
+- `epe_vs_fps_scatter.png`
 
-### 2.1 输入
-1. supernet 配置文件（默认 `configs/supernet_fc2_180x240.yaml`）。  
-2. checkpoint 类型（默认 `best`，可选 `last`）。  
-3. 抽样规模、随机种子、BN recal 与 eval batch 设置。  
-
-### 2.2 处理
-1. 在 `3^9` 架构空间中做唯一随机抽样（必要时支持全空间穷举）。  
-2. 可选将固定 `eval_pool_12` 并入样本，保证与历史口径可对齐。  
-3. 逐子网执行 `BN recal + EPE`，收集分布。  
-4. 计算复杂度代理分数（统一方向）用于可解释性分析。  
-
-### 2.3 输出
-1. `subnet_samples.csv`：每个子网的 `arch_code / epe / complexity_score`。  
-2. `summary.json`：均值、方差、分位数、top/bottom-k。  
-3. 图表 PNG（可配置）。  
+说明:
+- 你已明确优先关注 `EPE vs FPS`。
+- SRAM 仍保留统计与图表，用于确认是否确实“基本一致”。
 
 ---
 
-## 3. 可视化选项（供选择）
+## 3. 已落地实现
+### 3.1 分析阶段（只产数据）
+已改造:
+- `MCUFlowNet/EdgeFlowNAS/code/nas/supernet_subnet_distribution.py`
 
-### 选项 A（推荐基线）: `hist + ecdf + rank`
-1. 直方图（整体形状与离散程度）。  
-2. ECDF（尾部行为与阈值可读性好）。  
-3. 排名曲线（best 到 worst 的坡度）。  
+当前行为:
+1. 先评估抽样子网 EPE（沿用原 supernet eval 逻辑）。
+2. 可选执行 Vela 指标采集（每个子网导出固定 arch TFLite，再跑 Vela）。
+3. 只输出数据文件，不在该脚本里绘图。
 
-优点:
-1. 信息密度高且稳定。  
-2. 对分布比较最友好。  
+输出文件:
+- `analysis/records.csv`
+- `analysis/ranking_by_epe.csv`
+- `analysis/vela_metrics.csv`
+- `analysis/summary.json`
+- `analysis/sampled_arch_pool.json`
 
-缺点:
-1. 不直接展示“复杂度-性能”关系。  
+新增参数（核心）:
+- `--enable_vela`
+- `--vela_mode`
+- `--vela_optimise`
+- `--vela_limit`
+- `--vela_rep_dataset_samples`
+- `--vela_float32`
+- `--vela_keep_artifacts`
+- `--vela_verbose_log`
 
-### 选项 B: `A + complexity_scatter`
-1. 在 A 基础上增加复杂度代理分数 vs EPE 散点图。  
+### 3.2 绘图阶段（只读数据）
+已新增:
+- `MCUFlowNet/EdgeFlowNAS/code/nas/supernet_subnet_distribution_plot.py`
 
-优点:
-1. 可快速判断“更重是否更好”。  
+当前行为:
+1. 读取 `analysis/records.csv`。
+2. 输出 Option A + `epe_vs_fps` 的 PNG 图表。
+3. 产出 `plot_manifest.json`。
 
-缺点:
-1. 复杂度仅是代理分数，不等价真实 FLOPs/Latency。  
+### 3.3 Wrapper
+已改造/新增:
+- `MCUFlowNet/EdgeFlowNAS/wrappers/run_supernet_subnet_distribution.py`（分析）
+- `MCUFlowNet/EdgeFlowNAS/wrappers/run_supernet_subnet_distribution_plot.py`（绘图）
 
-### 选项 C: `full`（A + B + box）
-1. 全量图组：`hist, ecdf, rank, complexity_scatter, box`。  
+### 3.4 单测
+已更新:
+- `MCUFlowNet/EdgeFlowNAS/tests/test_supernet_subnet_distribution.py`
 
-优点:
-1. 一次性覆盖全视角。  
-
-缺点:
-1. 图较多，阅读成本高。  
+覆盖点:
+1. 抽样唯一性与可复现。
+2. complexity 方向一致性。
+3. FPS 换算稳定性。
+4. 指标 summary 的有效/无效计数。
 
 ---
 
-## 4. 实施计划
-1. 新增脚本 `code/nas/supernet_subnet_distribution.py`。  
-2. 新增 wrapper `wrappers/run_supernet_subnet_distribution.py`。  
-3. 新增轻量单测（采样唯一性、复杂度分数方向正确性）。  
-4. 更新计划索引 `00_Plan_Index.md`。  
+## 4. 推荐运行模板
+### 4.1 先跑分析（含 Vela）
+```bash
+python wrappers/run_supernet_subnet_distribution.py \
+  --config configs/supernet_fc2_180x240.yaml \
+  --checkpoint_type best \
+  --num_arch_samples 256 \
+  --enable_vela \
+  --vela_optimise Size \
+  --vela_mode basic \
+  --top_k 12 \
+  --output_tag best_256_vela
+```
+
+### 4.2 再跑绘图
+```bash
+python wrappers/run_supernet_subnet_distribution_plot.py \
+  --analysis_dir <run_dir>/analysis
+```
 
 ---
 
-## 5. 运行建议（默认）
-1. 首次建议: `num_arch_samples=512`。  
-2. 若 GPU/时间充足: 提升到 `1024`。  
-3. 图表模式建议先用选项 B（平衡信息量与诊断价值）。  
+## 5. 后续可选优化（未做）
+1. Vela 并行子进程（当前是串行，优先保证稳定性）。
+2. 增加 `epe_vs_sram` 与 `fps_vs_sram`（若后续转 Option B）。
+3. 为 Vela 失败样本输出更细分错误分类。
