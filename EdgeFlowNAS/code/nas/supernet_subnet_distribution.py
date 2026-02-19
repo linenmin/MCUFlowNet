@@ -70,26 +70,25 @@ class _FixedSubnetForExport(BaseLayers):
         import tensorflow as tf
 
         with tf.compat.v1.variable_scope(name):
+            # Keep creation order identical to training graph for checkpoint key match.
             out1 = self._res_block(inputs=inputs, filters=filters, name="deep1")
-            if choice == 0:
-                return out1
             out2 = self._res_block(inputs=out1, filters=filters, name="deep2")
-            if choice == 1:
-                return out2
             out3 = self._res_block(inputs=out2, filters=filters, name="deep3")
-            return out3
+            return [out1, out2, out3][choice]
 
     def _head_choice_conv(self, inputs, filters, choice_idx: int, name: str):
         """Select head kernel by python branch to prune inactive kernels."""
         choice = int(choice_idx)
         if choice not in (0, 1, 2):
             raise ValueError(f"invalid head choice: {choice_idx}")
-        kernel_name = {0: ("k7", (7, 7)), 1: ("k5", (5, 5)), 2: ("k3", (3, 3))}
-        conv_name, kernel = kernel_name[choice]
         import tensorflow as tf
 
         with tf.compat.v1.variable_scope(name):
-            return self.conv(inputs=inputs, filters=filters, kernel_size=kernel, strides=(1, 1), activation=None, name=conv_name)
+            # Keep creation order identical to training graph for checkpoint key match.
+            conv7 = self.conv(inputs=inputs, filters=filters, kernel_size=(7, 7), strides=(1, 1), activation=None, name="k7")
+            conv5 = self.conv(inputs=inputs, filters=filters, kernel_size=(5, 5), strides=(1, 1), activation=None, name="k5")
+            conv3 = self.conv(inputs=inputs, filters=filters, kernel_size=(3, 3), strides=(1, 1), activation=None, name="k3")
+            return [conv7, conv5, conv3][choice]
 
     def build(self):
         """Build fixed subnet graph with checkpoint-compatible scopes."""
