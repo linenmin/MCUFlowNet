@@ -41,6 +41,9 @@
 12. `11_200Epoch_结果诊断与续训决策计划.md`
 说明: 200 epoch 收敛状态复盘、是否 +100 续训的分档方案与门槛判据。
 
+13. `12_BestCkpt_子网扩展抽样分布分析计划.md`
+说明: 解释 best checkpoint 判据，并在最佳权重下做大样本子网分布统计与可视化。
+
 ## 当前主线
 1. 使用 folder-based FC2 数据加载（`train_dir` / `val_dir`）。
 2. 保持 strict-fairness supernet 训练主流程。
