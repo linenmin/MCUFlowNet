@@ -17,9 +17,130 @@ from tqdm import tqdm  # 进度条库
 
 from code.utils.json_io import write_json  # 自定义 JSON 写入工具
 
+try:
+    from code.network.base_layers import BaseLayers  # 复用基础层定义
+except Exception:  # pragma: no cover - 允许无 TensorFlow 环境下导入测试
+    BaseLayers = object  # type: ignore[misc,assignment]
+
 NUM_BLOCKS = 9  # 网络结构一共有 9 个可搜索 block
 ARCH_SPACE_SIZE = 3 ** NUM_BLOCKS  # 搜索空间大小：每个 block 3 种选择
 PERCENTILES = (1, 5, 10, 25, 50, 75, 90, 95, 99)  # 需要统计的分位点
+
+
+class _FixedSubnetForExport(BaseLayers):
+    """Build a hard-routed subnet graph for export-only Vela profiling."""
+
+    def __init__(
+        self,
+        input_ph,
+        is_training_ph,
+        arch_code: Sequence[int],
+        num_out: int = 4,
+        init_neurons: int = 32,
+        expansion_factor: float = 2.0,
+        suffix: str = "",
+    ):
+        super().__init__(is_training_ph=is_training_ph, suffix=suffix)
+        if len(arch_code) != NUM_BLOCKS:
+            raise ValueError("arch_code length must be 9")
+        self.input_ph = input_ph
+        self.arch_code = [int(v) for v in arch_code]
+        self.num_out = int(num_out)
+        self.init_neurons = int(init_neurons)
+        self.expansion_factor = float(expansion_factor)
+        self._preds = None
+
+    def _res_block(self, inputs, filters, name):
+        """One residual block with shared naming."""
+        import tensorflow as tf
+
+        with tf.compat.v1.variable_scope(name):
+            net = self.conv_bn_relu(inputs=inputs, filters=filters, strides=(1, 1), name="conv1")
+            net = self.conv(inputs=net, filters=filters, strides=(1, 1), activation=None, name="conv2")
+            net = self.bn(inputs=net, name="bn2")
+            net = tf.add(net, inputs, name="res_add")
+            net = self.relu(inputs=net, name="res_relu")
+            return net
+
+    def _deep_choice_block(self, inputs, filters, choice_idx: int, name: str):
+        """Select depth by python branch to prune inactive paths."""
+        choice = int(choice_idx)
+        if choice not in (0, 1, 2):
+            raise ValueError(f"invalid deep choice: {choice_idx}")
+        import tensorflow as tf
+
+        with tf.compat.v1.variable_scope(name):
+            out1 = self._res_block(inputs=inputs, filters=filters, name="deep1")
+            if choice == 0:
+                return out1
+            out2 = self._res_block(inputs=out1, filters=filters, name="deep2")
+            if choice == 1:
+                return out2
+            out3 = self._res_block(inputs=out2, filters=filters, name="deep3")
+            return out3
+
+    def _head_choice_conv(self, inputs, filters, choice_idx: int, name: str):
+        """Select head kernel by python branch to prune inactive kernels."""
+        choice = int(choice_idx)
+        if choice not in (0, 1, 2):
+            raise ValueError(f"invalid head choice: {choice_idx}")
+        kernel_name = {0: ("k7", (7, 7)), 1: ("k5", (5, 5)), 2: ("k3", (3, 3))}
+        conv_name, kernel = kernel_name[choice]
+        import tensorflow as tf
+
+        with tf.compat.v1.variable_scope(name):
+            return self.conv(inputs=inputs, filters=filters, kernel_size=kernel, strides=(1, 1), activation=None, name=conv_name)
+
+    def build(self):
+        """Build fixed subnet graph with checkpoint-compatible scopes."""
+        if self._preds is not None:
+            return self._preds
+        import tensorflow as tf
+
+        arch = self.arch_code
+        c1 = int(self.init_neurons * self.expansion_factor)
+        c2 = int(c1 * self.expansion_factor)
+        c3 = int(c2 * self.expansion_factor)
+        c4 = int(c3 / self.expansion_factor)
+        c5 = int(c4 / self.expansion_factor)
+
+        with tf.compat.v1.variable_scope("supernet_backbone"):
+            net = self.conv_bn_relu(inputs=self.input_ph, filters=self.init_neurons, kernel_size=(7, 7), strides=(1, 1), name="E0")
+            net = self.conv_bn_relu(inputs=net, filters=c1, kernel_size=(5, 5), strides=(1, 1), name="E1")
+            net = self._deep_choice_block(inputs=net, filters=c1, choice_idx=arch[0], name="EB0")
+
+            net = self.conv(inputs=net, filters=c2, kernel_size=(3, 3), strides=(2, 2), activation=None, name="Down1Conv")
+            net = self.bn(inputs=net, name="Down1BN")
+            net = self.relu(inputs=net, name="Down1ReLU")
+            net = self._deep_choice_block(inputs=net, filters=c2, choice_idx=arch[1], name="EB1")
+
+            net = self.conv(inputs=net, filters=c3, kernel_size=(3, 3), strides=(2, 2), activation=None, name="Down2Conv")
+            net = self.bn(inputs=net, name="Down2BN")
+            net = self.relu(inputs=net, name="Down2ReLU")
+            net_low = self._deep_choice_block(inputs=net, filters=c3, choice_idx=arch[2], name="DB0")
+
+            net_mid = self.resize_conv(inputs=net_low, filters=c4, kernel_size=(3, 3), name="Up1")
+            net_mid = self.bn(inputs=net_mid, name="Up1BN")
+            net_mid = self.relu(inputs=net_mid, name="Up1ReLU")
+            net_mid = self._deep_choice_block(inputs=net_mid, filters=c4, choice_idx=arch[3], name="DB1")
+
+            net_high = self.resize_conv(inputs=net_mid, filters=c5, kernel_size=(3, 3), name="Up2")
+            net_high = self.bn(inputs=net_high, name="Up2BN")
+            net_high = self.relu(inputs=net_high, name="Up2ReLU")
+
+        with tf.compat.v1.variable_scope("supernet_head"):
+            out_1_4 = self._head_choice_conv(inputs=net_low, filters=self.num_out, choice_idx=arch[4], name="H0Out")
+            h1 = self._head_choice_conv(inputs=net_mid, filters=c4, choice_idx=arch[5], name="H1")
+            h1 = self.bn(inputs=h1, name="H1BN")
+            h1 = self.relu(inputs=h1, name="H1ReLU")
+            out_1_2 = self._head_choice_conv(inputs=h1, filters=self.num_out, choice_idx=arch[6], name="H1Out")
+            h2 = self._head_choice_conv(inputs=net_high, filters=c5, choice_idx=arch[7], name="H2")
+            h2 = self.bn(inputs=h2, name="H2BN")
+            h2 = self.relu(inputs=h2, name="H2ReLU")
+            out_1_1 = self._head_choice_conv(inputs=h2, filters=self.num_out, choice_idx=arch[8], name="H2Out")
+
+        self._preds = [out_1_4, out_1_2, out_1_1]
+        return self._preds
 
 
 def _iter_all_arch_codes(num_blocks: int = NUM_BLOCKS) -> Iterable[List[int]]:
@@ -269,9 +390,9 @@ def _build_tflite_for_arch(
     quantize_int8: bool,  # 是否导出 INT8 量化模型
 ) -> None:
     """Export one fixed-arch subnet to TFLite."""  # 将固定架构子网导出为 TFLite 模型
+    if BaseLayers is object:
+        raise RuntimeError("base_layers is unavailable; please install tensorflow in runtime env")
     import tensorflow as tf  # 导入 TensorFlow
-
-    from code.network.MultiScaleResNet_supernet import MultiScaleResNetSupernet  # 导入 supernet 网络定义
 
     data_cfg = config.get("data", {})  # 读取数据相关配置
     input_h = int(data_cfg.get("input_height", 180))  # 输入高度，默认 180
@@ -283,12 +404,12 @@ def _build_tflite_for_arch(
     graph = tf.Graph()  # 创建一个独立的 TF 图
     with graph.as_default():  # 在该图上下文中定义算子
         input_ph = tf.compat.v1.placeholder(tf.float32, shape=[1, input_h, input_w, 6], name="Input")  # 输入占位符
-        arch_const = tf.constant([int(v) for v in arch_code], dtype=tf.int32, name="ArchCodeConst")  # 固定架构常量
         is_training_const = tf.constant(False, dtype=tf.bool, name="IsTrainingConst")  # 训练/测试标志常量
-        model = MultiScaleResNetSupernet(
+        # 构建硬路由子网，避免导出包含所有候选分支的整张超网图。
+        model = _FixedSubnetForExport(
             input_ph=input_ph,  # 输入张量
-            arch_code_ph=arch_const,  # 架构编码
             is_training_ph=is_training_const,  # 是否训练
+            arch_code=arch_code,  # 固定架构码
             num_out=pred_channels,  # 输出通道数
             init_neurons=32,  # 初始通道数
             expansion_factor=2.0,  # 通道扩展倍数
