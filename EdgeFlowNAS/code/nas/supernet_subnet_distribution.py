@@ -380,6 +380,29 @@ def _evaluate_arch_pool(
     return metrics  # 返回评估结果
 
 
+def _accum_preds(pred_list):
+    """Accumulate multi-scale predictions like EdgeFlowNet AccumPreds."""
+    import tensorflow as tf
+
+    pred_accum = None
+    pred_accum_list = []
+    for idx, pred_i in enumerate(pred_list):
+        if pred_accum is None:
+            pred_accum = pred_i
+            pred_accum_list.append(pred_accum)
+            continue
+        pred_accum = tf.compat.v1.image.resize_bilinear(
+            pred_accum,
+            [pred_i.shape[1], pred_i.shape[2]],
+            align_corners=False,
+            half_pixel_centers=False,
+            name=f"AccumResize{idx}",
+        )
+        pred_accum = tf.add(pred_accum, pred_i, name=f"AccumAdd{idx}")
+        pred_accum_list.append(pred_accum)
+    return pred_accum, pred_accum_list
+
+
 def _build_tflite_for_arch(
     config: Dict[str, Any],
     checkpoint_prefix: Path,
@@ -414,7 +437,12 @@ def _build_tflite_for_arch(
             expansion_factor=2.0,  # 通道扩展倍数
         )
         preds = model.build()  # 构建网络，得到多尺度输出列表
-        output_tensor = preds[-1]  # 取最后一个尺度作为最终输出
+        # 使用多尺度累计输出，对齐 bilinear 测试路径（AccumPreds）。
+        if isinstance(preds, list) and len(preds) > 1:
+            accum_out, _ = _accum_preds(preds)
+            output_tensor = accum_out[..., 0:flow_channels]
+        else:
+            output_tensor = preds[-1][..., 0:flow_channels] if isinstance(preds, list) else preds[..., 0:flow_channels]
         saver = tf.compat.v1.train.Saver(max_to_keep=1)  # 用于恢复权重的 Saver
 
         with tf.compat.v1.Session(graph=graph) as sess:  # 创建会话绑定到该图
