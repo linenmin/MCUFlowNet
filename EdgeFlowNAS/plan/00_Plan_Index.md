@@ -1,5 +1,5 @@
 # EdgeFlowNAS 计划索引
-更新时间: 2026-02-17
+更新时间: 2026-02-19
 
 ## 项目目标
 本目录用于管理 `EdgeFlowNAS` 在 FC2 数据集上的 supernet 训练、诊断与工程化落地文档。
@@ -34,6 +34,12 @@
 
 10. `09_Fold_Run_Diagnostics_and_CPU_Eval_Plan.md`
 说明: fold 训练阶段诊断与后续修订计划（当前聚焦评估稳定性与训练日志口径）。
+
+11. `10_Eval_Consistency_and_Clip_Diagnostics_Plan.md`
+说明: Eval 口径一致性与梯度裁剪机制变更（batch 级 clip）诊断计划。
+
+12. `11_200Epoch_结果诊断与续训决策计划.md`
+说明: 200 epoch 收敛状态复盘、是否 +100 续训的分档方案与门槛判据。
 
 ## 当前主线
 1. 使用 folder-based FC2 数据加载（`train_dir` / `val_dir`）。

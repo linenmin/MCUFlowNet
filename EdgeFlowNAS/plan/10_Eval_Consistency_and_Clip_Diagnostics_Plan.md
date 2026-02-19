@@ -1,160 +1,153 @@
 # 10 Eval 一致性与 Clip 诊断计划
 更新时间: 2026-02-17
 
-## 0. 本轮确认结论
-1. 当前代码里，eval 还不是“固定 batch + 中心裁剪”。
-2. `clip_rate=1` 在你这段日志里是“数值上正常、训练上可疑”的信号：说明几乎每次都触发了梯度裁剪。
-3. 目前日志中的 `mean_epe_12` 不稳步下降，核心不是单一问题，而是“评估噪声 + 裁剪强度 + 指标覆盖不足”叠加。
-
-代码定位:
-- `MCUFlowNet/EdgeFlowNAS/code/engine/supernet_trainer.py` 的 `_run_eval_epoch()` 仍调用 `next_batch()`。
-- `MCUFlowNet/EdgeFlowNAS/code/nas/supernet_eval.py` 也仍调用 `next_batch()`。
-- `MCUFlowNet/EdgeFlowNAS/code/data/fc2_dataset.py` 里 `_load_one()` 是随机采样，`_random_crop_triplet()` 是随机裁剪。
+## 0. 目标与范围
+1. 本文档仅关注超网训练过程稳定性与评估口径一致性。  
+2. 子网搜索/最终子网选择暂不纳入本轮讨论。  
 
 ---
 
-## 1. P0-1: Eval 可重复性不足（最高优先级）
+## 1. 已完成改动（当前基线）
 
-问题具体描述:
-当前 eval 每个 arch 都在随机抽样、随机裁剪，导致同一 checkpoint 的评估值有较大采样噪声，epoch 间趋势可解释性弱。
+### 1.1 Eval 一致性（已完成）
+1. Eval 数据改为固定顺序采样。  
+2. Eval 裁剪改为固定中心裁剪。  
+3. 训练数据仍保持随机采样与随机裁剪。  
 
-当时实现考虑:
-统一 `next_batch()` 路径实现简单，训练与评估代码复用高，且早期开发阶段更关注“先跑通”。
+涉及文件:
+- `MCUFlowNet/EdgeFlowNAS/code/data/fc2_dataset.py`
+- `MCUFlowNet/EdgeFlowNAS/code/data/dataloader_builder.py`
 
-现在的缺点:
-`mean_epe_12/std_epe_12` 变化混入了较大的数据采样噪声，难以判断模型本身是否改善。
+### 1.2 Eval 覆盖增强（已完成）
+1. 新增 `eval_batches_per_arch`。  
+2. 当前默认值 `4`。  
+3. 每个 arch 的 EPE 由 4 个固定 val batch 求均值。  
 
-优化选项 A（推荐）:
-给 provider 增加 eval 模式，按固定顺序取样 + 中心裁剪；训练仍保留随机采样 + 随机裁剪。
-优点: 改动小、可复现性明显提升、与现有 checkpoint 兼容。
-缺点: 需要在 `fc2_dataset.py` 增加模式参数与顺序游标。
+涉及文件:
+- `MCUFlowNet/EdgeFlowNAS/configs/supernet_fc2_180x240.yaml`
+- `MCUFlowNet/EdgeFlowNAS/code/engine/supernet_trainer.py`
+- `MCUFlowNet/EdgeFlowNAS/code/nas/supernet_eval.py`
+- `MCUFlowNet/EdgeFlowNAS/wrappers/run_supernet_eval.py`
 
-优化选项 B:
-离线固化 eval batch（保存样本路径和裁剪窗口）到 JSON/NPY，训练和独立 eval 都读取同一批次。
-优点: 可复现性最强，跨机器一致。
-缺点: 增加一份“评估工件”管理成本。
+### 1.3 BN 重估一致性（已完成）
+1. Eval 模式下 BN recal 使用固定顺序 train batch。  
+2. 每个 arch 在 BN recal 前与 val eval 前都会 reset 游标。  
 
-优化选项 C:
-每次 eval 直接跑完整 val（固定中心裁剪）。
-优点: 指标方差最低，最接近真实泛化表现。
-缺点: 评估开销显著上升。
+涉及文件:
+- `MCUFlowNet/EdgeFlowNAS/code/engine/supernet_trainer.py`
+- `MCUFlowNet/EdgeFlowNAS/code/nas/supernet_eval.py`
 
----
+### 1.4 日志增强（已完成）
+1. 新增梯度分位数日志：`train_grad_norm_p50/p90/p99`。  
+2. 新增每轮 12 子网排名日志：`arch_rank_12`（`rank:arch_index:epe`）。  
+3. 未加入 `clip_checks` / `expected_clip_checks`（按当前需求）。  
+4. 未加入 `kendall_tau_prev`（按当前需求，改为直接输出排名）。  
 
-## 2. P0-2: `clip_rate=1` 持续满触发
+涉及文件:
+- `MCUFlowNet/EdgeFlowNAS/code/engine/supernet_trainer.py`
 
-问题具体描述:
-你的日志中连续多个 epoch 都是 `clip_rate=1.0000`，说明每次检查都触发裁剪。当前配置 `grad_clip_global_norm=5.0`，而日志 `grad_norm` 常在 90~140，远高于阈值。
+### 1.5 Clip 机制改动（已完成）
+1. 梯度裁剪由“micro-step 级”改为“累积后一次 batch 级裁剪”。  
+2. `grad_clip_global_norm` 已设置为 `200.0`。  
 
-当时实现考虑:
-早期为了稳健，采用较保守的全局梯度裁剪，防止 strict-fairness 多路径训练时梯度爆炸。
-
-现在的缺点:
-如果长期 100% 触发，更新幅度会长期受硬阈值限制，训练可能进入“方向在变、步长总被压扁”的状态，影响收敛速度与排名区分度。
-
-优化选项 A（推荐）:
-先做“诊断不改行为”：记录每 epoch 的梯度分布分位数（p50/p90/p99）并保留当前阈值，再决定阈值是否上调。
-优点: 风险最低，先证据后改动。
-缺点: 需要多跑几轮才能定阈值。
-
-优化选项 B:
-将 `grad_clip_global_norm` 从 5 提高到 20/50（逐步试验）。
-优点: 快速验证“过强裁剪是否主因”。
-缺点: 若直接提太高，可能出现训练不稳。
-
-优化选项 C:
-将裁剪位置从“每个 micro-step”改为“累积后一次裁剪”。
-优点: 更贴近“大 batch 梯度再裁剪”的语义。
-缺点: 改动训练动力学更大，需重新对比基线。
-
-关键校验公式:
-`expected_clip_checks = steps_per_epoch * 3 * ceil(batch_size / micro_batch_size)`。
-你给出的 `clip_count=150` 若 `steps_per_epoch=50`，则推导 `ceil(batch_size/micro_batch_size)=1`，即有效 micro-batch 看起来像是等于 batch-size。需要核对该次运行开头日志里的 `micro_batch_size`。
+涉及文件:
+- `MCUFlowNet/EdgeFlowNAS/code/engine/supernet_trainer.py`
+- `MCUFlowNet/EdgeFlowNAS/configs/supernet_fc2_180x240.yaml`
 
 ---
 
-## 3. P1-3: Eval 覆盖度与稳定性不足
+## 2. 新日志分析（Epoch 104-109）
 
-问题具体描述:
-当前每个 arch 只用 1 个 val batch 做 EPE，样本覆盖有限，对 batch 组成敏感。
+日志摘要:
+1. `clip_rate` 从过去的 1.0000 下降到 `0.0000 ~ 0.0800`。  
+2. `clip_count` 在每 epoch 仅 `0~4`（对应当前 step 级统计）。  
+3. `grad_norm` 大约 `60~102`，`grad_p90` 大约 `104~189`。  
+4. `mean_epe_12` 位于 `9.758 ~ 9.824`，整体较 95-97 轮偏高。  
+5. `std_epe_12` 在 104/105/107 轮较低（约 0.02~0.04），在 106/108/109 轮明显升高（约 0.075~0.163）。  
+6. `fairness_gap` 持续为 `0.00`，公平采样机制仍正常。  
 
-当时实现考虑:
-控制 epoch 时长，避免评估拖慢训练。
+### 2.1 可确认的正向结论
+1. “裁剪全饱和”问题已解除。  
+2. 训练更新不再长期被硬阈值压死。  
+3. Batch 级一次裁剪策略在实现层面与预期一致。  
 
-现在的缺点:
-即使修复随机性，单 batch 评估仍可能方差偏大。
+### 2.2 当前主要风险
+1. 虽然 clip 退饱和，但 `mean_epe_12` 没有出现稳定下降。  
+2. `std_epe_12` 间歇性放大，说明 12 子网中尾部子网波动/退化较明显。  
+3. 从 `arch_rank_12` 看，`arch_index=9` 连续处于最差且多次恶化到 `10+`，是方差放大的主要来源之一。  
+4. `arch_index=4` 也常驻后段，属于次级风险子网。  
 
-优化选项 A（推荐）:
-每个 arch 固定评估 `K` 个 val batch（例如 K=2 或 4）再取均值。
-优点: 指标更稳；可线性调节耗时。
-缺点: eval 时间增加。
-
-优化选项 B:
-固定 1 个 batch 但固定样本 ID。
-优点: 成本最低。
-缺点: 代表性不足，易过拟合该批次。
-
----
-
-## 4. P1-4: BN Recal 仍是随机批次
-
-问题具体描述:
-BN recal 每个 arch 都使用随机 train batch，导致同一 arch 在不同 epoch 的 BN 统计本身也在抖动。
-
-当时实现考虑:
-通过随机 train batch 近似真实训练分布，代码简单。
-
-现在的缺点:
-它会把额外方差注入 eval 指标，弱化 epoch 间可比性。
-
-优化选项 A（推荐）:
-BN recal 改为固定 train 批次集合（按顺序前 `bn_recal_batches` 批）。
-优点: 与“固定 val 批次”配套，整体评估更稳。
-缺点: 固定批次可能对数据分布覆盖不足。
-
-优化选项 B:
-保留随机 BN recal，但记录每次 BN recal 所用样本索引摘要（hash）。
-优点: 开销很小，后续可追溯。
-缺点: 不能直接降低方差，只能辅助诊断。
+### 2.3 对当前阶段的解释
+1. 之前的瓶颈（过强裁剪）已被移除。  
+2. 现在的瓶颈更像“优化动力学偏激进”而非“梯度被截断”。  
+3. 由于 batch 级裁剪 + 高阈值（200）显著放松约束，当前学习率 `1e-4` 可能偏高，导致尾部子网漂移。  
 
 ---
 
-## 5. P1-5: 建议增加的低开销日志（不明显影响训练效率）
+## 3. 下一步建议（仅超网训练，不涉及子网选择）
 
-建议新增字段:
-1. `clip_checks` 与 `expected_clip_checks`（用于立刻发现 micro-batch 配置不一致）。
-2. `grad_norm_p50/p90/p99`（每 epoch 统计一次）。
-3. `eval_seconds`、`bn_recal_seconds`（拆分评估耗时瓶颈）。
-4. `per_arch_epe_min/median/max`（比只看均值更有诊断力）。
-5. `kendall_tau_prev`（基于 12 个子网 `per_arch_epe` 与上一个 eval 的排序一致性）。
+## P0（推荐先做）：在保持 batch 级裁剪不变的前提下收敛优化动力学
 
-这些统计都可在 epoch 级聚合，几乎不增加训练图计算负担。
+### P0-A 学习率下调（优先级最高）
+目标:
+在不回退 clip 机制的前提下，抑制尾部子网漂移。
+
+建议:
+1. 将 `lr` 从 `1e-4` 下调到 `5e-5` 先跑 8-12 个 epoch。  
+2. 若仍有明显尾部抖动，再下调到 `3e-5`。  
+
+判据:
+1. `mean_epe_12` 恢复下降或至少回到 104 附近。  
+2. `std_epe_12` 长期回落到 <= `0.04` 区间。  
+3. `arch_index=9` 的 EPE 不再频繁冲到 `10+`。  
+
+### P0-B Clip 阈值微收紧（第二优先级）
+目标:
+在“不过饱和”前提下增加一点约束，降低极端步长。
+
+建议:
+1. 保留 batch 级裁剪。  
+2. 将阈值由 `200` 试到 `160`，必要时试 `120`。  
+
+判据:
+1. `clip_rate` 保持低但非零（例如 `0.02~0.15` 区间可接受）。  
+2. `mean_epe_12` 不劣化，`std_epe_12` 收敛更稳。  
 
 ---
 
-## 6. P2-6: 是否存在训练“硬故障”
+## P1（若 P0 无效再做）：加监控，不先改结构
 
-当前判断:
-1. 从你贴的日志看，没有 NaN/崩溃/发散到不可训练的硬故障迹象。
-2. 主要问题是“评估信号噪声过高 + 裁剪长时间满触发”，这会让曲线难看、收敛慢、排名不稳。
+### P1-A 低成本日志补充（可选）
+建议新增:
+1. `worst_arch_epe` 与 `worst_arch_idx`（直接定位尾部波动源）。  
+2. `best_arch_epe` 与 `best_arch_idx`（观察头部是否同步改善）。  
+3. `tail_gap = worst_arch_epe - median_arch_epe`（衡量排名尾部拖累程度）。  
 
----
-
-## 7. 执行顺序（建议）
-
-1. 先做 P0-1: 固定 eval batch + 中心裁剪（仅 eval 路径）。
-2. 做 P0-2 的诊断版日志增强，不立即改裁剪阈值。
-3. 跑 5~10 个 epoch，观察 `clip_rate`、`grad_norm` 分位数、`kendall_tau_prev`。
-4. 若 `clip_rate` 仍接近 1，再做小步阈值试验（5 -> 20 -> 50）。
-5. 最后再决定是否实施“累积后一次裁剪”的结构性改动。
+说明:
+这些是统计层补充，不影响训练图效率。  
 
 ---
 
-## 8. 与断点恢复兼容性
+## 4. 实验执行协议（下一轮）
 
-兼容且推荐先做:
-1. eval 固定批次与中心裁剪（只影响评估输入，不改权重形状）。
-2. 新增日志字段（只增观测，不改训练图参数）。
+1. 每次只改一个主变量（先改 LR，再改 clip 阈值）。  
+2. 保持以下条件固定:
+- `batch_size`
+- `micro_batch_size`
+- `eval_batches_per_arch=4`
+- `bn_recal_batches`
+- 数据路径与 eval 配置
+3. 每档至少跑 8-12 epoch 再判定。  
+4. 对比指标最少包括:
+- `mean_epe_12`
+- `std_epe_12`
+- `clip_rate`
+- `grad_norm` / `grad_p90`
+- `arch_rank_12` 尾部稳定性
 
-需要谨慎分实验名:
-1. 改裁剪阈值、改裁剪位置（会改变训练动力学；checkpoint 可读，但曲线不可与旧 run 直接同口径比较）。
+---
+
+## 5. 兼容性说明
+1. 当前改动不改变模型变量形状，checkpoint 兼容。  
+2. 可继续断点恢复训练。  
+3. 做趋势对比时需标注“裁剪机制切换点”和“阈值切换点”。  

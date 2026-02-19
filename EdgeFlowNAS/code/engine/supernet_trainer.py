@@ -455,6 +455,7 @@ def train_supernet(config: Dict[str, Any]) -> int:
             epoch_clip_trigger_count = 0
             epoch_clip_check_count = 0
             epoch_grad_norm_values: List[float] = []
+            epoch_lr_last = float(base_lr)
             for _ in step_iterator:
                 cycle_codes = generate_fair_cycle(rng=sampler_rng, num_blocks=9)
                 _update_fairness_counts(counts=fairness_counts, cycle_codes=cycle_codes)
@@ -463,6 +464,7 @@ def train_supernet(config: Dict[str, Any]) -> int:
                 input_batch = standardize_image_tensor(input_batch)
 
                 current_lr = cosine_lr(base_lr=base_lr, step_idx=global_step, total_steps=total_steps)
+                epoch_lr_last = float(current_lr)
                 micro_slices = [
                     (start, min(start + micro_batch_size, batch_size))
                     for start in range(0, batch_size, micro_batch_size)
@@ -539,7 +541,7 @@ def train_supernet(config: Dict[str, Any]) -> int:
                     "mean_epe_12": float(eval_info["mean_epe_12"]),
                     "std_epe_12": float(eval_info["std_epe_12"]),
                     "fairness_gap": float(_fairness_gap(fairness_counts)),
-                    "lr": float(cosine_lr(base_lr=base_lr, step_idx=global_step, total_steps=total_steps)),
+                    "lr": float(epoch_lr_last),
                     "bn_recal_batches": float(bn_recal_batches),
                     "eval_batches_per_arch": float(eval_batches_per_arch),
                     "train_loss_epoch_avg": float(train_loss_epoch_avg),
@@ -580,8 +582,9 @@ def train_supernet(config: Dict[str, Any]) -> int:
                         extra_payload={"row": row},
                     )
                 logger.info(
-                    "epoch=%d loss=%.6f mean_epe_12=%.6f std_epe_12=%.6f fairness_gap=%.2f grad_norm=%.4f grad_p90=%.4f clip_count=%d clip_rate=%.4f arch_rank_12=%s",
+                    "epoch=%d lr=%.2e loss=%.6f mean_epe_12=%.6f std_epe_12=%.6f fairness_gap=%.2f grad_norm=%.4f grad_p90=%.4f clip_count=%d clip_rate=%.4f arch_rank_12=%s",
                     epoch_idx,
+                    float(row["lr"]),
                     float(train_loss_epoch_avg),
                     row["mean_epe_12"],
                     row["std_epe_12"],
@@ -619,8 +622,9 @@ def train_supernet(config: Dict[str, Any]) -> int:
                     },
                 )
                 logger.info(
-                    "epoch=%d loss=%.6f eval=skipped fairness_gap=%.2f grad_norm=%.4f grad_p90=%.4f clip_count=%d clip_rate=%.4f",
+                    "epoch=%d lr=%.2e loss=%.6f eval=skipped fairness_gap=%.2f grad_norm=%.4f grad_p90=%.4f clip_count=%d clip_rate=%.4f",
                     epoch_idx,
+                    float(epoch_lr_last),
                     float(train_loss_epoch_avg),
                     float(_fairness_gap(fairness_counts)),
                     float(train_grad_norm_epoch_avg),
