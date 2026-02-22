@@ -22,7 +22,8 @@ train:
   distill:
     enabled: false
     lambda: 1.0
-    teacher_ckpt: ""
+    teacher_type: "edgeflownet"
+    teacher_ckpt: "../EdgeFlowNet/checkpoints/best.ckpt"
     teacher_arch_code: "0 0 0 0 2 1 2 2 2"
     layer_weights: ""
 

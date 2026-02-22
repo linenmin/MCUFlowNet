@@ -38,6 +38,7 @@ class MultiScaleResNet(BaseLayers):
             NumOut = 1
         self.NumOut = NumOut
         self.currBlock = 0
+        self.FeaturePyramid = None
         self.UncType = UncType
         if(self.UncType == 'Aleatoric' or self.UncType == 'Inlier' or self.UncType == 'LinearSoftplus'):
             # Each channel with also have a variance associated with it
@@ -118,13 +119,15 @@ class MultiScaleResNet(BaseLayers):
             # Extra ConvTranspose for upscaling
             Net = self.ConvTranspose(inputs = Net, filters = NumFilters)
 
+        feat_low = Net
         NetOut = self.ConvTranspose(inputs = Net, filters = self.NumOut, strides=(1,1), kernel_size=(7,7))
         Nets.append(NetOut)
         print(NetOut)
-            
+             
         # ConvTranspose
         NumFilters = int(NumFilters/self.ExpansionFactor)
         Net = self.ConvTransposeBNReLUBlock(inputs = Net, filters = NumFilters, kernel_size = (5,5))
+        feat_mid = Net
         
         NetOut = self.ConvTranspose(inputs = Net, filters = self.NumOut, strides=(1,1), kernel_size=(7,7))
         Nets.append(NetOut)
@@ -133,11 +136,13 @@ class MultiScaleResNet(BaseLayers):
         # ConvTranspose
         NumFilters = int(NumFilters/self.ExpansionFactor)
         Net = self.ConvTransposeBNReLUBlock(inputs = Net, filters = NumFilters, kernel_size = (7,7))
+        feat_high = Net
 
         # ConvTranspose
         Net = self.ConvTranspose(inputs = Net, filters = self.NumOut, kernel_size = (7,7), strides = (1,1), activation=None)
         Nets.append(Net)
         print(Net)
+        self.FeaturePyramid = [feat_low, feat_mid, feat_high]
         return Nets
         
     def Network(self):
@@ -149,3 +154,8 @@ class MultiScaleResNet(BaseLayers):
                 # Update counter used for looping over warpType
                 self.currBlock += 1
         return OutNow
+
+    def FeaturePyramidOutputs(self):
+        if(self.FeaturePyramid is None):
+            self.Network()
+        return self.FeaturePyramid

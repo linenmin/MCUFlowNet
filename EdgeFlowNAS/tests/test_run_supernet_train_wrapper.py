@@ -31,6 +31,8 @@ class TestRunSupernetTrainWrapper(unittest.TestCase):
                 "--distill_enabled",
                 "--distill_lambda",
                 "1.5",
+                "--distill_teacher_type",
+                "supernet",
                 "--distill_teacher_ckpt",
                 "outputs/supernet/exp/checkpoints/supernet_best.ckpt",
                 "--distill_teacher_arch_code",
@@ -42,6 +44,7 @@ class TestRunSupernetTrainWrapper(unittest.TestCase):
         overrides = _build_overrides(args)
         self.assertTrue(overrides["train.distill.enabled"])
         self.assertAlmostEqual(overrides["train.distill.lambda"], 1.5)
+        self.assertEqual(overrides["train.distill.teacher_type"], "supernet")
         self.assertEqual(
             overrides["train.distill.teacher_ckpt"],
             "outputs/supernet/exp/checkpoints/supernet_best.ckpt",

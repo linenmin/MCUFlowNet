@@ -1,10 +1,12 @@
 """Supernet training engine."""
 
 import csv
+import importlib
 import math
 import random
 import re
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -250,6 +252,30 @@ def _resolve_checkpoint_prefix(path_like: str) -> Path:
     return Path(text)
 
 
+def _resolve_distill_teacher_type(raw_value: Any) -> str:
+    """Normalize distillation teacher type."""
+    text = str(raw_value or "edgeflownet").strip().lower()
+    if text in ("edgeflownet", "edge_flow_net", "edgeflownet_msresnet", "edgeflownet_multiscale"):
+        return "edgeflownet"
+    if text in ("supernet", "supernet_arch"):
+        return "supernet"
+    raise ValueError(f"unsupported distill teacher_type: {raw_value}")
+
+
+def _load_edgeflownet_network_class() -> Any:
+    """Load EdgeFlowNet MultiScaleResNet class from sibling project."""
+    edge_code_root = project_root().parent / "EdgeFlowNet" / "code"
+    if not edge_code_root.exists():
+        raise RuntimeError(f"EdgeFlowNet code path not found: {edge_code_root}")
+    if str(edge_code_root) not in sys.path:
+        sys.path.insert(0, str(edge_code_root))
+    module = importlib.import_module("network.MultiScaleResNet")
+    network_cls = getattr(module, "MultiScaleResNet", None)
+    if network_cls is None:
+        raise RuntimeError("failed to load EdgeFlowNet MultiScaleResNet class")
+    return network_cls
+
+
 def _build_teacher_restore_map(
     teacher_vars: List[tf.Variable],
     checkpoint_prefix: Path,
@@ -321,6 +347,7 @@ def _build_graph(config: Dict[str, Any]) -> Dict[str, object]:
     pred_channels = int(flow_channels * 2)
     distill_enabled = bool(distill_cfg.get("enabled", False))
     distill_lambda = float(distill_cfg.get("lambda", 1.0))
+    distill_teacher_type = _resolve_distill_teacher_type(distill_cfg.get("teacher_type", "edgeflownet"))
     distill_layer_weights = _parse_float_list(distill_cfg.get("layer_weights", ""))
     teacher_arch_code = _parse_teacher_arch_code(distill_cfg.get("teacher_arch_code", None), num_blocks=9)
     teacher_ckpt = str(distill_cfg.get("teacher_ckpt", "")).strip()
@@ -358,19 +385,37 @@ def _build_graph(config: Dict[str, Any]) -> Dict[str, object]:
     teacher_vars: List[tf.Variable] = []
 
     if distill_enabled:
-        teacher_arch_code_ph = tf.compat.v1.placeholder(tf.int32, shape=[9], name="TeacherArchCode")
         with tf.compat.v1.variable_scope("teacher"):
             # 教师图与学生图解耦，避免共享训练变量。
-            teacher_model = MultiScaleResNetSupernet(
-                input_ph=input_ph,
-                arch_code_ph=teacher_arch_code_ph,
-                is_training_ph=tf.constant(False, dtype=tf.bool),
-                num_out=pred_channels,
-                init_neurons=32,
-                expansion_factor=2.0,
-            )
-            teacher_model.build()
-            teacher_features = teacher_model.feature_pyramid()
+            if distill_teacher_type == "supernet":
+                teacher_arch_code_ph = tf.compat.v1.placeholder(tf.int32, shape=[9], name="TeacherArchCode")
+                teacher_model = MultiScaleResNetSupernet(
+                    input_ph=input_ph,
+                    arch_code_ph=teacher_arch_code_ph,
+                    is_training_ph=tf.constant(False, dtype=tf.bool),
+                    num_out=pred_channels,
+                    init_neurons=32,
+                    expansion_factor=2.0,
+                )
+                teacher_model.build()
+                teacher_features = teacher_model.feature_pyramid()
+            else:
+                edge_network_cls = _load_edgeflownet_network_class()
+                teacher_model = edge_network_cls(
+                    InputPH=input_ph,
+                    NumOut=pred_channels,
+                    InitNeurons=32,
+                    ExpansionFactor=2.0,
+                    NumSubBlocks=2,
+                    NumBlocks=1,
+                    Suffix="",
+                    UncType=None,
+                )
+                teacher_model.Network()
+                if hasattr(teacher_model, "FeaturePyramidOutputs"):
+                    teacher_features = teacher_model.FeaturePyramidOutputs()
+                else:
+                    raise RuntimeError("EdgeFlowNet teacher model missing FeaturePyramidOutputs")
         if distill_layer_weights and len(distill_layer_weights) != len(student_features):
             raise RuntimeError("distill.layer_weights length must match feature pyramid length")
         loss_distill = build_channel_max_distill_loss(
@@ -456,6 +501,7 @@ def _build_graph(config: Dict[str, Any]) -> Dict[str, object]:
         "apply_op": apply_op,
         "distill_enabled": bool(distill_enabled),
         "distill_lambda": float(distill_lambda),
+        "distill_teacher_type": distill_teacher_type,
         "teacher_arch_code": [int(item) for item in teacher_arch_code],
         "teacher_ckpt": teacher_ckpt,
         "teacher_vars": teacher_vars,
@@ -640,6 +686,7 @@ def train_supernet(config: Dict[str, Any]) -> int:
     logger.info("grad_clip_global_norm=%.4f", float(train_cfg.get("grad_clip_global_norm", 5.0)))
     logger.info("distill_enabled=%s", str(bool(distill_cfg.get("enabled", False))).lower())
     if bool(distill_cfg.get("enabled", False)):
+        logger.info("distill_teacher_type=%s", _resolve_distill_teacher_type(distill_cfg.get("teacher_type", "edgeflownet")))
         logger.info("distill_lambda=%.4f", float(distill_cfg.get("lambda", 1.0)))
         logger.info("distill_teacher_ckpt=%s", str(distill_cfg.get("teacher_ckpt", "")).strip())
 
@@ -705,6 +752,7 @@ def train_supernet(config: Dict[str, Any]) -> int:
             last_eval_metric = float(early_stop.best_metric) if np.isfinite(early_stop.best_metric) else float("inf")
         epochs_ran = 0
         distill_enabled = bool(graph_obj.get("distill_enabled", False))
+        distill_teacher_type = str(graph_obj.get("distill_teacher_type", "edgeflownet"))
         teacher_arch_code_ph = graph_obj.get("teacher_arch_code_ph", None)
         teacher_arch_code = np.asarray(graph_obj.get("teacher_arch_code", []), dtype=np.int32)
 
@@ -755,7 +803,7 @@ def train_supernet(config: Dict[str, Any]) -> int:
                             graph_obj["is_training_ph"]: True,
                             graph_obj["lr_ph"]: current_lr,
                         }
-                        if distill_enabled and teacher_arch_code_ph is not None:
+                        if distill_enabled and distill_teacher_type == "supernet" and teacher_arch_code_ph is not None:
                             # 蒸馏模式下教师架构编码固定，保证教师表征锚点稳定。
                             feed[teacher_arch_code_ph] = teacher_arch_code
                         is_last_accum = bool(
