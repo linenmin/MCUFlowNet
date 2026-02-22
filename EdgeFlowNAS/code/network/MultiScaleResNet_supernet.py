@@ -25,6 +25,7 @@ class MultiScaleResNetSupernet(BaseLayers):
         self.init_neurons = int(init_neurons)
         self.expansion_factor = float(expansion_factor)
         self._preds = None
+        self._feature_pyramid = None
 
     def _select_by_index(self, candidates, index_tensor, name):
         """Select one candidate tensor by one-hot gate."""
@@ -43,11 +44,18 @@ class MultiScaleResNetSupernet(BaseLayers):
             return self.relu(inputs=net, name="res_relu")
 
     def _deep_choice_block(self, inputs, filters, choice_idx, name):
-        """Depth choice: deep1/deep2/deep3."""
+        """Depth choice with decoupled branches: deep1/deep2/deep3."""
         with tf.compat.v1.variable_scope(name):
-            out1 = self._res_block(inputs=inputs, filters=filters, name="deep1")
-            out2 = self._res_block(inputs=out1, filters=filters, name="deep2")
-            out3 = self._res_block(inputs=out2, filters=filters, name="deep3")
+            # 三个深度分支共享输入，避免原嵌套路径的梯度串扰。
+            out1 = self._res_block(inputs=inputs, filters=filters, name="branch1_block1")
+
+            out2 = self._res_block(inputs=inputs, filters=filters, name="branch2_block1")
+            out2 = self._res_block(inputs=out2, filters=filters, name="branch2_block2")
+
+            out3 = self._res_block(inputs=inputs, filters=filters, name="branch3_block1")
+            out3 = self._res_block(inputs=out3, filters=filters, name="branch3_block2")
+            out3 = self._res_block(inputs=out3, filters=filters, name="branch3_block3")
+
             return self._select_by_index([out1, out2, out3], choice_idx, name="deep_select")
 
     def _head_choice_conv(self, inputs, filters, choice_idx, name):
@@ -119,5 +127,13 @@ class MultiScaleResNetSupernet(BaseLayers):
             h2 = self.relu(inputs=h2, name="H2ReLU")
             out_1_1 = self._head_choice_conv(inputs=h2, filters=self.num_out, choice_idx=arch[8], name="H2Out")
 
+        # 记录骨干多尺度特征，供蒸馏等训练增强模块复用。
+        self._feature_pyramid = [net_low, net_mid, net_high]
         self._preds = [out_1_4, out_1_2, out_1_1]
         return self._preds
+
+    def feature_pyramid(self):
+        """Return cached multi-scale backbone features."""
+        if self._preds is None:
+            self.build()
+        return self._feature_pyramid

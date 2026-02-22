@@ -3,6 +3,7 @@
 import csv
 import math
 import random
+import re
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, List
@@ -22,8 +23,8 @@ from code.engine.checkpoint_manager import (
 )
 from code.engine.early_stop import EarlyStopState, update_early_stop
 from code.engine.eval_step import build_epe_metric
-from code.engine.train_step import add_weight_decay, build_multiscale_uncertainty_loss
-from code.nas.eval_pool_builder import build_eval_pool, check_eval_pool_coverage
+from code.engine.train_step import add_weight_decay, build_channel_max_distill_loss, build_multiscale_uncertainty_loss
+from code.nas.eval_pool_builder import BILINEAR_BASELINE_ARCH_CODE, build_eval_pool, check_eval_pool_coverage
 from code.nas.fair_sampler import generate_fair_cycle
 from code.network.MultiScaleResNet_supernet import MultiScaleResNetSupernet
 from code.optim.lr_scheduler import cosine_lr
@@ -186,6 +187,7 @@ def _write_eval_history(csv_path: Path, rows: List[Dict[str, Any]]) -> None:
         "train_grad_norm_p99",
         "clip_trigger_count",
         "clip_trigger_rate",
+        "train_distill_loss_epoch_avg",
         "arch_rank_12",
     ]
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
@@ -195,14 +197,135 @@ def _write_eval_history(csv_path: Path, rows: List[Dict[str, Any]]) -> None:
             writer.writerow(row)
 
 
+def _parse_float_list(raw_value: Any) -> List[float]:
+    """Parse float list from string/list config payload."""
+    if raw_value is None:
+        return []
+    if isinstance(raw_value, (list, tuple)):
+        return [float(item) for item in raw_value]
+    if isinstance(raw_value, str):
+        text = raw_value.strip()
+        if not text:
+            return []
+        tokens = [token for token in re.split(r"[,\s]+", text) if token]
+        return [float(token) for token in tokens]
+    raise ValueError(f"unsupported float list payload type: {type(raw_value)}")
+
+
+def _parse_teacher_arch_code(raw_value: Any, num_blocks: int = 9) -> List[int]:
+    """Parse teacher arch code with fallback to bilinear baseline code."""
+    default_code = [int(item) for item in BILINEAR_BASELINE_ARCH_CODE]
+    if raw_value is None:
+        return default_code
+    if isinstance(raw_value, str):
+        text = raw_value.strip()
+        if not text:
+            return default_code
+        tokens = [token for token in re.split(r"[,\s]+", text) if token]
+    elif isinstance(raw_value, (list, tuple)):
+        tokens = [str(token) for token in raw_value]
+    else:
+        raise ValueError(f"unsupported teacher_arch_code type: {type(raw_value)}")
+    if len(tokens) != int(num_blocks):
+        raise ValueError(f"teacher_arch_code length must be {num_blocks}, got {len(tokens)}")
+    parsed: List[int] = []
+    for token in tokens:
+        value = int(token)
+        if value not in (0, 1, 2):
+            raise ValueError(f"teacher_arch_code only supports 0/1/2, got {value}")
+        parsed.append(value)
+    return parsed
+
+
+def _resolve_checkpoint_prefix(path_like: str) -> Path:
+    """Resolve a checkpoint prefix path from raw user config string."""
+    candidate = Path(str(path_like).strip())
+    if not candidate.is_absolute():
+        candidate = project_root() / candidate
+    text = str(candidate)
+    for suffix in (".index", ".meta", ".meta.json"):
+        if text.endswith(suffix):
+            text = text[: -len(suffix)]
+    text = re.sub(r"\.data-\d+-of-\d+$", "", text)
+    return Path(text)
+
+
+def _build_teacher_restore_map(
+    teacher_vars: List[tf.Variable],
+    checkpoint_prefix: Path,
+    logger,
+) -> Dict[str, tf.Variable]:
+    """Build variable-name map for teacher checkpoint restore."""
+    if not teacher_vars:
+        raise RuntimeError("teacher graph variables are empty")
+    reader = tf.compat.v1.train.NewCheckpointReader(str(checkpoint_prefix))
+    ckpt_shapes = reader.get_variable_to_shape_map()
+    restore_map: Dict[str, tf.Variable] = {}
+    missing_vars: List[str] = []
+    for var in teacher_vars:
+        var_name = var.name.split(":")[0]
+        stripped_name = var_name[len("teacher/") :] if var_name.startswith("teacher/") else var_name
+        matched_name = None
+        for candidate_name in (stripped_name, var_name):
+            if candidate_name not in ckpt_shapes:
+                continue
+            ckpt_shape = [int(item) for item in ckpt_shapes[candidate_name]]
+            var_shape = [int(item) for item in var.shape.as_list()]
+            if ckpt_shape == var_shape:
+                matched_name = candidate_name
+                break
+        if matched_name is None:
+            missing_vars.append(stripped_name)
+            continue
+        restore_map[matched_name] = var
+    if not restore_map:
+        raise RuntimeError("no teacher variables matched checkpoint entries")
+    missing_ratio = float(len(missing_vars)) / float(max(1, len(teacher_vars)))
+    if missing_ratio > 0.5:
+        raise RuntimeError(
+            f"teacher checkpoint mismatch too large: missing={len(missing_vars)} total={len(teacher_vars)}"
+        )
+    if missing_vars:
+        logger.warning("teacher checkpoint partial restore: missing_vars=%d", len(missing_vars))
+    return restore_map
+
+
+def _try_restore_teacher_state(sess, graph_obj: Dict[str, object], logger) -> None:
+    """Restore teacher checkpoint once when distillation is enabled."""
+    if not bool(graph_obj.get("distill_enabled", False)):
+        return
+    teacher_ckpt_text = str(graph_obj.get("teacher_ckpt", "")).strip()
+    if not teacher_ckpt_text:
+        raise RuntimeError("distill.enabled=true requires non-empty train.distill.teacher_ckpt")
+    ckpt_prefix = _resolve_checkpoint_prefix(path_like=teacher_ckpt_text)
+    ckpt_found = find_existing_checkpoint(path_prefix=ckpt_prefix)
+    if ckpt_found is None:
+        raise RuntimeError(f"teacher checkpoint not found: {ckpt_prefix}")
+    teacher_vars = graph_obj.get("teacher_vars", [])
+    if not isinstance(teacher_vars, list):
+        raise RuntimeError("teacher_vars payload type error")
+    restore_map = _build_teacher_restore_map(teacher_vars=teacher_vars, checkpoint_prefix=ckpt_found, logger=logger)
+    teacher_saver = tf.compat.v1.train.Saver(var_list=restore_map, max_to_keep=1)
+    teacher_saver.restore(sess, str(ckpt_found))
+    logger.info("teacher checkpoint restored=%s matched_vars=%d", str(ckpt_found), len(restore_map))
+
+
 def _build_graph(config: Dict[str, Any]) -> Dict[str, object]:
     """Build TF1 supernet training graph."""
     train_cfg = config.get("train", {})
+    distill_cfg = train_cfg.get("distill", {})
     data_cfg = config.get("data", {})
     input_h = int(data_cfg.get("input_height", 180))
     input_w = int(data_cfg.get("input_width", 240))
     flow_channels = int(data_cfg.get("flow_channels", 2))
     pred_channels = int(flow_channels * 2)
+    distill_enabled = bool(distill_cfg.get("enabled", False))
+    distill_lambda = float(distill_cfg.get("lambda", 1.0))
+    distill_layer_weights = _parse_float_list(distill_cfg.get("layer_weights", ""))
+    teacher_arch_code = _parse_teacher_arch_code(distill_cfg.get("teacher_arch_code", None), num_blocks=9)
+    teacher_ckpt = str(distill_cfg.get("teacher_ckpt", "")).strip()
+    if distill_enabled and not teacher_ckpt:
+        raise RuntimeError("distill.enabled=true requires train.distill.teacher_ckpt")
 
     input_ph = tf.compat.v1.placeholder(tf.float32, shape=[None, input_h, input_w, 6], name="Input")
     label_ph = tf.compat.v1.placeholder(tf.float32, shape=[None, input_h, input_w, flow_channels], name="Label")
@@ -220,9 +343,54 @@ def _build_graph(config: Dict[str, Any]) -> Dict[str, object]:
         expansion_factor=2.0,
     )
     preds = model.build()
+    student_features = model.feature_pyramid()
+    base_loss_terms = build_multiscale_uncertainty_loss(
+        preds=preds,
+        label_ph=label_ph,
+        num_out=flow_channels,
+        return_terms=True,
+    )
+    loss_optical = base_loss_terms["optical_total"]
+    loss_uncertainty = base_loss_terms["uncertainty_total"]
+    loss_distill = tf.constant(0.0, dtype=tf.float32, name="distill_loss_disabled")
+    loss_core = base_loss_terms["total"]
+    teacher_arch_code_ph = None
+    teacher_vars: List[tf.Variable] = []
 
-    loss_tensor = build_multiscale_uncertainty_loss(preds=preds, label_ph=label_ph, num_out=flow_channels)
-    loss_tensor = add_weight_decay(loss_tensor=loss_tensor, weight_decay=float(train_cfg.get("weight_decay", 0.0)))
+    if distill_enabled:
+        teacher_arch_code_ph = tf.compat.v1.placeholder(tf.int32, shape=[9], name="TeacherArchCode")
+        with tf.compat.v1.variable_scope("teacher"):
+            # 教师图与学生图解耦，避免共享训练变量。
+            teacher_model = MultiScaleResNetSupernet(
+                input_ph=input_ph,
+                arch_code_ph=teacher_arch_code_ph,
+                is_training_ph=tf.constant(False, dtype=tf.bool),
+                num_out=pred_channels,
+                init_neurons=32,
+                expansion_factor=2.0,
+            )
+            teacher_model.build()
+            teacher_features = teacher_model.feature_pyramid()
+        if distill_layer_weights and len(distill_layer_weights) != len(student_features):
+            raise RuntimeError("distill.layer_weights length must match feature pyramid length")
+        loss_distill = build_channel_max_distill_loss(
+            student_features=student_features,
+            teacher_features=teacher_features,
+            layer_weights=(distill_layer_weights or None),
+        )
+        loss_core = tf.add(loss_core, float(distill_lambda) * loss_distill, name="loss_core_with_distill")
+        teacher_vars = [var for var in tf.compat.v1.global_variables() if var.name.startswith("teacher/")]
+        if not teacher_vars:
+            raise RuntimeError("distill enabled but teacher graph variables are empty")
+
+    student_trainable_vars = [var for var in tf.compat.v1.trainable_variables() if not var.name.startswith("teacher/")]
+    if not student_trainable_vars:
+        raise RuntimeError("student trainable variables are empty")
+    loss_tensor = add_weight_decay(
+        loss_tensor=loss_core,
+        weight_decay=float(train_cfg.get("weight_decay", 0.0)),
+        trainable_vars=student_trainable_vars,
+    )
 
     optimizer = tf.compat.v1.train.AdamOptimizer(
         learning_rate=lr_ph,
@@ -230,7 +398,7 @@ def _build_graph(config: Dict[str, Any]) -> Dict[str, object]:
         beta2=0.999,
         epsilon=1e-8,
     )
-    grads_and_vars = optimizer.compute_gradients(loss_tensor)
+    grads_and_vars = optimizer.compute_gradients(loss_tensor, var_list=student_trainable_vars)
     grads = [grad for grad, _ in grads_and_vars if grad is not None]
     vars_ = [var for grad, var in grads_and_vars if grad is not None]
     clip_norm = float(train_cfg.get("grad_clip_global_norm", 5.0))
@@ -250,7 +418,8 @@ def _build_graph(config: Dict[str, Any]) -> Dict[str, object]:
         zero_ops.append(tf.compat.v1.assign(accum_var, tf.zeros_like(accum_var), name=f"strict_zero_{idx}"))
         add_ops.append(tf.compat.v1.assign_add(accum_var, grad, name=f"strict_add_{idx}"))
 
-    bn_updates = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.UPDATE_OPS)
+    bn_updates_all = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.UPDATE_OPS)
+    bn_updates = [op for op in bn_updates_all if not op.name.startswith("teacher/")]
     with tf.control_dependencies(add_ops + bn_updates):
         accum_op = tf.no_op(name="strict_accum_done")
 
@@ -261,17 +430,23 @@ def _build_graph(config: Dict[str, Any]) -> Dict[str, object]:
     apply_op = optimizer.apply_gradients(list(zip(clipped_avg_grads, vars_)), name="strict_apply")
 
     epe_tensor = build_epe_metric(pred_tensor=preds[-1], label_ph=label_ph, num_out=flow_channels)
-    saver = tf.compat.v1.train.Saver(max_to_keep=5)
+    student_global_vars = [var for var in tf.compat.v1.global_variables() if not var.name.startswith("teacher/")]
+    saver = tf.compat.v1.train.Saver(var_list=student_global_vars, max_to_keep=5)
 
     return {
         "input_ph": input_ph,
         "label_ph": label_ph,
         "arch_code_ph": arch_code_ph,
+        "teacher_arch_code_ph": teacher_arch_code_ph,
         "is_training_ph": is_training_ph,
         "lr_ph": lr_ph,
         "accum_divisor_ph": accum_divisor_ph,
         "preds": preds,
         "loss": loss_tensor,
+        "loss_core": loss_core,
+        "loss_optical": loss_optical,
+        "loss_uncertainty": loss_uncertainty,
+        "loss_distill": loss_distill,
         "epe": epe_tensor,
         "global_grad_norm": global_norm,
         "clip_trigger": clip_trigger,
@@ -279,6 +454,11 @@ def _build_graph(config: Dict[str, Any]) -> Dict[str, object]:
         "zero_ops": zero_ops,
         "accum_op": accum_op,
         "apply_op": apply_op,
+        "distill_enabled": bool(distill_enabled),
+        "distill_lambda": float(distill_lambda),
+        "teacher_arch_code": [int(item) for item in teacher_arch_code],
+        "teacher_ckpt": teacher_ckpt,
+        "teacher_vars": teacher_vars,
         "saver": saver,
     }
 
@@ -427,6 +607,7 @@ def train_supernet(config: Dict[str, Any]) -> int:
     runtime_cfg = config.get("runtime", {})
     train_cfg = config.get("train", {})
     eval_cfg = config.get("eval", {})
+    distill_cfg = train_cfg.get("distill", {})
 
     seed = int(runtime_cfg.get("seed", 42))
     set_global_seed(seed)
@@ -457,6 +638,10 @@ def train_supernet(config: Dict[str, Any]) -> int:
     logger.info("eval_every_epoch=%d", eval_every_epoch)
     logger.info("eval_batches_per_arch=%d", eval_batches_per_arch)
     logger.info("grad_clip_global_norm=%.4f", float(train_cfg.get("grad_clip_global_norm", 5.0)))
+    logger.info("distill_enabled=%s", str(bool(distill_cfg.get("enabled", False))).lower())
+    if bool(distill_cfg.get("enabled", False)):
+        logger.info("distill_lambda=%.4f", float(distill_cfg.get("lambda", 1.0)))
+        logger.info("distill_teacher_ckpt=%s", str(distill_cfg.get("teacher_ckpt", "")).strip())
 
     train_provider = build_fc2_provider(config=config, split="train", seed_offset=0, provider_mode="train")
     eval_train_provider = build_fc2_provider(config=config, split="train", seed_offset=1000, provider_mode="eval")
@@ -509,6 +694,7 @@ def train_supernet(config: Dict[str, Any]) -> int:
             experiment_dir=experiment_dir,
             logger=logger,
         )
+        _try_restore_teacher_state(sess=sess, graph_obj=graph_obj, logger=logger)
         start_epoch = int(restore_state["start_epoch"])
         global_step = int(restore_state["global_step"])
         fairness_counts = _sanitize_fairness_counts(raw_counts=restore_state["fairness_counts"], num_blocks=9)
@@ -518,6 +704,9 @@ def train_supernet(config: Dict[str, Any]) -> int:
         if not np.isfinite(last_eval_metric):
             last_eval_metric = float(early_stop.best_metric) if np.isfinite(early_stop.best_metric) else float("inf")
         epochs_ran = 0
+        distill_enabled = bool(graph_obj.get("distill_enabled", False))
+        teacher_arch_code_ph = graph_obj.get("teacher_arch_code_ph", None)
+        teacher_arch_code = np.asarray(graph_obj.get("teacher_arch_code", []), dtype=np.int32)
 
         for epoch_idx in range(start_epoch, num_epochs + 1):
             epochs_ran += 1
@@ -536,6 +725,7 @@ def train_supernet(config: Dict[str, Any]) -> int:
             epoch_clip_trigger_count = 0
             epoch_clip_check_count = 0
             epoch_grad_norm_values: List[float] = []
+            epoch_distill_sum = 0.0
             epoch_lr_last = float(base_lr)
             for _ in step_iterator:
                 cycle_codes = generate_fair_cycle(rng=sampler_rng, num_blocks=9)
@@ -565,14 +755,24 @@ def train_supernet(config: Dict[str, Any]) -> int:
                             graph_obj["is_training_ph"]: True,
                             graph_obj["lr_ph"]: current_lr,
                         }
+                        if distill_enabled and teacher_arch_code_ph is not None:
+                            # 蒸馏模式下教师架构编码固定，保证教师表征锚点稳定。
+                            feed[teacher_arch_code_ph] = teacher_arch_code
                         is_last_accum = bool(
                             arch_idx == len(cycle_codes) - 1 and micro_idx == len(micro_slices) - 1
                         )
                         if is_last_accum:
-                            loss_val, _ = sess.run(
-                                [graph_obj["loss"], graph_obj["accum_op"]],
-                                feed_dict=feed,
-                            )
+                            if distill_enabled:
+                                loss_val, distill_val, _ = sess.run(
+                                    [graph_obj["loss"], graph_obj["loss_distill"], graph_obj["accum_op"]],
+                                    feed_dict=feed,
+                                )
+                            else:
+                                loss_val, _ = sess.run(
+                                    [graph_obj["loss"], graph_obj["accum_op"]],
+                                    feed_dict=feed,
+                                )
+                                distill_val = 0.0
                         else:
                             sess.run(graph_obj["accum_op"], feed_dict=feed)
 
@@ -588,6 +788,7 @@ def train_supernet(config: Dict[str, Any]) -> int:
                 epoch_clip_check_count += 1
                 global_step += 1
                 epoch_loss_sum += float(loss_val)
+                epoch_distill_sum += float(distill_val)
                 epoch_grad_norm_sum += float(grad_norm_val)
                 epoch_step_count += 1
                 step_iterator.set_postfix(loss=f"{float(loss_val):.4f}", lr=f"{float(current_lr):.2e}")
@@ -604,6 +805,7 @@ def train_supernet(config: Dict[str, Any]) -> int:
                 train_grad_norm_p90 = 0.0
                 train_grad_norm_p99 = 0.0
             clip_trigger_rate = float(epoch_clip_trigger_count) / max(1, epoch_clip_check_count)
+            train_distill_loss_epoch_avg = epoch_distill_sum / max(1, epoch_step_count)
             should_eval = bool(epoch_idx % eval_every_epoch == 0)
             if should_eval:
                 eval_info = _run_eval_epoch(
@@ -632,6 +834,7 @@ def train_supernet(config: Dict[str, Any]) -> int:
                     "train_grad_norm_p99": float(train_grad_norm_p99),
                     "clip_trigger_count": float(epoch_clip_trigger_count),
                     "clip_trigger_rate": float(clip_trigger_rate),
+                    "train_distill_loss_epoch_avg": float(train_distill_loss_epoch_avg),
                     "arch_rank_12": arch_rank_12,
                 }
                 eval_rows.append(row)
@@ -676,6 +879,8 @@ def train_supernet(config: Dict[str, Any]) -> int:
                     float(clip_trigger_rate),
                     arch_rank_12,
                 )
+                if distill_enabled:
+                    logger.info("epoch=%d distill_loss=%.6f", epoch_idx, float(train_distill_loss_epoch_avg))
                 if early_stop.bad_epochs >= patience:
                     logger.info("early stop triggered at epoch=%d", epoch_idx)
                     break
@@ -700,13 +905,15 @@ def train_supernet(config: Dict[str, Any]) -> int:
                         "train_grad_norm_p99": float(train_grad_norm_p99),
                         "clip_trigger_count": int(epoch_clip_trigger_count),
                         "clip_trigger_rate": float(clip_trigger_rate),
+                        "train_distill_loss_epoch_avg": float(train_distill_loss_epoch_avg),
                     },
                 )
                 logger.info(
-                    "epoch=%d lr=%.2e loss=%.6f eval=skipped fairness_gap=%.2f grad_norm=%.4f grad_p90=%.4f clip_count=%d clip_rate=%.4f",
+                    "epoch=%d lr=%.2e loss=%.6f distill=%.6f eval=skipped fairness_gap=%.2f grad_norm=%.4f grad_p90=%.4f clip_count=%d clip_rate=%.4f",
                     epoch_idx,
                     float(epoch_lr_last),
                     float(train_loss_epoch_avg),
+                    float(train_distill_loss_epoch_avg),
                     float(_fairness_gap(fairness_counts)),
                     float(train_grad_norm_epoch_avg),
                     float(train_grad_norm_p90),

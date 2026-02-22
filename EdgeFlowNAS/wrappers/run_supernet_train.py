@@ -37,12 +37,19 @@ def _build_overrides(args: argparse.Namespace) -> Dict[str, Any]:
     _put_override(overrides, "data.base_path", args.base_path)
     _put_override(overrides, "data.train_dir", args.train_dir)
     _put_override(overrides, "data.val_dir", args.val_dir)
+    _put_override(overrides, "eval.eval_every_epoch", args.eval_every_epoch)
+    _put_override(overrides, "train.distill.lambda", args.distill_lambda)
+    _put_override(overrides, "train.distill.teacher_ckpt", args.distill_teacher_ckpt)
+    _put_override(overrides, "train.distill.teacher_arch_code", args.distill_teacher_arch_code)
+    _put_override(overrides, "train.distill.layer_weights", args.distill_layer_weights)
 
     _put_override(overrides, "checkpoint.resume_experiment_name", args.resume_experiment_name)
     if args.load_checkpoint:
         _put_override(overrides, "checkpoint.load_checkpoint", True)
     if args.reset_early_stop_on_resume:
         _put_override(overrides, "checkpoint.reset_early_stop_on_resume", True)
+    if args.distill_enabled:
+        _put_override(overrides, "train.distill.enabled", True)
     return overrides
 
 
@@ -63,6 +70,13 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base_path", default=None, help="dataset root path")
     parser.add_argument("--train_dir", default=None, help="train folder path, absolute or relative to base_path")
     parser.add_argument("--val_dir", default=None, help="val folder path, absolute or relative to base_path")
+    # 允许在断点恢复时从 CLI 覆盖评估频率。
+    parser.add_argument("--eval_every_epoch", type=int, default=None, help="override eval frequency in epochs")
+    parser.add_argument("--distill_enabled", action="store_true", help="enable distillation loss")
+    parser.add_argument("--distill_lambda", type=float, default=None, help="distillation loss weight")
+    parser.add_argument("--distill_teacher_ckpt", default=None, help="teacher checkpoint prefix or path")
+    parser.add_argument("--distill_teacher_arch_code", default=None, help="teacher arch code, e.g. '0 0 0 0 2 1 2 2 2'")
+    parser.add_argument("--distill_layer_weights", default=None, help="distill layer weights, e.g. '1.0 1.0 1.0'")
 
     parser.add_argument("--experiment_name", default=None, help="experiment name under outputs")
     parser.add_argument("--resume_experiment_name", default=None, help="resume source experiment name")

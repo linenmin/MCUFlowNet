@@ -1,5 +1,5 @@
 """训练步图构建工具。"""  # 定义模块用途
-from typing import List  # 导入类型注解工具
+from typing import Dict, List, Optional  # 导入类型注解工具
 
 import tensorflow as tf  # 导入TensorFlow模块
 
@@ -34,7 +34,12 @@ def build_multiscale_l1_loss(preds: List[tf.Tensor], label_ph: tf.Tensor) -> tf.
     return tf.add_n(loss_terms, name="multiscale_l1_loss")  # 汇总并返回总损失
 
 
-def build_multiscale_uncertainty_loss(preds: List[tf.Tensor], label_ph: tf.Tensor, num_out: int) -> tf.Tensor:  # 定义多尺度不确定性损失函数
+def build_multiscale_uncertainty_loss(  # 定义多尺度不确定性损失函数
+    preds: List[tf.Tensor],  # 定义多尺度预测列表参数
+    label_ph: tf.Tensor,  # 定义标签参数
+    num_out: int,  # 定义光流通道数参数
+    return_terms: bool = False,  # 定义是否返回分项损失开关
+) -> tf.Tensor:  # 定义返回类型
     """构建与单模型训练对齐的LinearSoftplus多尺度损失。"""  # 说明函数用途
     loss_scales = [0.125, 0.25, 0.5, 1.0]  # 定义与原训练一致的尺度权重
     eps = 1e-3  # 定义稳定项避免除零
@@ -63,13 +68,61 @@ def build_multiscale_uncertainty_loss(preds: List[tf.Tensor], label_ph: tf.Tenso
         uncertainty_terms.append(float(weight) * loss_unc)  # 记录加权不确定性损失项
     optical_total = tf.add_n(optical_terms, name="unc_optical_total")  # 汇总全部光流L1损失项
     uncertainty_total = tf.add_n(uncertainty_terms, name="unc_uncertainty_total")  # 汇总全部不确定性损失项
-    return tf.add(optical_total, uncertainty_total, name="multiscale_uncertainty_loss")  # 返回最终联合损失
+    total_loss = tf.add(optical_total, uncertainty_total, name="multiscale_uncertainty_loss")  # 计算最终联合损失
+    if return_terms:  # 判断是否需要返回分项损失
+        return {  # 返回分项损失字典
+            "total": total_loss,  # 返回总损失
+            "optical_total": optical_total,  # 返回光流损失项
+            "uncertainty_total": uncertainty_total,  # 返回不确定性损失项
+        }
+    return total_loss  # 返回总损失张量
 
 
-def add_weight_decay(loss_tensor: tf.Tensor, weight_decay: float) -> tf.Tensor:  # 定义权重衰减叠加函数
+def _channel_maximize_abs(feature: tf.Tensor, name: str) -> tf.Tensor:  # 定义通道压缩函数
+    """Apply Channel Maximize on absolute feature maps."""  # 说明函数用途
+    abs_feature = tf.abs(feature, name=f"{name}_abs")  # 计算特征绝对值
+    return tf.reduce_max(abs_feature, axis=3, keepdims=True, name=f"{name}_channel_max")  # 在通道维做最大化压缩
+
+
+def build_channel_max_distill_loss(  # 定义蒸馏损失构建函数
+    student_features: List[tf.Tensor],  # 定义学生特征列表参数
+    teacher_features: List[tf.Tensor],  # 定义教师特征列表参数
+    layer_weights: Optional[List[float]] = None,  # 定义层权重参数
+) -> tf.Tensor:  # 定义返回类型
+    """Build parameter-free feature distillation loss by Channel Maximize."""  # 说明函数用途
+    if len(student_features) != len(teacher_features):  # 判断师生特征层数是否一致
+        raise ValueError("student_features and teacher_features must have same length")  # 抛出层数不一致异常
+    if not student_features:  # 判断特征列表是否为空
+        return tf.constant(0.0, dtype=tf.float32, name="distill_loss_empty")  # 返回零损失占位
+
+    num_layers = len(student_features)  # 读取特征层数
+    if layer_weights is None:  # 判断是否提供层权重
+        layer_weights = [1.0 for _ in range(num_layers)]  # 默认使用等权重
+    if len(layer_weights) != num_layers:  # 判断权重数量是否匹配
+        raise ValueError("layer_weights length must match feature length")  # 抛出权重数量不匹配异常
+
+    terms = []  # 初始化蒸馏损失项列表
+    for idx, (student_feat, teacher_feat, weight) in enumerate(  # 遍历每层师生特征及权重
+        zip(student_features, teacher_features, layer_weights)
+    ):
+        student_map = _channel_maximize_abs(feature=student_feat, name=f"distill_student_{idx}")  # 计算学生特征压缩图
+        teacher_map = _channel_maximize_abs(feature=teacher_feat, name=f"distill_teacher_{idx}")  # 计算教师特征压缩图
+        teacher_map = _resize_like(src=teacher_map, ref=student_map, name=f"distill_teacher_resize_{idx}")  # 对齐教师空间尺寸
+        diff = tf.square(student_map - teacher_map, name=f"distill_sq_diff_{idx}")  # 计算平方误差
+        layer_loss = tf.reduce_mean(diff, name=f"distill_layer_l2_{idx}")  # 计算当前层均值损失
+        terms.append(float(weight) * layer_loss)  # 累加加权层损失
+    return tf.add_n(terms, name="distill_loss_total")  # 返回总蒸馏损失
+
+
+def add_weight_decay(  # 定义权重衰减叠加函数
+    loss_tensor: tf.Tensor,  # 定义损失张量参数
+    weight_decay: float,  # 定义权重衰减参数
+    trainable_vars: Optional[List[tf.Variable]] = None,  # 定义可训练变量列表参数
+) -> tf.Tensor:  # 定义返回类型
     """将L2权重衰减项叠加到损失。"""  # 说明函数用途
     reg_terms = []  # 初始化正则项列表
-    for var in tf.compat.v1.trainable_variables():  # 遍历可训练变量
+    vars_to_decay = trainable_vars if trainable_vars is not None else tf.compat.v1.trainable_variables()  # 选择权重衰减变量列表
+    for var in vars_to_decay:  # 遍历可训练变量
         if "kernel" in var.name or "weights" in var.name:  # 筛选卷积/全连接权重变量
             reg_terms.append(tf.nn.l2_loss(var))  # 添加L2正则项
     if reg_terms and float(weight_decay) > 0.0:  # 判断是否启用权重衰减

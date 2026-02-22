@@ -19,6 +19,12 @@ train:
   grad_clip_global_norm: 200.0
   supernet_mode: "strict_fairness"
   uncertainty_type: "LinearSoftplus"
+  distill:
+    enabled: false
+    lambda: 1.0
+    teacher_ckpt: ""
+    teacher_arch_code: "0 0 0 0 2 1 2 2 2"
+    layer_weights: ""
 
 data:
   dataset: "FC2"
