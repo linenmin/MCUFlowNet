@@ -280,10 +280,7 @@ def _run_one_arch_eval(
     eval_batches_per_arch: int,
 ) -> float:
     """Run BN recalibration + val EPE for one arch."""
-    if hasattr(train_provider, "reset_cursor"):
-        train_provider.reset_cursor(0)
-    if hasattr(val_provider, "reset_cursor"):
-        val_provider.reset_cursor(0)
+    # Removed BN recalibration calls
     eval_batches = max(1, int(eval_batches_per_arch))
     arch_batch_epes = []
     for _ in range(eval_batches):
@@ -295,7 +292,7 @@ def _run_one_arch_eval(
                 graph_obj["input_ph"]: val_input,
                 graph_obj["label_ph"]: val_label,
                 graph_obj["arch_code_ph"]: arch_code,
-                graph_obj["is_training_ph"]: True,
+                graph_obj["is_training_ph"]: True, # Already True, kept as per instruction
             },
         )
         arch_batch_epes.append(float(epe_val))
