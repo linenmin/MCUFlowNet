@@ -16,7 +16,7 @@ from tqdm import tqdm
 
 from code.data.dataloader_builder import build_fc2_provider
 from code.data.transforms_180x240 import standardize_image_tensor
-from code.engine.eval_step import build_epe_metric
+from code.engine.eval_step import accumulate_predictions, build_epe_metric
 from code.nas.eval_pool_builder import BILINEAR_BASELINE_ARCH_CODE, build_eval_pool, check_eval_pool_coverage
 from code.network.MultiScaleResNet_supernet import MultiScaleResNetSupernet
 from code.utils.json_io import read_json, write_json
@@ -186,7 +186,8 @@ def _build_eval_graph(config: Dict[str, Any], batch_size: int) -> Dict[str, Any]
     )
     preds = model.build()
 
-    epe_tensor = build_epe_metric(pred_tensor=preds[-1], label_ph=label_ph, num_out=flow_channels)
+    pred_accum = accumulate_predictions(preds)
+    epe_tensor = build_epe_metric(pred_tensor=pred_accum, label_ph=label_ph, num_out=flow_channels)
     saver = tf.compat.v1.train.Saver(max_to_keep=5)
     return {
         "input_ph": input_ph,

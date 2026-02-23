@@ -80,13 +80,20 @@ epe_val = sess.run(
 ### 3.1 教师网络稳定无虞！
 蒸馏机制中的教师被固定为推理状态 `is_training_ph=tf.constant(False)`，这意味着教师网络在使用它 Checkpoint 中的高质量 moving statistics，完美避开了超网训练时的全局方差崩溃株连。这是一个正确的实现策略。（唯一提醒的点是蒸馏特征图通道压缩比对采用了绝对值通道最大化，这是兼容错位 NAS 设计最好的 loss 定义，这里无需修改。）
 
-### 3.2 预测量 Scale 的确认
-经过对 `MultiScaleResNet_supernet.py` 返回最后一层输出大小的复查 (经历 twice resize_conv 实现了 x4 Upsample回到 H2 = 原图大小)，模型输出已为满分辨率 `(180, 240)`，与 `label_ph` 等幅，避免了缩放比例失调造成计算数值过大的假象问题，确证之前的锅均属 Batch Normalization。
+### 3.2 预测量 Scale 的确认 & **真正的终极元凶：缺失的残差累加 (AccumPreds)**
+经过对 `MultiScaleResNet_supernet.py` 返回最后一层输出的深入复查：
+1. 模型架构在不同尺度输出光流时，其预测目标实际上是**多尺度残差**（正如 `train_step.py` 中的 `_resize_like` 与 `tf.add(flow_accum, flow_pred)` 逻辑所示）。
+2. 在原先的测试与超网验证代码中，无论是 `_build_eval_graph` 还是 `_run_eval_epoch`，都**错误地直接提取了 `preds[-1]` 作为最终输出** (`build_epe_metric(pred_tensor=preds[-1], ...)` )。
+3. `preds[-1]` 仅仅是最高分辨率 (out_1_1) 分支预测的相对前一个尺度的**微小残差**。因为其数值本身就趋近于全 0，计算 EPE 时相当于全零预测对比 Ground Truth Magnitude，于是完美得到了 10.9 这个固定的背景误差保底值！
+
+**总结性修补**: 
+在 `code/engine/eval_step.py` 中引入了 `accumulate_predictions` 通用函数，并在验证图的抽取前，将前三个尺度的多尺度残差真正累加成完整的预测特征图，从而彻底修复了验证阶段无法真实反映网络性能的致命 Bug。
 
 ---
 
 ## 4. 后续任务分配清单 (Action Items Tracker)
 
-- [ ] 本地定位打开 `supernet_trainer.py`，决定采取方案 A 或方案 B。优先应用方案 A 做降配评估。
-- [ ] 中断或者放弃当前的 `run3` (输出日志中的 Epoch < 50 伪最佳权重)，因为之前保存 Best Checker 的时候均依赖 10.9 这个随机崩溃指标，使得当前的 `best.ckpt` 对应用评估纯属运气，并不是真实的 NAS 收敛验证网。
+- [x] 本地定位打开 `supernet_trainer.py`，决定采取方案 A 或方案 B。优先应用方案 A 做降配评估。
+- [x] 在 `supernet_eval.py` 以及所有的线上离线评估 Wrapper 中追加部署 Train-Mode Validation 防止污染。
+- [x] 定位并彻底修复 10.9 保底值的核心元凶：在 EPE 结算前增加完整的 `accumulate_predictions` 操作，确保验证取到的不是单纯的高频残差。
 - [ ] 应用修改后重启任务，如果能在前 5 个 Epoch 见到 EPE 回落到个位数，则代表问题彻底修复，项目可直接顺利回归既定跑道。

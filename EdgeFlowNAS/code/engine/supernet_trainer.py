@@ -23,7 +23,7 @@ from code.engine.checkpoint_manager import (
     save_checkpoint,
 )
 from code.engine.early_stop import EarlyStopState, update_early_stop
-from code.engine.eval_step import build_epe_metric
+from code.engine.eval_step import accumulate_predictions, build_epe_metric
 from code.engine.train_step import add_weight_decay, build_channel_max_distill_loss, build_multiscale_uncertainty_loss
 from code.nas.eval_pool_builder import BILINEAR_BASELINE_ARCH_CODE, build_eval_pool, check_eval_pool_coverage
 from code.nas.fair_sampler import generate_fair_cycle
@@ -473,7 +473,8 @@ def _build_graph(config: Dict[str, Any]) -> Dict[str, object]:
     clip_trigger = tf.cast(tf.greater(global_norm, clip_norm), tf.int32, name="strict_clip_trigger")
     apply_op = optimizer.apply_gradients(list(zip(clipped_avg_grads, vars_)), name="strict_apply")
 
-    epe_tensor = build_epe_metric(pred_tensor=preds[-1], label_ph=label_ph, num_out=flow_channels)
+    pred_accum = accumulate_predictions(preds)
+    epe_tensor = build_epe_metric(pred_tensor=pred_accum, label_ph=label_ph, num_out=flow_channels)
     student_global_vars = [var for var in tf.compat.v1.global_variables() if not var.name.startswith("teacher/")]
     saver = tf.compat.v1.train.Saver(var_list=student_global_vars, max_to_keep=5)
 

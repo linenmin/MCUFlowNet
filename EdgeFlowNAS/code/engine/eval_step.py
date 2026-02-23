@@ -17,3 +17,21 @@ def build_epe_metric(pred_tensor: tf.Tensor, label_ph: tf.Tensor, num_out: int =
     sum_sq = tf.reduce_sum(sq, axis=3)  # 按通道聚合平方误差
     epe_map = tf.sqrt(sum_sq + 1e-6)  # 计算逐像素端点误差
     return tf.reduce_mean(epe_map, name="mean_epe")  # 返回平均端点误差
+
+
+def accumulate_predictions(preds: list) -> tf.Tensor:
+    """累加多尺度预测得到完整光流场。"""
+    pred_accum = None
+    for idx, pred_i in enumerate(preds):
+        if pred_accum is None:
+            pred_accum = pred_i
+            continue
+        pred_accum = tf.compat.v1.image.resize_bilinear(
+            pred_accum,
+            [pred_i.shape[1], pred_i.shape[2]],
+            align_corners=False,
+            half_pixel_centers=False,
+            name=f"AccumResize{idx}",
+        )
+        pred_accum = tf.add(pred_accum, pred_i, name=f"AccumAdd{idx}")
+    return pred_accum
