@@ -237,19 +237,10 @@ def _run_eval_pool(
         for arch_idx, arch_code in enumerate(eval_pool, start=1):
             if hasattr(train_provider, "reset_cursor"):
                 train_provider.reset_cursor(0)
-            for _ in range(bn_batches):
-                train_input, _, _, train_label = train_provider.next_batch(batch_size=batch_size)
-                train_input = standardize_image_tensor(train_input)
-                sess.run(
-                    graph_obj["pred_tensor"],
-                    feed_dict={
-                        graph_obj["input_ph"]: train_input,
-                        graph_obj["label_ph"]: train_label,
-                        graph_obj["arch_code_ph"]: arch_code,
-                        graph_obj["is_training_ph"]: True,
-                    },
-                )
-                progress.update(1)
+        for arch_idx, arch_code in enumerate(eval_pool, start=1):
+            if hasattr(train_provider, "reset_cursor"):
+                train_provider.reset_cursor(0)
+
 
             if hasattr(val_provider, "reset_cursor"):
                 val_provider.reset_cursor(0)
@@ -263,7 +254,7 @@ def _run_eval_pool(
                         graph_obj["input_ph"]: val_input,
                         graph_obj["label_ph"]: val_label,
                         graph_obj["arch_code_ph"]: arch_code,
-                        graph_obj["is_training_ph"]: False,
+                        graph_obj["is_training_ph"]: True,
                     },
                 )
                 arch_batch_epes.append(float(epe_val))
@@ -291,18 +282,6 @@ def _run_one_arch_eval(
     """Run BN recalibration + val EPE for one arch."""
     if hasattr(train_provider, "reset_cursor"):
         train_provider.reset_cursor(0)
-    for _ in range(int(bn_recal_batches)):
-        train_input, _, _, train_label = train_provider.next_batch(batch_size=batch_size)
-        train_input = standardize_image_tensor(train_input)
-        sess.run(
-            graph_obj["pred_tensor"],
-            feed_dict={
-                graph_obj["input_ph"]: train_input,
-                graph_obj["label_ph"]: train_label,
-                graph_obj["arch_code_ph"]: arch_code,
-                graph_obj["is_training_ph"]: True,
-            },
-        )
     if hasattr(val_provider, "reset_cursor"):
         val_provider.reset_cursor(0)
     eval_batches = max(1, int(eval_batches_per_arch))
@@ -316,7 +295,7 @@ def _run_one_arch_eval(
                 graph_obj["input_ph"]: val_input,
                 graph_obj["label_ph"]: val_label,
                 graph_obj["arch_code_ph"]: arch_code,
-                graph_obj["is_training_ph"]: False,
+                graph_obj["is_training_ph"]: True,
             },
         )
         arch_batch_epes.append(float(epe_val))
