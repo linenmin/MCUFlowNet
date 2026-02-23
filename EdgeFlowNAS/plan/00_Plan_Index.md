@@ -59,3 +59,6 @@
 
 15. `14_单模型与Supernet训练细节对比及数据利用率优化计划.md`
 说明: 对比两套训练链路在 epoch 定义、采样策略、评估口径、LR 调度与恢复安全上的差异及优劣。
+
+16. `15_Project_Level_Improvement_and_Optimization_Plan.md`
+说明: 针对 mean_epe_12 验证指标失效的深度排查、BN失效根因诊断记录与具体修补方案记录。

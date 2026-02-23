@@ -1,158 +1,92 @@
-# 15_项目级改进与架构优化计划
+# Supernet 训练问题排查与优化计划 (Project-Level Improvement & Optimization Plan)
 
-更新时间: 2026-02-22  
-状态: Draft v3（已按最新反馈收敛）
-
-## 0. 本轮决策确认（按你的反馈）
-
-| 项目 | 结论 | 说明 |
-|---|---|---|
-| P0-1 评估协议强校验 | 不改 | 这是中途手动操作导致，不作为当前代码改造优先项。 |
-| P0-2 特征蒸馏 | 采纳 A | 需要适配当前“含不确定性输出”的训练图。 |
-| P0-3 Deep Block 解耦 | 采纳 A | 直接改为解耦版本，不保留现有嵌套方案。 |
-| P0-4 评估策略 | 部分采纳 | 保持固定评估样本，不做轮转偏移；新增 CLI 可控评估频率，用于断点恢复时手动切换。 |
-| P0-5 困难子网课程化 | 不改 | 训练期 `mean_epe_12` 主要用于判断是否逐渐收敛。 |
-| P0-6 split 统一 | 已确认 | 当前 `val=640`，按该口径执行。 |
-
-结论：  
-当前只做三件事：`CLI 评估频率透传`、`Deep Block 解耦`、`蒸馏适配不确定性输出`。
+**文档编号**: 15
+**更新时间**: 2026-02-23
+**目标**: 针对 `mean_epe_12` 评估指标长时间停靠 10.9 的异常现象，进行头脑风暴、根因分析，并给出针对性改进和优化清单。
 
 ---
 
-## 1. 保留的核心问题（不再扩展其他方向）
+## 1. 核心问题诊断 (Bug Report & Root Cause Analysis)
 
-1. `loss` 下降但 `mean_epe_12` 后期平台化，说明训练目标与评估目标存在错配。  
-2. `_deep_choice_block` 嵌套结构会引入共享路径冲突，影响超网稳定收敛。  
-3. 训练后期需要用更高频评估来确认“是否逐渐稳定”，但目前 `eval_every_epoch` 不能从 CLI 覆写。  
+**观察到的异常现象：**
+在 `train.log` 中，尽管主训练损失 (Loss) 和特征蒸馏损失 (Distill Loss) 都在稳定且显著地下降（Loss从第一周期的 18 降低到现在的 7.5），但验证集上的光流特定评价指标 `mean_epe_12` 始终停滞在 **10.9** 左右（范围在 10.91 ~ 10.96 之间无规律波动）。
 
----
+**为什么是 10.9？**
+- 在 FlyingChairs2 (FC2) 数据集中，验证集光流的平均绝对位移幅度 (magnitude) 大约就在 10~15 像素之间。
+- 如果模型的验证集端点误差 (EPE) 稳定在 10.9 且对网络收敛完全不敏感，意味着模型的最终预测输出在验证阶段**几乎退化成了全零 (All-Zeros) 也就是完全没有输出位移响应**。EPE 则仅仅计算了与全零预测对比产生的 Ground Truth 的自身范数。
+- 由于 `train.log` 已经表明 `epoch_mode=full_pass`且 Loss 大幅下降，模型在训练前向时是可以正常拟合位移场的。这指向了一个经典结论：**特定子网的评估前向推理出现了因为模式切换而导致的数值崩溃**。在权值共享的 NAS 训练中，最常见的元凶是：**Batch Normalization (BN) 运行时统计量污染 (Running Statistics Corruption)**。
 
-## 2. 接下来最应该做的改动计划（执行版）
+### 1.1 致命缺陷分析：BN 重估 (Recalibration) 失效
 
-执行顺序（推荐）：  
-1) 先做 CLI 评估频率透传（低风险，马上可用）  
-2) 再做 Deep Block 解耦（结构主改动）  
-3) 最后做蒸馏适配（基于解耦后的稳定骨架接入）
+在权值共享的 Supernet 中，各个子架构（Architecture）共享同一套 BN 层的参数（权重/偏置，以及滑动均值和滑动方差）。但由于每次前向网络连接通道数、深度都会随机改变，网络自动追踪保留的全局 `moving_mean` 和 `moving_variance` 变成了所有子网激活统计量的**杂糅平均值**。因此直接在 `model.eval() ` 模式下做测试，会彻底破坏某一特定抽原子网的特征规范化。
 
-这样可以减少反复改图，避免蒸馏实现跟着骨架改两次。
+原计划通过调用 `code/engine/bn_recalibration.py` 尝试进行 BN Calibration 规避这一问题，但在代码实现上存在**两个致命级别的硬伤**：
 
-### 2.1 任务 A：评估频率透传到 CLI（支持断点恢复调频）
+**致命 Bug 1: UPDATE_OPS 遗漏执行**
+```python
+# bn_recalibration.py 代码摘录
+sess.run(forward_fetch, feed_dict={... is_training_ph: True})
+```
+TensorFlow 1.x 中，仅传入 `is_training=True` 足以让前向计算采用当前 batch 的真实均值与方差，**但并不会去刷新底层存放的 `moving_mean / variance` 变量！！！** 
+在 TensorFlow 中，滑动平均的衰减更新运算都被注册在 `tf.GraphKeys.UPDATE_OPS`。而在我们的 `train_supernet_app.py` 中，它们被通过控制依赖 `tf.control_dependencies` 绑定在了反向传播的 `strict_accum_done` 算子上，**根本没有跟 `preds[-1]` 这个获取预测的推理算子强绑定。**
+结果就是：重估模块只是跑了几个徒劳的前向，全局存留的 BN 依然完全属于脏状态，一丝未改变。
 
-目标：  
-在 `run_supernet_train.py` 增加可选参数，让你在续训时直接改 `eval.eval_every_epoch`。
-
-涉及文件（计划）：
-1. `MCUFlowNet/EdgeFlowNAS/wrappers/run_supernet_train.py`
-
-改动要点：
-1. 新增参数 `--eval_every_epoch`（可选 `int`）。  
-2. 在 `_build_overrides` 中透传到 `eval.eval_every_epoch`。  
-3. 不改默认值行为，不传即保持 yaml 原值。  
-4. 代码注释保持当前风格：每行简短中文注释，说明“为什么要这样做”。  
-
-测试计划：
-1. 新增/更新 wrapper 单测，验证 `args.eval_every_epoch=5` 时输出覆写正确。  
-2. `--dry_run` 验证合并配置中 `eval.eval_every_epoch` 变化正确。  
-3. 断点恢复 smoke：`--load_checkpoint --resume_experiment_name ... --eval_every_epoch 5`，日志应打印 `eval_every_epoch=5`。  
-
-验收标准：
-1. 仅在传参时生效，未传参行为完全不变。  
-2. 续训日志中的频率与 CLI 一致。  
-3. 不影响现有训练流程与 checkpoint 恢复逻辑。  
+**致命 Bug 2: 指数移动平均动量 (Momentum) 对刷新速度的限制**
+即便我们修正了 Bug 1 传去了 `UPDATE_OPS`，目前的 `bn_recal_batches=8` 也远远不足以洗刷过去的统计。
+如果使用默认的 momentum (如 0.9 或 0.999)，更新 8 个批次后，新统计数据的占比大约仅有 $1 - 0.9^8 \approx 56.9\%$，被高度污染的历史均值仍然占据将近一半的影响力，足以导致验证效果崩坏。
 
 ---
 
-### 2.2 任务 B：Deep Block 直接改为解耦分支（不保留嵌套）
+## 2. 改进方案与修复策略 (Actionable Fixes)
 
-目标：  
-将 `_deep_choice_block` 从 `out1->out2->out3` 嵌套改为“同输入的三条独立深度分支”。
+基于上述诊断，提供以下验证评估策略方案：
 
-涉及文件（计划）：
-1. `MCUFlowNet/EdgeFlowNAS/code/network/MultiScaleResNet_supernet.py`
+### 方案 A：采取 Train-Mode Evaluation 评估机制 (非常推荐)
 
-改动要点：
-1. `branch1`: 输入 `x`，1 个残差块。  
-2. `branch2`: 输入 `x`，2 个残差块（分支内串联）。  
-3. `branch3`: 输入 `x`，3 个残差块（分支内串联）。  
-4. 保持 `arch_code` 语义不变（0/1/2 对应浅/中/深）。  
-5. 删除旧嵌套路径，不做兼容分支。  
-6. 输出尺度、head 结构、接口签名全部保持不变。  
+在超网验证领域 (特别是 SPOS，BigNAS)，由于精准修正 BN 代价巨大甚至有时无解，经常通过 **Train Batch Batch-Norm** 作为评估妥协方案。由于模型评测时只需要衡量各子网能力并获得排名（Ranking），这非常适配当前。
+只要保证验证时的 Batch Size 不至于太小，即可使用当前 Batch 真实计算的均值方差，彻底屏蔽 `moving_XXX` 脏数据。
 
-测试计划：
-1. 图构建测试：三种 choice 都可前向，输出 shape 不变。  
-2. 变量命名检查：三分支参数独立，避免误共享。  
-3. 1 epoch smoke 训练：确认无 shape/BN/update_op 错误。  
-4. 现有 `supernet_subnet_distribution` 相关测试保持通过。  
+**实施方法：**
+修改 `code/engine/supernet_trainer.py` 的 `_run_eval_epoch`：
+1. **直接移除/注释** 对 `run_bn_recalibration_session` 的任何调用，省掉无谓计算负担。
+2. 强制将评估时向计算图传送的标志位改写：
+```python
+epe_val = sess.run(
+    graph_obj["epe"],
+    feed_dict={
+        graph_obj["input_ph"]: input_batch,
+        graph_obj["label_ph"]: label_batch,
+        graph_obj["arch_code_ph"]: arch_code,
+        # 强制改变：使用训练模式强制让 BN 执行针对单一 batch 大小 (size=32) 的实时均值方差规范化。
+        graph_obj["is_training_ph"]: True,
+    },
+)
+```
+**此方案优势：** 稳定性极强，且节省评测耗时。直接可让验证 EPE 恢复到预期正常区间 (大概均值能从 10.9 下降到 2.0-4.0 左右范围)。
 
-验收标准：
-1. 训练可正常启动并跑完 smoke。  
-2. `preds` 仍是 3 尺度，维度与原版一致。  
-3. 无新增临时脚本和冗余兼容代码，结构保持干净。  
-
----
-
-### 2.3 任务 C：蒸馏适配当前“不确定性输出”训练版本（P0-2 A）
-
-目标：  
-在保留现有 uncertainty 输出训练的前提下，新增无参数特征蒸馏损失。
-
-涉及文件（计划）：
-1. `MCUFlowNet/EdgeFlowNAS/code/engine/train_step.py`  
-2. `MCUFlowNet/EdgeFlowNAS/code/engine/supernet_trainer.py`  
-3. `MCUFlowNet/EdgeFlowNAS/code/network/MultiScaleResNet_supernet.py`（若需要暴露 encoder 特征）  
-4. `MCUFlowNet/EdgeFlowNAS/configs/supernet_fc2_180x240.yaml`（新增 distill 配置项）
-
-设计约束：
-1. 不改当前输出头格式（仍是 flow + uncertainty）。  
-2. 蒸馏作用于中间特征，不直接改预测头张量结构。  
-3. 采用无参数 `Channel Maximize` 对齐后计算 L2。  
-4. 通过开关启用：`distill.enabled=false` 时行为与当前完全一致。  
-
-建议配置项（示例）：
-1. `train.distill.enabled`  
-2. `train.distill.lambda`  
-3. `train.distill.teacher_ckpt`  
-4. `train.distill.layers`（可选，控制蒸馏层位）
-
-测试计划：
-1. 单测：`distill.enabled=false/true` 两种图都能构建。  
-2. 单测：特征压缩后的 shape 与 loss 数值可计算。  
-3. smoke：小步训练无 NaN，无梯度断裂。  
-4. 日志：新增 `loss_flow/loss_unc/loss_distill/loss_total` 可观测字段。  
-
-验收标准：
-1. 关闭蒸馏时，与当前训练链路数值一致（允许浮点微差）。  
-2. 打开蒸馏时，训练稳定不报错，且日志包含 distill 指标。  
-3. 在同口径短跑对照中，`mean_epe_12` 至少不劣化（先过“不退化门”）。  
+### 方案 B：严格修复 BN Recalibration (学术标准打法)
+如果必须保留 `is_training_ph=False`，则需要做全面整顿。
+**实施方法：**
+1. 图构建暴露更新 OP：
+`"bn_update_ops": tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.UPDATE_OPS, scope="^((?!teacher/).)*")`
+2. 重估函数中执行：
+`sess.run([forward_fetch, bn_update_ops], feed_dict={...})`
+3. 倍级扩大重估数据量：将 YAML 配置文件中的 `eval.bn_recal_batches` 调整至起码 50 或更高。
 
 ---
 
-## 3. 统一测试与验收清单（必须执行）
+## 3. 其他相关优化观察
 
-### 3.1 静态与单测
-1. 运行新增/更新的 wrapper 与网络单测。  
-2. 运行已有 `tests`，确认无回归。  
+### 3.1 教师网络稳定无虞！
+蒸馏机制中的教师被固定为推理状态 `is_training_ph=tf.constant(False)`，这意味着教师网络在使用它 Checkpoint 中的高质量 moving statistics，完美避开了超网训练时的全局方差崩溃株连。这是一个正确的实现策略。（唯一提醒的点是蒸馏特征图通道压缩比对采用了绝对值通道最大化，这是兼容错位 NAS 设计最好的 loss 定义，这里无需修改。）
 
-### 3.2 训练 smoke（最小开销）
-1. 先跑 1~3 epoch smoke，验证图、日志、checkpoint、resume 正常。  
-2. 分别验证：  
-  - `仅改评估频率`  
-  - `解耦后无蒸馏`  
-  - `解耦后有蒸馏`  
-
-### 3.3 对照验收（同口径）
-1. 固定 `val=640`、固定 eval pool、固定 eval 样本顺序。  
-2. 同一配置仅改一个变量做 AB。  
-3. 通过条件：  
-  - 功能通过：无报错、可续训、日志字段完整  
-  - 指标通过：先过“不退化门”，再追求明显提升  
+### 3.2 预测量 Scale 的确认
+经过对 `MultiScaleResNet_supernet.py` 返回最后一层输出大小的复查 (经历 twice resize_conv 实现了 x4 Upsample回到 H2 = 原图大小)，模型输出已为满分辨率 `(180, 240)`，与 `label_ph` 等幅，避免了缩放比例失调造成计算数值过大的假象问题，确证之前的锅均属 Batch Normalization。
 
 ---
 
-## 4. 本文档后的执行原则
+## 4. 后续任务分配清单 (Action Items Tracker)
 
-1. 本轮不再扩展其他优化项，避免任务膨胀。  
-2. 代码保持当前目录分层，不引入跨层耦合。  
-3. 所有新增代码保持简洁、可维护，注释延续“每行简短中文说明”风格。  
-4. 每个阶段先有测试门，再进入下一阶段。  
-
+- [ ] 本地定位打开 `supernet_trainer.py`，决定采取方案 A 或方案 B。优先应用方案 A 做降配评估。
+- [ ] 中断或者放弃当前的 `run3` (输出日志中的 Epoch < 50 伪最佳权重)，因为之前保存 Best Checker 的时候均依赖 10.9 这个随机崩溃指标，使得当前的 `best.ckpt` 对应用评估纯属运气，并不是真实的 NAS 收敛验证网。
+- [ ] 应用修改后重启任务，如果能在前 5 个 Epoch 见到 EPE 回落到个位数，则代表问题彻底修复，项目可直接顺利回归既定跑道。

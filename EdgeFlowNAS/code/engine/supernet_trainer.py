@@ -16,7 +16,6 @@ from tqdm import tqdm
 
 from code.data.dataloader_builder import build_fc2_provider
 from code.data.transforms_180x240 import standardize_image_tensor
-from code.engine.bn_recalibration import run_bn_recalibration_session
 from code.engine.checkpoint_manager import (
     build_checkpoint_paths,
     find_existing_checkpoint,
@@ -509,60 +508,47 @@ def _build_graph(config: Dict[str, Any]) -> Dict[str, object]:
     }
 
 
-def _run_eval_epoch(
-    sess,
-    graph_obj: Dict[str, object],
-    train_provider,
-    val_provider,
-    eval_pool: List[List[int]],
-    bn_recal_batches: int,
-    batch_size: int,
-    eval_batches_per_arch: int,
-) -> Dict[str, Any]:
-    """Run one eval epoch on a fixed architecture pool."""
-    per_arch_epe = []
-    eval_batches = max(1, int(eval_batches_per_arch))
-    for arch_code in eval_pool:
-        if hasattr(train_provider, "reset_cursor"):
-            train_provider.reset_cursor(0)
-        run_bn_recalibration_session(
-            sess=sess,
-            forward_fetch=graph_obj["preds"][-1],
-            input_ph=graph_obj["input_ph"],
-            label_ph=graph_obj["label_ph"],
-            arch_code_ph=graph_obj["arch_code_ph"],
-            is_training_ph=graph_obj["is_training_ph"],
-            batch_provider=train_provider,
-            arch_code=arch_code,
-            batch_size=batch_size,
-            recal_batches=bn_recal_batches,
-        )
-        if hasattr(val_provider, "reset_cursor"):
-            val_provider.reset_cursor(0)
-        arch_batch_epes = []
-        for _ in range(eval_batches):
-            input_batch, _, _, label_batch = val_provider.next_batch(batch_size=batch_size)
-            input_batch = standardize_image_tensor(input_batch)
-            epe_val = sess.run(
-                graph_obj["epe"],
-                feed_dict={
-                    graph_obj["input_ph"]: input_batch,
-                    graph_obj["label_ph"]: label_batch,
-                    graph_obj["arch_code_ph"]: arch_code,
-                    graph_obj["is_training_ph"]: False,
+def _run_eval_epoch(  # 定义验证周期执行函数
+    sess,  # 定义会话参数
+    graph_obj: Dict[str, object],  # 定义计算图对象参数
+    train_provider,  # 定义训练数据提供器参数(方案A中保留签名)
+    val_provider,  # 定义验证数据提供器参数
+    eval_pool: List[List[int]],  # 定义验证子网池参数
+    bn_recal_batches: int,  # 定义BN重估批次数参数(废弃)
+    batch_size: int,  # 定义批大小参数
+    eval_batches_per_arch: int,  # 定义每结构验证批次数参数
+) -> Dict[str, Any]:  # 定义返回类型
+    """Run one eval epoch on a fixed architecture pool using Train-Mode BN."""  # 说明函数用途
+    per_arch_epe = []  # 初始化各结构EPE列表
+    eval_batches = max(1, int(eval_batches_per_arch))  # 确保评估批次数至少为1
+    for arch_code in eval_pool:  # 遍历验证结构池
+        if hasattr(val_provider, "reset_cursor"):  # 检查是否支持重置光标
+            val_provider.reset_cursor(0)  # 重置验证数据光标到首位
+        arch_batch_epes = []  # 初始化当前结构批次EPE列表
+        for _ in range(eval_batches):  # 按验证批次数循环验证
+            input_batch, _, _, label_batch = val_provider.next_batch(batch_size=batch_size)  # 获取下一验证批次
+            input_batch = standardize_image_tensor(input_batch)  # 对输入进行标准化
+            epe_val = sess.run(  # 获取计算图EPE结果
+                graph_obj["epe"],  # 请求获取epe张量
+                feed_dict={  # 定义传入数据映射
+                    graph_obj["input_ph"]: input_batch,  # 输入图像批次
+                    graph_obj["label_ph"]: label_batch,  # 输入标签批次
+                    graph_obj["arch_code_ph"]: arch_code,  # 传入当前子网结构编码
+                    # 方案A: 强制 Train-Mode Eval, 忽略被污染的全局 Moving Stats, 直接使用当前 Batch 统计量
+                    graph_obj["is_training_ph"]: True,  # 传入训练标志为真
                 },
             )
-            arch_batch_epes.append(float(epe_val))
-        arch_epe_mean = float(np.mean(arch_batch_epes)) if arch_batch_epes else 0.0
-        per_arch_epe.append(arch_epe_mean)
-    mean_epe = float(np.mean(per_arch_epe)) if per_arch_epe else 0.0
-    std_epe = float(np.std(per_arch_epe)) if per_arch_epe else 0.0
-    arch_ranking = _build_arch_ranking(eval_pool=eval_pool, per_arch_epe=per_arch_epe)
-    return {
-        "mean_epe_12": mean_epe,
-        "std_epe_12": std_epe,
-        "per_arch_epe": per_arch_epe,
-        "arch_ranking": arch_ranking,
+            arch_batch_epes.append(float(epe_val))  # 记录当前批次的EPE
+        arch_epe_mean = float(np.mean(arch_batch_epes)) if arch_batch_epes else 0.0  # 计算当前结构平均EPE
+        per_arch_epe.append(arch_epe_mean)  # 记录到所有结构EPE列表
+    mean_epe = float(np.mean(per_arch_epe)) if per_arch_epe else 0.0  # 计算所有结构平均EPE
+    std_epe = float(np.std(per_arch_epe)) if per_arch_epe else 0.0  # 计算所有结构EPE标准差
+    arch_ranking = _build_arch_ranking(eval_pool=eval_pool, per_arch_epe=per_arch_epe)  # 构建排行榜
+    return {  # 返回评估摘要字典
+        "mean_epe_12": mean_epe,  # 写入整体均值
+        "std_epe_12": std_epe,  # 写入整体标准差
+        "per_arch_epe": per_arch_epe,  # 写入单结构数组
+        "arch_ranking": arch_ranking,  # 写入评估排行榜
     }
 
 
