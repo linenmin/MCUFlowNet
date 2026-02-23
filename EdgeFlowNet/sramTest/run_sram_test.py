@@ -40,7 +40,7 @@ except NameError:
     print("[*] 成功加载模块。")
 
 # --- 1. 配置 ---
-height, width = 92, 128
+height, width = 150, 200
 checkpoint_path = os.path.join(root_dir, 'checkpoints', 'best.ckpt')
 output_dir = os.path.join(current_dir, "output")
 os.makedirs(output_dir, exist_ok=True)
@@ -49,7 +49,7 @@ model_config = {
     'InitNeurons': 32,
     'ExpansionFactor': 2.0,
     'NumSubBlocks': 2,
-    'NumOut': 4,
+    'NumOut': 4,  # 必须与 checkpoint 训练时一致 (best.ckpt 为 NumOut=4)，输出仍取 [..., 0:2] 作为 u,v
     'NumBlocks': 1,
     'Padding': 'same'
 }
@@ -75,7 +75,7 @@ def export_tflite():
             
             network_outputs = model_obj.Network()
             
-            # 使用多尺度输出累加（参考 test_sintel.py 的处理方式）
+            # 使用多尺度输出累加（与 run_test/test_sintel 一致）
             if isinstance(network_outputs, list) and len(network_outputs) > 1:
                 accumOut, _ = AccumPreds(network_outputs)
                 final_output = accumOut[..., 0:2]  # 取前 2 个通道 (u, v 光流)
@@ -84,11 +84,15 @@ def export_tflite():
                 final_output = network_outputs[-1] if isinstance(network_outputs, list) else network_outputs
                 print("[*] 使用单一输出")
             
-            # 关键：由于我们要微调通道数，权重加载会因为维度不匹配而报错。
-            # 为了内存测试，我们只需导出结构，不需要真实权重。
-            # 强制使用随机初始化。
-            print("[*] 正在执行变量随机初始化 (绕过 checkpoint 以适配通道数修改)...")
-            sess.run(tf.compat.v1.global_variables_initializer())
+            # 加载 checkpoint 权重（与 run_test 模型结构一致）
+            saver = tf.compat.v1.train.Saver()
+            print(f"[*] 正在从 checkpoint 加载权重: {checkpoint_path}")
+            try:
+                saver.restore(sess, checkpoint_path)
+                print("[+] 权重加载成功")
+            except Exception as e:
+                print(f"[!] 权重加载失败: {e}")
+                return None
             
             converter = tf.compat.v1.lite.TFLiteConverter.from_session(sess, [input_ph], [final_output])
             converter.optimizations = [tf.lite.Optimize.DEFAULT]
