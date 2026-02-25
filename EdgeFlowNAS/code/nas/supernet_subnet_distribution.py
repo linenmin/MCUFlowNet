@@ -63,17 +63,20 @@ class _FixedSubnetForExport(BaseLayers):
             return net
 
     def _deep_choice_block(self, inputs, filters, choice_idx: int, name: str):
-        """Select depth by python branch to prune inactive paths."""
+        """Select depth by python branch. Use same variable names as MultiScaleResNetSupernet for checkpoint restore."""
         choice = int(choice_idx)
         if choice not in (0, 1, 2):
             raise ValueError(f"invalid deep choice: {choice_idx}")
         import tensorflow as tf
 
         with tf.compat.v1.variable_scope(name):
-            # Keep creation order identical to training graph for checkpoint key match.
-            out1 = self._res_block(inputs=inputs, filters=filters, name="deep1")
-            out2 = self._res_block(inputs=out1, filters=filters, name="deep2")
-            out3 = self._res_block(inputs=out2, filters=filters, name="deep3")
+            # Keep creation order and names identical to training graph (branch1_block1, branch2_block1, etc.)
+            out1 = self._res_block(inputs=inputs, filters=filters, name="branch1_block1")
+            out2 = self._res_block(inputs=inputs, filters=filters, name="branch2_block1")
+            out2 = self._res_block(inputs=out2, filters=filters, name="branch2_block2")
+            out3 = self._res_block(inputs=inputs, filters=filters, name="branch3_block1")
+            out3 = self._res_block(inputs=out3, filters=filters, name="branch3_block2")
+            out3 = self._res_block(inputs=out3, filters=filters, name="branch3_block3")
             return [out1, out2, out3][choice]
 
     def _head_choice_conv(self, inputs, filters, choice_idx: int, name: str):
