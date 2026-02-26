@@ -1,0 +1,38 @@
+# 单模型重训默认配置 (FC2, 180x240)
+# 用法: python wrappers/run_standalone_train.py --config configs/standalone_fc2_180x240.yaml --arch_codes "0,2,1,1,0,0,1,0,1"
+
+runtime:
+  experiment_name: "standalone_retrain"
+  output_root: "outputs/standalone"
+  seed: 42
+
+train:
+  gpu_device: 0
+  num_epochs: 400
+  batch_size: 32
+  lr: 1.0e-4
+  lr_min: 1.0e-6
+  optimizer: "adam"
+  lr_schedule: "cosine"
+  weight_decay: 0.0
+  grad_clip_global_norm: 0.0    # 0 = 不裁剪
+  uncertainty_type: "LinearSoftplus"
+  train_sampling_mode: "shuffle_no_replacement"
+  train_crop_mode: "random"
+
+data:
+  dataset: "FC2"
+  base_path: "../"
+  train_dir: "Datasets/FlyingChairs2/train"
+  val_dir: "Datasets/FlyingChairs2/val"
+  input_height: 180
+  input_width: 240
+  flow_channels: 2
+
+eval:
+  eval_every_epoch: 5
+  eval_batches: 0               # 0 = 全量 val set
+
+checkpoint:
+  load_checkpoint: false
+  resume_experiment_name: ""
