@@ -84,19 +84,18 @@ def setup_eval_model(
     input_ph = tf.compat.v1.placeholder(tf.float32, shape=[1, patch_size[0], patch_size[1], 6], name="input_ph")
     is_training_ph = tf.compat.v1.placeholder_with_default(tf.constant(False, dtype=tf.bool), shape=[], name="is_training_ph")
     
+    # arch_code must be a TF int32 tensor (the supernet uses tf.one_hot on it)
+    # Parse the arch_code string "0,2,1,..." into a list of ints
+    arch_list = [int(x) for x in arch_code.split(",")]
+    arch_code_ph = tf.constant(arch_list, dtype=tf.int32, name="arch_code_ph")
+    
     # We must construct the graph under the same variable scope used during Standalone Retraining
     with tf.compat.v1.variable_scope(scope_name):
         model = MultiScaleResNetSupernet(
-            input_tensor=input_ph,
-            arch_code=arch_code,
-            is_training=is_training_ph,
-            bn_decay=0.9, # Doesn't matter for pure eval, but required by API 
-            # (Note: we use moving statistics, so is_training_ph=False is correct here)
-            flow_channels=2,
-            pred_channels=4,
-            width_multiplier=1.0, # Fixed to 1.0 based on run_standalone_train setup
-            build_activation='relu',
-            build_stride=2
+            input_ph=input_ph,
+            arch_code_ph=arch_code_ph,
+            is_training_ph=is_training_ph,
+            num_out=4,
         )
         preds = model.build()
 
