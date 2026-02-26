@@ -2,6 +2,7 @@ import os
 import sys
 import argparse
 import numpy as np
+from tqdm import tqdm
 from pathlib import Path
 import tensorflow as tf
 
@@ -108,7 +109,7 @@ def evaluate_sintel(args):
     print(f"\n[*] Starting Sintel Evaluation at Resolution {patch_size} ...")
     
     # 4. Evaluation Loop
-    for i in range(num_samples):
+    for i in tqdm(range(num_samples), desc=f"Evaluating {ckpt_dir.name}", unit="sample"):
         # get_sintel_batch applies ResizeNearestCrop under the hood 
         # (resizes keeping aspect ratio, then center crops to patch_size)
         # Returns [1, H, W, 6] (stacked img1, img2) and [1, H, W, 2] (ground truth flow)
@@ -120,7 +121,7 @@ def evaluate_sintel(args):
         )
         
         if input_comb is None or gt_flow is None:
-            print(f"Warning: Failed to load sample {i} ({img1_list[i]}). Skipping.")
+            tqdm.write(f"Warning: Failed to load sample {i} ({img1_list[i]}). Skipping.")
             continue
             
         # Add batch dimension: [1, H, W, 6]
@@ -140,10 +141,6 @@ def evaluate_sintel(args):
         # Extract only the flow channels (first 2) for EPE computation
         flow_only = preds_results[:, :, :, :2]  # [1, H, W, 2]
         processor.update(label=gt_flow, prediction=flow_only, Args=args)
-        
-        # Optional: Print progress
-        if (i + 1) % 50 == 0 or (i + 1) == num_samples:
-            print(f"    Processing {i + 1}/{num_samples}...")
 
     # 5. Print Summary
     print("\n" + "="*50)
