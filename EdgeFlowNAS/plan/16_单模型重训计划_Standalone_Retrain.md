@@ -358,3 +358,51 @@ best.ckpt → Frozen PB → TFLite FP32 → TFLite INT8 (PTQ) → Vela
 4. 编写 `standalone_fc2_180x240.yaml`（配置文件）
 5. 本地 dry run（`conda activate tf_work_hpc`，无数据集）
 6. 提供 HPC 正式训练指令 → 用户在 HPC 上执行
+7. Sintel 泛化测试脚本编写与执行（当前阶段）
+
+---
+
+## 7. Sintel 泛化测试方案设计 (Sintel Generalization Evaluation)
+
+### 7.1 核心挑战与基线对比
+刚刚在 HPC 跑完的是 `MultiScaleResNetSupernet` 的特定架构单模型，它与项目原本的 `run_test.py` -> `test_sintel.py` 测的 `MultiScaleResNet` 有以下关键差异：
+1. **模型定义不兼容**：基线测的是写死的网路，而我们需要使用带有特定 `arch_code` 的超网模型。
+2. **变量命名空间 (Variable Scope)**：我们刚才为了多模型对比，将 `target` 保存到了 `model_target/` 这个 variable_scope 下的 Checkpoint，如果直接加载到没有任何 scope 的图里会因为变量名找不到而报错。
+3. **分辨率和归一化**：Sintel 图片很大（通常 resize/crop 到 416×1024 测试），而我们训练使用的是 180×240，且输入做了 `[-1, 1]` 归一化。
+
+### 7.2 模块划分 (项目管理)
+为避免在单个脚本中堆砌所有逻辑，保持项目结构清晰，该测试工具将拆分为以下三层：
+1. **CLI 包装层 (`EdgeFlowNAS/wrappers/run_standalone_test.py`)**：
+   - 职责：解析命令行参数（`--checkpoint_dir`, `--dataset_root` 等），读取目标路径下的 `.meta.json` 自动获取模型配置，传递给核心引擎。
+2. **核心评估引擎 (`EdgeFlowNAS/code/engine/standalone_evaluator.py`)**：
+   - 职责：独立创建 Session 和图。在原训练设定的 `variable_scope` 下构建对应的 `MultiScaleResNetSupernet` 并准确加载权重。
+   - 实现：包含类似 `setup_eval_model()` 的函数，返回 `sess, InputPH, prVal`，实现模块解耦。
+3. **数据读取与计算层 (复用 `EdgeFlowNet/code/misc/`)**：
+   - 数据列表：调用 `read_sintel_list`。
+   - 数据加载：调用 `get_sintel_batch` 获取验证用的 Image Batch 和 Label Batch。
+   - 指标计算：复用 `FlowPostProcessor` （包含 EPE 的逐步积累与最终输出）。
+
+### 7.3 评估阶段关键技术细节记录
+
+根据对原本 `run_test.py`、`test_sintel.py`、`ImageUtils.py` 以及 `FlowPostProcessor` 的进一步审查，已确定以下技术细节并将应用于测试脚本：
+
+1. **测试分辨率选项（对齐基线测试逻辑）**：
+   - 审查结论：在基线 `get_sintel_batch` 中，读取了 Sintel 输入后调用了 `iu.ResizeNearestCrop(I, patch_size)`。在这部操作内部，图像会被缩放到与目标比例最接近的分辨率，然后进行**中心裁剪 (Center Crop)**，而不是原始分辨率直接输入。
+   - 实施方案：由于我们希望与原论文/项目的测试环境对标保持公平，我们的测试脚本必须**依然执行原版的基于 `patch_size`（如 `416x1024`）的 ResizeNearestCrop 操作**。
+2. **测试归一化选项（对齐当前训练逻辑）**：
+   - 审查结论：原版 `get_sintel_batch` 提供的数据值为 `[0, 255]`，原版测试中也没有归一化。但我们的单模型在训练是使用了 `standardize_image_tensor` `[-1, 1]`。如果测试时不归一化会导致输入分布剧变，EPE彻底崩坏。
+   - 实施方案：**完全遵循“训练怎么处理输入，测试就怎么处理输入”的原则**。在 `standalone_evaluator.py` 喂入输入图像（`input_batch`）之前，强制进行 `/ 255.0 * 2.0 - 1.0` 归一化。
+3. **架构参数自动提取与日志增强**：
+   - 实施方案：完全自动化。只需传入 `--checkpoint_dir "outputs/.../model_target"`，脚本读取内部的 `.meta.json` 自动获取：
+     - `arch_code` (用于构建超网)
+     - `best.ckpt` 变量名空间 (用于指定图作用域)
+     - `epoch` 轮次信息
+   - 额外支持：我们在执行验证并在终端与 CSV 记录输出时，将把获取到的此 Checkpoint 的 **Epoch 进度信息一并打印并写入记录表** （例如 `[Epoch 150_Best] Target Model EPE: XXX`），方便在单模型还没训完时随时中途测试对比。
+4. **后处理器 `FlowPostProcessor` 与单模型训练指标的区别**：
+   - 单模型训练的 EPE (`build_epe_metric` / tf)：
+     - 在 TensorFlow 图内部运算，为训练中途提供快速 Validation 指标参考。
+     - 训练期间验证集的 labels 直接被 `ResizeMethod.BILINEAR` 下采样到与预测输出的分辨率 (例如 `/4` 输出尺寸) 匹配，然后算均方根差。这个 EPE 是“缩水”尺寸下的近似 EPE。
+   - `FlowPostProcessor` 的 EPE (numpy / `test_sintel.py`)：
+     - 在原生 CPU/numpy 系统中运行。
+     - 这个累加器通过 `update(label, prediction, Args)` 将原版 Sintel 完整分辨率下的光流（或者中心裁剪后的）与模型预测值进行精准匹对计算（针对不同分辨率还会设计放大插值与尺度纠正等）。
+     - 计算出来的最终 EPE 更加权威且符合原著发表论文时的标准。我们在新的测试脚本中将继续**重用这个 Processor**。
