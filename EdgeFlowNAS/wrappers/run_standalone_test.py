@@ -2,6 +2,9 @@ import os
 import sys
 import argparse
 from pathlib import Path
+import tensorflow as tf
+
+tf.compat.v1.disable_eager_execution()
 
 # Adjust sys.path
 project_root = Path(__file__).resolve().parent.parent.parent
