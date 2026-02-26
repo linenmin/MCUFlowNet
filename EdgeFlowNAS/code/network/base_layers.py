@@ -2,7 +2,7 @@
 
 import tensorflow as tf  # 导入TensorFlow模块
 
-from EdgeFlowNAS.code.network.decorators import count_and_scope  # 导入计数作用域装饰器
+from code.network.decorators import count_and_scope  # 导入计数作用域装饰器
 
 
 class BaseLayers:  # 定义基础层类

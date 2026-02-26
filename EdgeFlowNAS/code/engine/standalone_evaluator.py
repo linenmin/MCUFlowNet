@@ -27,8 +27,8 @@ if str(edgeflownas_code_dir) not in sys.path:
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from EdgeFlowNAS.code.network.MultiScaleResNet_supernet import MultiScaleResNetSupernet
-from EdgeFlowNAS.code.engine.eval_step import accumulate_predictions
+from code.network.MultiScaleResNet_supernet import MultiScaleResNetSupernet
+from code.engine.eval_step import accumulate_predictions
 from EdgeFlowNet.code.misc.processor import FlowPostProcessor
 
 

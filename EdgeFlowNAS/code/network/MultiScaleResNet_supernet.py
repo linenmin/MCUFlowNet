@@ -2,7 +2,7 @@
 
 import tensorflow as tf
 
-from EdgeFlowNAS.code.network.base_layers import BaseLayers
+from code.network.base_layers import BaseLayers
 
 
 class MultiScaleResNetSupernet(BaseLayers):
