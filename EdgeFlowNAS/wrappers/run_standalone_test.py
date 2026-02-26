@@ -26,7 +26,9 @@ from EdgeFlowNet.code.misc.processor import FlowPostProcessor
 def parse_args():
     parser = argparse.ArgumentParser(description="Evaluate Retrained Standalone Model on Sintel")
     parser.add_argument("--checkpoint_dir", type=str, required=True,
-                        help="Path to the trained model directory (e.g., outputs/.../model_target) containing checkpoints and .meta.json")
+                        help="Path to the trained model directory (e.g., outputs/.../model_target) containing checkpoints subdirectory")
+    parser.add_argument("--ckpt_name", type=str, default="best", choices=["best", "last"],
+                        help="Which checkpoint to load: 'best' (default) or 'last'")
     parser.add_argument("--dataset_root", type=str, required=True,
                         help="Path to the root of the Sintel dataset (usually Datasets/Sintel/)")
     parser.add_argument("--sintel_list", type=str, default="EdgeFlowNet/code/dataset_paths/MPI_Sintel_Final_train_list.txt",
@@ -81,8 +83,8 @@ def evaluate_sintel(args):
     print(f"[*] Found {num_samples} samples.")
 
     # 2. Setup Evaluation Engine (Loads variable scope, graph, and weights automatically)
-    print(f"\n[*] Initializing Model from {ckpt_dir} ...")
-    sess, input_ph, preds_tensor, meta_data = setup_eval_model(ckpt_dir, patch_size)
+    print(f"\n[*] Initializing Model from {ckpt_dir} (weight: {args.ckpt_name}) ...")
+    sess, input_ph, preds_tensor, meta_data = setup_eval_model(ckpt_dir, patch_size, ckpt_name=args.ckpt_name)
     
     # 3. Setup FlowPostProcessor
     # We use "full" suffix convention and is_multiscale=True since Supernet outputs multiscale lists just like MultiScaleResNet

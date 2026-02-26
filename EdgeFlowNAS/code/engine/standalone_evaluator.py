@@ -27,18 +27,21 @@ from EdgeFlowNAS.code.network.MultiScaleResNet_supernet import MultiScaleResNetS
 from EdgeFlowNet.code.misc.processor import FlowPostProcessor
 
 
-def load_model_metadata(checkpoint_dir: Path) -> Dict[str, Any]:
+def load_model_metadata(checkpoint_dir: Path, ckpt_name: str = "best") -> Dict[str, Any]:
     """
     Reads the .meta.json file associated with a checkpoint directory
     to extract arch_code, epoch, and other training metadata.
+    Search in the 'checkpoints' subdirectory.
     """
-    meta_path = checkpoint_dir / "best.ckpt.meta.json"
-    if not meta_path.exists():
-        # Fallback to last if best doesn't exist
-        meta_path = checkpoint_dir / "last.ckpt.meta.json"
+    meta_path = checkpoint_dir / "checkpoints" / f"{ckpt_name}.ckpt.meta.json"
     
     if not meta_path.exists():
-        raise FileNotFoundError(f"No .meta.json found in {checkpoint_dir}. Cannot determine 'arch_code'.")
+        # Try fallback if picking best but only last exists
+        if ckpt_name == "best":
+            meta_path = checkpoint_dir / "checkpoints" / "last.ckpt.meta.json"
+        
+    if not meta_path.exists():
+        raise FileNotFoundError(f"No .meta.json found at {meta_path}. Cannot determine 'arch_code'. Check your directory structure.")
     
     with open(meta_path, "r") as f:
         meta_data = json.load(f)
@@ -48,15 +51,17 @@ def load_model_metadata(checkpoint_dir: Path) -> Dict[str, Any]:
 
 def setup_eval_model(
     checkpoint_dir: Path, 
-    patch_size: Tuple[int, int]
+    patch_size: Tuple[int, int],
+    ckpt_name: str = "best"
 ) -> Tuple[tf.compat.v1.Session, tf.Tensor, tf.Tensor, Dict[str, Any]]:
     """
     Reads metadata, builds the MultiScaleResNetSupernet graph under the correct variable scope,
     and restores the weights.
     
     Args:
-        checkpoint_dir: Directory containing the checkpoint and .meta.json
+        checkpoint_dir: Directory containing the 'checkpoints' folder.
         patch_size: Target resolution [height, width] for the input placeholder.
+        ckpt_name: 'best' or 'last'
         
     Returns:
         sess: TensorFlow session
@@ -64,7 +69,7 @@ def setup_eval_model(
         preds_tensor: The prediction tensor (for FlowPostProcessor)
         meta_data: The loaded metadata dictionary
     """
-    meta_data = load_model_metadata(checkpoint_dir)
+    meta_data = load_model_metadata(checkpoint_dir, ckpt_name)
     arch_code = meta_data["arch_code"]
     
     # Try to extract the scope name from the directory name (e.g. 'model_target')
