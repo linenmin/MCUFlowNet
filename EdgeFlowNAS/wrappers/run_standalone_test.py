@@ -81,10 +81,17 @@ def evaluate_sintel(args):
     list_args = Namespace(data_list=str(sintel_list_path))
     rel_img1_list, rel_img2_list, rel_flo_list = read_sintel_list(list_args)
     
-    # Baseline returns relative paths from the .txt, we need to join them with dataset_root
-    img1_list = [str(dataset_root / p) for p in rel_img1_list]
-    img2_list = [str(dataset_root / p) for p in rel_img2_list]
-    flo_list = [str(dataset_root / p) for p in rel_flo_list]
+    # Baseline returns relative paths from the .txt, often starting with 'Datasets/Sintel/'.
+    # We strip this prefix if it exists to match the actual user-provided dataset_root.
+    def strip_sintel_prefix(path_str):
+        prefix = "Datasets/Sintel/"
+        if path_str.startswith(prefix):
+            return path_str[len(prefix):]
+        return path_str
+
+    img1_list = [str(dataset_root / strip_sintel_prefix(p)) for p in rel_img1_list]
+    img2_list = [str(dataset_root / strip_sintel_prefix(p)) for p in rel_img2_list]
+    flo_list = [str(dataset_root / strip_sintel_prefix(p)) for p in rel_flo_list]
     
     num_samples = len(img1_list)
     print(f"[*] Found {num_samples} samples.")
