@@ -136,8 +136,10 @@ def evaluate_sintel(args):
         )
         
         # Process and accumulate error
-        # FlowPostProcessor expects list of multiscale outputs, which preds_tensor provides
-        processor.update(label=gt_flow, prediction=preds_results, Args=args)
+        # preds_results shape: [1, H, W, 4] (flow_x, flow_y, unc_x, unc_y)
+        # Extract only the flow channels (first 2) for EPE computation
+        flow_only = preds_results[:, :, :, :2]  # [1, H, W, 2]
+        processor.update(label=gt_flow, prediction=flow_only, Args=args)
         
         # Optional: Print progress
         if (i + 1) % 50 == 0 or (i + 1) == num_samples:
