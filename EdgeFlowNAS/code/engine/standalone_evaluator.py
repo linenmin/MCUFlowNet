@@ -76,8 +76,15 @@ def setup_eval_model(
     meta_data = load_model_metadata(checkpoint_dir, ckpt_name)
     arch_code = meta_data["arch_code"]
     
-    # Try to extract the scope name from the directory name (e.g. 'model_target')
-    scope_name = checkpoint_dir.name
+    # Extract scope name from directory name:
+    # Training uses arch_name (e.g. 'target') as variable_scope,
+    # but saves to directory 'model_{name}' (e.g. 'model_target').
+    # We need to strip the 'model_' prefix to get the correct scope.
+    dir_name = checkpoint_dir.name
+    if dir_name.startswith("model_"):
+        scope_name = dir_name[len("model_"):]
+    else:
+        scope_name = dir_name
     
     tf.compat.v1.reset_default_graph()
     
