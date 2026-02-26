@@ -85,8 +85,11 @@ def setup_eval_model(
     is_training_ph = tf.compat.v1.placeholder_with_default(tf.constant(False, dtype=tf.bool), shape=[], name="is_training_ph")
     
     # arch_code must be a TF int32 tensor (the supernet uses tf.one_hot on it)
-    # Parse the arch_code string "0,2,1,..." into a list of ints
-    arch_list = [int(x) for x in arch_code.split(",")]
+    # meta.json stores arch_code as list[int], but handle string format too for safety
+    if isinstance(arch_code, str):
+        arch_list = [int(x) for x in arch_code.split(",")]
+    else:
+        arch_list = [int(x) for x in arch_code]
     arch_code_ph = tf.constant(arch_list, dtype=tf.int32, name="arch_code_ph")
     
     # We must construct the graph under the same variable scope used during Standalone Retraining
