@@ -66,10 +66,17 @@ def evaluate_sintel(args):
     sintel_list_path = project_root / args.sintel_list
     
     print(f"[*] Reading Sintel List: {sintel_list_path}")
-    img1_list, img2_list, flo_list = read_sintel_list(
-        str(sintel_list_path), 
-        str(dataset_root)
-    )
+    
+    # read_sintel_list expects an object with .data_list attribute
+    from argparse import Namespace
+    list_args = Namespace(data_list=str(sintel_list_path))
+    rel_img1_list, rel_img2_list, rel_flo_list = read_sintel_list(list_args)
+    
+    # Baseline returns relative paths from the .txt, we need to join them with dataset_root
+    img1_list = [str(dataset_root / p) for p in rel_img1_list]
+    img2_list = [str(dataset_root / p) for p in rel_img2_list]
+    flo_list = [str(dataset_root / p) for p in rel_flo_list]
+    
     num_samples = len(img1_list)
     print(f"[*] Found {num_samples} samples.")
 
