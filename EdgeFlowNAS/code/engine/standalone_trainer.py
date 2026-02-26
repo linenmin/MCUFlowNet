@@ -19,7 +19,7 @@ from code.data.dataloader_builder import build_fc2_provider
 from code.data.transforms_180x240 import standardize_image_tensor
 from code.engine.eval_step import accumulate_predictions, build_epe_metric
 from code.engine.train_step import add_weight_decay, build_multiscale_uncertainty_loss
-from code.network.MultiScaleResNet_supernet import MultiScaleResNetSupernet
+from EdgeFlowNAS.code.network.MultiScaleResNet_supernet import MultiScaleResNetSupernet
 from code.optim.lr_scheduler import cosine_lr
 from code.utils.json_io import read_json, write_json
 from code.utils.logger import build_logger

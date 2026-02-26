@@ -12,13 +12,17 @@ edgeflownet_dir = project_root / "EdgeFlowNet"
 edgeflownas_dir = project_root / "EdgeFlowNAS"
 
 edgeflownet_code_dir = edgeflownet_dir / "code"
+edgeflownas_code_dir = edgeflownas_dir / "code"
 
+# Insert in reverse order of priority
 if str(edgeflownet_dir) not in sys.path:
     sys.path.insert(0, str(edgeflownet_dir))
 if str(edgeflownet_code_dir) not in sys.path:
     sys.path.insert(0, str(edgeflownet_code_dir))
 if str(edgeflownas_dir) not in sys.path:
     sys.path.insert(0, str(edgeflownas_dir))
+if str(edgeflownas_code_dir) not in sys.path:
+    sys.path.insert(0, str(edgeflownas_code_dir))
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
