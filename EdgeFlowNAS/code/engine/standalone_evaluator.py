@@ -28,6 +28,7 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from EdgeFlowNAS.code.network.MultiScaleResNet_supernet import MultiScaleResNetSupernet
+from EdgeFlowNAS.code.engine.eval_step import accumulate_predictions
 from EdgeFlowNet.code.misc.processor import FlowPostProcessor
 
 
@@ -109,6 +110,9 @@ def setup_eval_model(
         )
         preds = model.build()
 
+    # Accumulate multi-scale predictions into a single tensor (same as training)
+    preds_accumulated = accumulate_predictions(preds)
+
     # Create session and restorer
     config = tf.compat.v1.ConfigProto()
     config.gpu_options.allow_growth = True
@@ -133,7 +137,7 @@ def setup_eval_model(
     print(f"[*] Target Arch Code: {arch_code}")
     print(f"[*] Training Progress: Epoch {meta_data.get('epoch', 'N/A')}")
     
-    return sess, input_ph, preds, meta_data
+    return sess, input_ph, preds_accumulated, meta_data
 
 def preprocess_eval_batch(input_batch: np.ndarray) -> np.ndarray:
     """
