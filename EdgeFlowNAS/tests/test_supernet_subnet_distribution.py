@@ -2,7 +2,7 @@
 
 import unittest
 
-from code.nas.supernet_subnet_distribution import (
+from efnas.nas.supernet_subnet_distribution import (
     ARCH_SPACE_SIZE,
     _compute_metric_summary,
     _safe_fps,

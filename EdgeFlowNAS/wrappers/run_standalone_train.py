@@ -129,7 +129,7 @@ def main():
         config.setdefault("checkpoint", {})["resume_experiment_name"] = args.resume_experiment_name
 
     # --- 执行训练 ---
-    from code.engine.standalone_trainer import train_standalone
+    from efnas.engine.standalone_trainer import train_standalone
     exit_code = train_standalone(config)
     sys.exit(exit_code)
 

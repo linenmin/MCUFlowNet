@@ -28,7 +28,7 @@ if str(edgeflownas_code_dir) not in sys.path:
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from code.engine.standalone_evaluator import setup_eval_model, preprocess_eval_batch
+from efnas.engine.standalone_evaluator import setup_eval_model, preprocess_eval_batch
 from EdgeFlowNet.code.misc.utils import read_sintel_list, get_sintel_batch
 from EdgeFlowNet.code.misc.processor import FlowPostProcessor
 

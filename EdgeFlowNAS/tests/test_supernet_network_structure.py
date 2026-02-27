@@ -6,7 +6,7 @@ import numpy as np
 
 try:
     import tensorflow as tf
-    from code.network.MultiScaleResNet_supernet import MultiScaleResNetSupernet
+    from efnas.network.MultiScaleResNet_supernet import MultiScaleResNetSupernet
     _TF_IMPORT_ERROR = ""
 except Exception as exc:  # pragma: no cover - runtime env dependent
     tf = None

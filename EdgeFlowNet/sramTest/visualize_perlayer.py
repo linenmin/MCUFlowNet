@@ -12,7 +12,7 @@ import numpy as np  # 数值计算
 
 # ==================== 配置区 ====================
 # 手动指定 CSV 文件路径
-CSV_PATH = r"./output_benchmark_all_multiscale/MBConv_E6_Bilinear/MBConv_E6_Bilinear_192x256_per-layer.csv"
+CSV_PATH = r"./output_benchmark_all_multiscale_33decoder/MBConv_E6_Bilinear/MBConv_E6_Bilinear_192x256_per-layer.csv"
 # 输出图片路径 (自动根据 CSV 名称生成)
 OUTPUT_DIR = os.path.dirname(CSV_PATH)  # 输出到 CSV 同目录
 
@@ -89,13 +89,13 @@ def load_and_plot(csv_path):
     # 创建 X 轴索引
     x = np.arange(len(layers))
     
-    # 创建图形 (4 个子图，竖向排列，共享 X 轴)
-    fig, axes = plt.subplots(4, 1, figsize=(18, 18), sharex=True)
+    # 创建图形 (3 个子图，竖向排列，共享 X 轴)
+    fig, axes = plt.subplots(3, 1, figsize=(18, 15), sharex=True)
     fig.suptitle(f'Per-Layer Performance Analysis\n{os.path.basename(csv_path)}', fontsize=14, fontweight='bold')
     
     # 标注参数
     marker_size = 6
-    annotation_fontsize = 8  # 放大字体
+    annotation_fontsize = 8  # 标注字体
     
     # --- 子图 1: SRAM Usage + SRAM AC ---
     ax1 = axes[0]
@@ -129,38 +129,26 @@ def load_and_plot(csv_path):
         smart_annotate(ax2, x[i], cycles[i], f'{cycles[i]:.1f}\n({pct:.1f}%)', 
                       annotation_fontsize, y_data=cycles)
     
-    # --- 子图 3: MAC Count ---
+    # --- 子图 3: Utilization ---
     ax3 = axes[2]
-    ax3.plot(x, mac, marker='^', markersize=marker_size, color='tab:green', linewidth=1.5)
-    ax3.set_ylabel('MAC Count (M)', fontsize=10)
-    ax3.set_title('MAC Count per Layer', fontsize=11)
-    ax3.grid(True, alpha=0.3)
-    # 每个点都标注值和百分比
-    for i in range(len(x)):
-        pct = mac_pct[i] if mac_pct[i] > 0 else 0
-        smart_annotate(ax3, x[i], mac[i], f'{mac[i]:.1f}\n({pct:.1f}%)', 
-                      annotation_fontsize, y_data=mac)
-    
-    # --- 子图 4: Utilization ---
-    ax4 = axes[3]
-    bars = ax4.bar(x, util, color='tab:purple', alpha=0.7)
-    ax4.set_ylabel('Utilization (%)', fontsize=10)
-    ax4.set_title('NPU Utilization per Layer', fontsize=11)
-    ax4.axhline(y=np.mean(util), color='red', linestyle='--', linewidth=1, label=f'Avg: {np.mean(util):.1f}%')
-    ax4.legend(loc='upper right')
-    ax4.grid(True, alpha=0.3, axis='y')
+    bars = ax3.bar(x, util, color='tab:purple', alpha=0.7)
+    ax3.set_ylabel('Utilization (%)', fontsize=10)
+    ax3.set_title('NPU Utilization per Layer', fontsize=11)
+    ax3.axhline(y=np.mean(util), color='red', linestyle='--', linewidth=1, label=f'Avg: {np.mean(util):.1f}%')
+    ax3.legend(loc='upper right')
+    ax3.grid(True, alpha=0.3, axis='y')
     # 每个柱子都标注值
     for i, bar in enumerate(bars):
-        smart_annotate(ax4, bar.get_x() + bar.get_width()/2, bar.get_height(), 
+        smart_annotate(ax3, bar.get_x() + bar.get_width()/2, bar.get_height(), 
                       f'{util[i]:.1f}%', annotation_fontsize, y_data=util)
     
     # 设置共享 X 轴（只在最后一个子图显示层名）
-    ax4.set_xlabel('Layer', fontsize=10)
-    ax4.set_xticks(x)
-    ax4.set_xticklabels(layers, rotation=45, ha='right', fontsize=8)  # 倾斜 45 度避免遮挡
+    ax3.set_xlabel('Layer', fontsize=12, fontweight='bold')
+    ax3.set_xticks(x)
+    ax3.set_xticklabels(layers, rotation=45, ha='right', fontsize=9, fontweight='bold')  # 增大字体并加粗
     
     # 调整布局，给 X 轴标签留出足够空间
-    plt.tight_layout(rect=[0, 0.05, 1, 0.96])
+    plt.tight_layout(rect=[0, 0.02, 1, 0.96])
     
     # 保存图片
     base_name = os.path.splitext(os.path.basename(csv_path))[0]
