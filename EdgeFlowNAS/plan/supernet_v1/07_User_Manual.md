@@ -1,6 +1,7 @@
 # EdgeFlowNAS Supernet 使用手册
 
-更新时间: 2026-02-16
+更新时间: 2026-03-03
+状态: Active
 
 ## 1. 文档目标
 
@@ -61,16 +62,14 @@ conda run -n tf_work_hpc python -c "import tensorflow as tf; print(tf.__version_
 数据相关字段:
 
 1. `data.dataset=FC2`
-2. `data.data_list=../EdgeFlowNet/code/dataset_paths`
-3. `data.base_path=../`
-4. `data.train_list_name=FC2_train.txt`
-5. `data.val_list_name=FC2_test.txt`
+2. `data.train_dir=.../Datasets/FlyingChairs2/train`
+3. `data.val_dir=.../Datasets/FlyingChairs2/val`
 6. `data.input_height=180`
 7. `data.input_width=240`
 
 说明:
 
-1. Supernet 阶段按你确认方案使用 `FC2_test` 作为排序验证来源。
+1. Supernet 阶段使用 `train_dir/val_dir` 的 folders-only 口径。
 2. 训练输入统一为 `180x240`。
 
 ## 5. 一次完整流程
@@ -99,8 +98,7 @@ conda run -n tf_work_hpc python wrappers/run_supernet_train.py \
   --num_epochs 2 \
   --steps_per_epoch 1 \
   --batch_size 2 \
-  --lr 1e-4 \
-  --fast_mode
+  --lr 1e-4
 ```
 
 标准长跑可仅调整 `num_epochs/steps_per_epoch/batch_size`。
@@ -115,8 +113,7 @@ conda run -n tf_work_hpc python wrappers/run_supernet_train.py \
   --load_checkpoint \
   --num_epochs 5 \
   --steps_per_epoch 1 \
-  --batch_size 2 \
-  --fast_mode
+  --batch_size 2
 ```
 
 预期日志包含:
@@ -190,8 +187,7 @@ python -m code.nas.check_manifest \
 8. `EXPERIMENT_NAME`
 9. `RESUME_EXPERIMENT_NAME`
 10. `LOAD_CHECKPOINT` (`0/1`)
-11. `FAST_MODE` (`0/1`)
-12. `DRY_RUN` (`0/1`)
+11. `DRY_RUN` (`0/1`)
 
 本机参数组装验证示例:
 
@@ -201,7 +197,6 @@ NUM_EPOCHS=1 \
 STEPS_PER_EPOCH=1 \
 BATCH_SIZE=2 \
 LEARNING_RATE=1e-4 \
-FAST_MODE=1 \
 DRY_RUN=1 \
 EXPERIMENT_NAME=edgeflownas_supernet_fc2_180x240_hpc_smoke \
 bash scripts/hpc/run_supernet_train.sh
@@ -215,7 +210,6 @@ NUM_EPOCHS=200 \
 STEPS_PER_EPOCH=50 \
 BATCH_SIZE=32 \
 LEARNING_RATE=1e-4 \
-FAST_MODE=0 \
 EXPERIMENT_NAME=edgeflownas_supernet_fc2_180x240_run1 \
 bash scripts/hpc/run_supernet_train.sh
 ```

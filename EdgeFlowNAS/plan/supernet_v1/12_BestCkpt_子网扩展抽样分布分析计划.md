@@ -1,5 +1,6 @@
-# 12 BestCkpt 子网扩展抽样分布分析计划
-更新时间: 2026-02-19
+# 12 BestCkpt 子网扩展抽样分布分析计划（精简版）
+更新时间: 2026-03-03
+状态: Active
 
 ## 0. 目标与边界
 1. 解释 `supernet_best.ckpt` 的保存判据与恢复语义。
@@ -21,7 +22,7 @@
 ---
 
 ## 2. 本轮确认选项
-1. 可视化方案: `Option A + epe_vs_fps`。
+1. 可视化方案: `epe_vs_fps` 主导。
 2. 核心图表:
 - `epe_hist.png`
 - `fps_hist.png`
@@ -68,7 +69,7 @@
 
 当前行为:
 1. 读取 `analysis/records.csv`。
-2. 输出 Option A + `epe_vs_fps` 的 PNG 图表。
+2. 输出 `epe_hist/fps_hist/sram_hist/epe_rank_curve/epe_vs_fps_scatter` 的 PNG 图表。
 3. 产出 `plot_manifest.json`。
 
 ### 3.3 Wrapper
@@ -107,10 +108,3 @@ python wrappers/run_supernet_subnet_distribution.py \
 python wrappers/run_supernet_subnet_distribution_plot.py \
   --analysis_dir <run_dir>/analysis
 ```
-
----
-
-## 5. 后续可选优化（未做）
-1. Vela 并行子进程（当前是串行，优先保证稳定性）。
-2. 增加 `epe_vs_sram` 与 `fps_vs_sram`（若后续转 Option B）。
-3. 为 Vela 失败样本输出更细分错误分类。

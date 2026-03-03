@@ -1,6 +1,7 @@
 # 03 超网训练任务拆分与验收标准
 
-更新时间: 2026-02-16
+更新时间: 2026-03-03
+状态: Reference（历史任务拆分，执行以 10/11/14 为准）
 
 ## 1. 目标
 
@@ -12,7 +13,7 @@
 1. 训练栈：TF1 兼容链路（沿用 EdgeFlowNet 风格）。
 2. 分辨率：`H=180, W=240`。
 3. 训练数据：FC2。
-4. 验证来源：`FC2_test`（仅用于 supernet 排名阶段）。
+4. 验证来源：`val_dir`（folders-only，供 supernet 排名阶段使用）。
 5. Fairness：3-path same-batch 梯度累积后单次更新。
 6. Optimizer：`Adam + cosine decay`。
 7. Weight Decay：`4e-5`。
@@ -255,7 +256,7 @@
 验收测试：
 
 1. 本机 smoke
-- 命令：`python wrappers/run_supernet_train.py --gpu_device 0 --num_epochs 2 --batch_size 32 --lr 1e-4 --config configs/supernet_fc2_180x240.yaml --fast_mode`
+- 命令：`python wrappers/run_supernet_train.py --gpu_device 0 --num_epochs 2 --batch_size 32 --lr 1e-4 --config configs/supernet_fc2_180x240.yaml`
 - 通过标准：完成 2 epochs，产出 checkpoint 与 eval 日志。
 
 2. HPC 命令模板检查
@@ -294,5 +295,5 @@ M3（交付就绪）：
 2. 风险：共享 BN 导致子网评估噪声。
 - 缓解：固定 BN 重估批次为 8，并记录重估前后差异。
 
-3. 风险：`FC2_test` 用作 supernet 验证引入“测试集参与选择”争议。
-- 缓解：文档显式限定其用途仅为 supernet 阶段相对排序；最终子网结论在后续独立训练阶段给出。
+3. 风险：验证集口径混用会引入“评估结论不可比”争议。
+- 缓解：统一使用 `val_dir` 且在实验记录中标注口径标签；最终子网结论在后续独立训练阶段给出。

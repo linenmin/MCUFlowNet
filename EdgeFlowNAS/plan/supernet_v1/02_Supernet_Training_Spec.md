@@ -1,6 +1,6 @@
 # 02 超网训练专项计划（仅 Supernet）
-
-更新时间: 2026-02-16
+更新时间: 2026-03-03
+状态: Reference（历史规格，执行口径以 10/11/14 为准）
 
 ## 1. 文档目标
 
@@ -41,7 +41,7 @@
 15. Weight Decay：`4e-5`。
 16. 梯度裁剪：`Global norm clip=5.0`。
 17. 固定验证子网池构建：`分层覆盖采样（12 个）`。
-18. FC2 验证集来源：`直接使用 FC2_test`（用于 supernet 排名阶段）。
+18. FC2 验证来源：`val_dir`（folders-only 口径）。
 
 ## 4. 超网编码规范
 
@@ -86,7 +86,7 @@
 每个 epoch 结束执行：
 
 1. 在固定 12 个验证子网上评估 EPE（FC2 验证子集）。
-2. 当前选择：`code/dataset_paths/FC2_test.txt` 直接作为 supernet 阶段的验证来源。
+2. 当前选择：`data.val_dir` 目录扫描结果作为 supernet 阶段验证来源。
 3. 说明：该选择仅服务于超网阶段的子网相对排序，不作为最终子网训练/报告的独立测试结论。
 4. 每个验证子网评估前执行 BN 统计重估（仅刷新均值方差，不更新权重）。
 5. 记录指标：
@@ -137,21 +137,3 @@
 4. `eval_epe_history.csv`
 5. `train_manifest.json`（记录 seed、配置、commit、输入分辨率）
 6. `supernet_training_report.md`
-
-## 10. 单模型训练指令参考（用于超网 wrapper 兼容设计）
-
-你提供的单模型训练命令如下，后续 `run_supernet_train.py` 参数风格将尽量与之对齐：
-
-```bash
-python wrappers/run_train.py --gpu_device 0 --num_epochs 400 --batch_size 32 --lr 1e-4 --network_module sramTest.network.MultiScaleResNet_bilinear --load_checkpoint --resume_experiment_name multiscaleresnet_bilinear_fc2_20260212_150419_fast --experiment_name multiscaleresnet_bilinear_fc2_20260212_150419_fast --fast_mode
-```
-
-超网训练 wrapper 会在兼容上述通用参数的基础上，新增 supernet 专用参数（如 fairness cycle、arch seed、eval pool 配置、bn recalibration 配置）。
-
-## 11. 后续可选优化（非阻塞）
-
-以下优化不影响当前超网训练计划执行，可在超网跑通后按需要追加：
-
-1. 将 FC2_test 替换为 train-holdout 验证集，对比排序一致性。
-2. 增加小规模 Kendall Tau spot-check，验证超网排序保真度。
-3. 追加第二随机种子重复实验，评估排名稳定性。

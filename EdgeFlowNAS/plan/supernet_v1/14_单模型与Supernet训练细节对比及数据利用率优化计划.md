@@ -1,5 +1,6 @@
-# 14 单模型与 Supernet 训练细节对比及数据利用率优化计划
-更新时间: 2026-02-20
+# 14 单模型与 Supernet 训练细节对比及数据利用率优化计划（精简版）
+更新时间: 2026-03-03
+状态: Active
 
 ## 0. 输入与结论范围
 1. 对比对象:
@@ -16,7 +17,7 @@
 4. 本文聚焦: 训练细节、数据利用率、可改进点，不涉及最终子网搜索决策。
 
 ## 0.1 状态更正（2026-02-20）
-1. 你选择的选项 A 已落地: supernet 现已使用 `epoch_mode=full_pass` + `train_sampling_mode=shuffle_no_replacement`。
+1. 你选择的主方案已落地: supernet 现已使用 `epoch_mode=full_pass` + `train_sampling_mode=shuffle_no_replacement`。
 2. `gpu_device` 已在 supernet 训练中生效（日志可见 `gpu_device=0 applied`）。
 3. `fast_mode` 已从 supernet 训练链路移除，不再作为“看似可配但不生效”的死参数。
 4. supernet 已补齐 `run_manifest`，恢复训练会做关键语义一致性校验。
@@ -25,11 +26,11 @@
 
 ## 1. 核心差异总览（先看结论）
 注: 本节保留 run1 历史基线视角，部分工程项已在 `0.1` 中完成修复。
-1. 单模型把“epoch”定义为接近全数据一次遍历（`NumTrainSamples / batch`），而 supernet 当前是固定 `steps_per_epoch=50`，每个 epoch 只抽样少量训练数据。
-2. 两者当前都属于“随机有放回抽样”，不是无放回遍历。
+1. 单模型把“epoch”定义为接近全数据一次遍历（`NumTrainSamples / batch`）；supernet 的 run1 历史口径是固定 `steps_per_epoch=50`，run2 已切到 `full_pass`。
+2. 采样方式上，单模型仍是随机有放回；supernet run2 已切到 `shuffle_no_replacement`。
 3. supernet 多了严格公平采样（每步 3 条架构路径）、BN 重校准、固定 12 子网 eval、梯度累积与全局裁剪，训练逻辑更复杂。
-4. supernet 当前配置下，单 epoch 对训练集覆盖明显偏低，早期统计波动会更大，且“epoch”不再代表完整数据遍历。
-5. supernet wrapper 的部分参数在主训练实现里未生效（`gpu_device`、`fast_mode`），存在工程一致性问题。
+4. supernet 在 run1 下单 epoch 覆盖偏低；切到 run2 后该问题已显著缓解。
+5. `gpu_device` 生效、`fast_mode` 移除、`run_manifest` 补齐后，工程一致性问题已收敛。
 
 ---
 
@@ -50,11 +51,14 @@
 
 ### 2.2 训练采样方式（是否有放回）
 1. 单模型: `random.randint` 每次独立抽样（有放回）。
-2. Supernet: `sampling_mode="random"` + 每样本随机抽（有放回）。
+2. Supernet:
+- run1 历史: `sampling_mode="random"`（有放回）。
+- run2 当前: `train_sampling_mode=shuffle_no_replacement`（无放回）。
 
 优劣:
 1. 有放回优点: 实现简单，随机性强。
 2. 有放回缺点: 同 epoch 重复样本多，覆盖率低，统计噪声大。
+3. 无放回优点: 每 epoch 覆盖更完整、统计更稳定。
 
 ### 2.3 数据划分使用方式
 1. 单模型训练主循环只吃 train 列表，训练时无固定 val 监控（主循环内）。
@@ -125,23 +129,21 @@
 
 ### 2.11 Checkpoint/恢复
 1. 单模型: 有 `run_manifest` 严格校验恢复一致性。
-2. Supernet: 当前缺少等价严格 manifest 校验。
+2. Supernet: 已补齐 `run_manifest` 与关键语义一致性校验。
 
 优劣:
-1. 单模型恢复安全性更高。
-2. Supernet 仍有“参数改了但误恢复”的工程风险。
+1. 两者均具备恢复期关键配置防漂移保护。
 
 ### 2.12 可复现性
 1. 单模型: 随机种子控制较弱。
 2. Supernet: 有统一 seed 设置，复现性更好。
 
 ### 2.13 参数对齐完整性
-1. Supernet wrapper 传了 `gpu_device`，但训练实现中未生效。
-2. Supernet wrapper `fast_mode` 仅写入配置，训练实现未消费。
+1. `gpu_device` 已在 supernet 训练实现中生效。
+2. `fast_mode` 已从 supernet 训练链路移除，避免“可配但不生效”。
 
 优劣:
-1. 这是工程一致性问题，不是算法问题。
-2. 需要尽快修复，避免“以为生效其实未生效”。
+1. 此项工程一致性问题已关闭。
 
 ### 2.14 输入管线与 CPU 预取
 1. 单模型: 具备 `BatchPrefetcher` 线程队列，`prefetch_batches` 可开启 CPU 预取（`fast_mode` 默认会拉高到 8）。
@@ -225,65 +227,6 @@
 3. 训练 `random crop`、评估 `center crop` 的口径差异，会放大“train loss 改善但 eval 指标不动”的观感。
 4. 日志没有把 per-arch 历史曲线结构化落盘（目前主要在 `arch_rank_12` 字符串），后续定位慢子网瓶颈成本高。
 
-### P2（可选增强）
-1. 每 step 的 3 子网共用同一 batch，可考虑轻量改造为“子网间错位 micro-slice”，进一步提高样本多样性利用率。
-2. 在保持高频小 eval 的同时，增加低频大 eval（例如每 5~10 epoch 用更大 `eval_batches_per_arch`）做纠偏。
-
----
-
-## 5. 改进选项（含优缺点）
-注: 选项 A 已作为 run2 主配置执行，以下保留用于后续扩展选择。
-
-### 选项 A: 全遍历 epoch（无放回 + 每 epoch shuffle）
-做法:
-1. 增加 `train_sampling_mode=shuffle_no_replacement`。
-2. 每 epoch 遍历全 train（`steps_per_epoch=ceil(N/batch)`）。
-
-优点:
-1. epoch 语义清晰。
-2. 数据利用充分，统计更稳定。
-
-缺点:
-1. 超网耗时显著增加。
-2. 同等总训练时长下可跑 epoch 数变少。
-
-### 选项 B: 保持 fixed steps，但提高步数（例如 50 -> 150/200）
-优点:
-1. 实现改动最小。
-2. 显著提升每 epoch 覆盖率。
-
-缺点:
-1. 仍是有放回随机，重复样本仍多。
-2. epoch 仍不等于全遍历。
-
-### 选项 C: 混合模式（推荐）
-做法:
-1. 增加 `epoch_mode`:
-- `fixed_steps`
-- `full_pass`
-- `by_samples`（按目标样本数）
-2. 增加 `train_samples_per_epoch`（例如 0.3N / 0.5N / 1.0N）。
-3. 采样策略支持 `random_with_replacement` 与 `shuffle_no_replacement`。
-
-优点:
-1. 兼顾算力预算与数据利用率。
-2. 可平滑迁移，不需要一次性切到最重配置。
-
-缺点:
-1. 实现稍复杂。
-2. 需要配套日志和默认值设计。
-
-### 选项 D: 维持现状
-优点:
-1. 风险最小。
-2. 与现有历史结果完全同口径。
-
-缺点:
-1. 每 epoch 覆盖率低的问题持续存在。
-2. 调参效率与训练信号质量受限。
-
----
-
 ## 6. 推荐执行路线（建议按阶段）
 
 ### 阶段 1（已完成：工程一致性）
@@ -291,12 +234,10 @@
 2. 已移除 supernet 训练链路中的 `fast_mode` 死参数。
 3. 已增加 supernet 的 `run_manifest`/配置哈希恢复校验。
 
-### 阶段 2（提升数据利用率，控制成本）
-1. 引入 `epoch_mode` + `train_sampling_mode`。
-2. 先跑中档配置验证:
-- `epoch_mode=by_samples`
-- `train_samples_per_epoch ≈ 0.5 * train_size`
-- `train_sampling_mode=shuffle_no_replacement`
+### 阶段 2（已完成：数据利用率主路径）
+1. 已采用 `epoch_mode=full_pass`。
+2. 已采用 `train_sampling_mode=shuffle_no_replacement`。
+3. `steps_per_epoch` 与 train 规模对齐（run2 为 556）。
 
 ### 阶段 3（增强评估稳健性）
 1. 保留当前固定小 eval（用于高频监控）。

@@ -1,6 +1,6 @@
 # 04 超网训练执行门禁清单（仅 Supernet）
-
-更新时间: 2026-02-16
+更新时间: 2026-03-03
+状态: Reference（早期门禁清单，当前执行以 10/11/14 为准）
 
 ## 1. 使用方式
 
@@ -108,7 +108,7 @@
 
 必须通过的命令：
 
-1. `conda activate tf_work_hpc && python wrappers/run_supernet_train.py --gpu_device 0 --num_epochs 2 --batch_size 32 --lr 1e-4 --config configs/supernet_fc2_180x240.yaml --fast_mode`
+1. `conda activate tf_work_hpc && python wrappers/run_supernet_train.py --gpu_device 0 --num_epochs 2 --batch_size 32 --lr 1e-4 --config configs/supernet_fc2_180x240.yaml`
 2. `python -m code.nas.check_manifest --path outputs/supernet/train_manifest.json`
 
 通过标准：

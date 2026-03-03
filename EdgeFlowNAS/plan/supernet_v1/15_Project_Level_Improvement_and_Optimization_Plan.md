@@ -1,7 +1,8 @@
-# Supernet 训练问题排查与优化计划 (Project-Level Improvement & Optimization Plan)
+# Supernet 训练问题排查与优化计划（归档精简版）
 
 **文档编号**: 15
-**更新时间**: 2026-02-23
+**更新时间**: 2026-03-03
+**状态**: Superseded（执行以 10/11/14 为准）
 **目标**: 针对 `mean_epe_12` 评估指标长时间停靠 10.9 的异常现象，进行头脑风暴、根因分析，并给出针对性改进和优化清单。
 
 ---
@@ -37,41 +38,11 @@ TensorFlow 1.x 中，仅传入 `is_training=True` 足以让前向计算采用当
 
 ---
 
-## 2. 改进方案与修复策略 (Actionable Fixes)
+## 2. 已执行修复路径（仅保留已选）
 
-基于上述诊断，提供以下验证评估策略方案：
-
-### 方案 A：采取 Train-Mode Evaluation 评估机制 (非常推荐)
-
-在超网验证领域 (特别是 SPOS，BigNAS)，由于精准修正 BN 代价巨大甚至有时无解，经常通过 **Train Batch Batch-Norm** 作为评估妥协方案。由于模型评测时只需要衡量各子网能力并获得排名（Ranking），这非常适配当前。
-只要保证验证时的 Batch Size 不至于太小，即可使用当前 Batch 真实计算的均值方差，彻底屏蔽 `moving_XXX` 脏数据。
-
-**实施方法：**
-修改 `code/engine/supernet_trainer.py` 的 `_run_eval_epoch`：
-1. **直接移除/注释** 对 `run_bn_recalibration_session` 的任何调用，省掉无谓计算负担。
-2. 强制将评估时向计算图传送的标志位改写：
-```python
-epe_val = sess.run(
-    graph_obj["epe"],
-    feed_dict={
-        graph_obj["input_ph"]: input_batch,
-        graph_obj["label_ph"]: label_batch,
-        graph_obj["arch_code_ph"]: arch_code,
-        # 强制改变：使用训练模式强制让 BN 执行针对单一 batch 大小 (size=32) 的实时均值方差规范化。
-        graph_obj["is_training_ph"]: True,
-    },
-)
-```
-**此方案优势：** 稳定性极强，且节省评测耗时。直接可让验证 EPE 恢复到预期正常区间 (大概均值能从 10.9 下降到 2.0-4.0 左右范围)。
-
-### 方案 B：严格修复 BN Recalibration (学术标准打法)
-如果必须保留 `is_training_ph=False`，则需要做全面整顿。
-**实施方法：**
-1. 图构建暴露更新 OP：
-`"bn_update_ops": tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.UPDATE_OPS, scope="^((?!teacher/).)*")`
-2. 重估函数中执行：
-`sess.run([forward_fetch, bn_update_ops], feed_dict={...})`
-3. 倍级扩大重估数据量：将 YAML 配置文件中的 `eval.bn_recal_batches` 调整至起码 50 或更高。
+1. 已修复验证阶段“仅用 `preds[-1]` 未做残差累加”的问题，EPE 口径恢复可用。
+2. 已把评估主路径统一到当前 supernet eval 流程，避免旧分支并存。
+3. BN 重估相关的“方案对比讨论”在本轮不再保留为执行选项，后续若重开将另立文档。
 
 ---
 
@@ -93,7 +64,7 @@ epe_val = sess.run(
 
 ## 4. 后续任务分配清单 (Action Items Tracker)
 
-- [x] 本地定位打开 `supernet_trainer.py`，决定采取方案 A 或方案 B。优先应用方案 A 做降配评估。
+- [x] 本地定位并修复 `supernet_trainer.py/supernet_eval.py` 的评估链路关键问题。
 - [x] 在 `supernet_eval.py` 以及所有的线上离线评估 Wrapper 中追加部署 Train-Mode Validation 防止污染。
 - [x] 定位并彻底修复 10.9 保底值的核心元凶：在 EPE 结算前增加完整的 `accumulate_predictions` 操作，确保验证取到的不是单纯的高频残差。
 - [x] 应用修改后重启任务，如果能在前 5 个 Epoch 见到 EPE 回落到个位数，则代表问题彻底修复，项目可直接顺利回归既定跑道。

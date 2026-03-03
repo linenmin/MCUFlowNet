@@ -91,8 +91,8 @@
 1. 在全部任务验收通过后，交付详细使用手册 Markdown。
 
 ### 代码/文档改动
-1. 新增 `plan/07_User_Manual.md`。
-2. 更新 `plan/00_Plan_Index.md` 增加手册与日志索引。
+1. 新增 `plan/supernet_v1/07_User_Manual.md`。
+2. 更新 `plan/supernet_v1/00_Plan_Index.md` 增加手册与日志索引。
 
 ### 结果记录
 1. 使用手册已覆盖: 环境准备、训练/恢复/评估命令、产物验收、HPC 使用、常见问题与推荐流程。
