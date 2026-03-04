@@ -44,6 +44,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--hist_bins", type=int, default=None, help="deprecated: use run_supernet_subnet_distribution_plot.py")
     parser.add_argument("--top_k", type=int, default=None, help="top/bottom K rows in summary")
     parser.add_argument("--output_tag", default=None, help="suffix tag for output folder")
+    parser.add_argument("--fixed_arch", default=None, help="evaluate a single fixed arch code, e.g. '0,1,2,0,0,1,2,1,0'")
+    parser.add_argument("--output_dir", default=None, help="override output directory (absolute path)")
 
     parser.add_argument("--experiment_name", default=None, help="override runtime.experiment_name")
     parser.add_argument("--base_path", default=None, help="override data.base_path")
@@ -98,6 +100,8 @@ def main() -> int:
     _append_opt(cmd, "--hist_bins", args.hist_bins)
     _append_opt(cmd, "--top_k", args.top_k)
     _append_opt(cmd, "--output_tag", args.output_tag)
+    _append_opt(cmd, "--fixed_arch", args.fixed_arch)
+    _append_opt(cmd, "--output_dir", args.output_dir)
 
     _append_opt(cmd, "--experiment_name", args.experiment_name)
     _append_opt(cmd, "--base_path", args.base_path)

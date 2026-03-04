@@ -651,6 +651,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--hist_bins", type=int, default=30, help="deprecated: plotting moved to separate script")  # 已废弃：直方图 bin 数
     parser.add_argument("--top_k", type=int, default=10, help="top/bottom K summary")  # 导出 top/bottom K 子网摘要
     parser.add_argument("--output_tag", default="", help="optional suffix for output folder")  # 输出文件夹名附加后缀
+    parser.add_argument("--fixed_arch", default=None, help="evaluate a single fixed arch code, e.g. '0,1,2,0,0,1,2,1,0'. Skips random sampling.")  # 指定单个固定架构编码，跳过随机采样
+    parser.add_argument("--output_dir", default=None, help="override output directory (absolute path). If set, results are saved here instead of auto-generated path.")  # 覆盖输出目录
 
     parser.add_argument("--experiment_name", default=None, help="override runtime.experiment_name")  # 覆盖运行时实验名
     parser.add_argument("--base_path", default=None, help="override data.base_path")  # 覆盖数据根路径
@@ -692,12 +694,20 @@ def main() -> int:
     )
     include_eval_pool = not bool(args.exclude_eval_pool)  # 是否包含固定评估池
     sample_seed = int(args.sample_seed) if args.sample_seed is not None else int(seed + 9973)  # 子网采样种子（若未指定则在基础种子上偏移）
-    arch_pool = sample_arch_pool(
-        num_arch_samples=int(args.num_arch_samples),  # 采样子网数量
-        seed=sample_seed,  # 采样随机种子
-        include_eval_pool=include_eval_pool,  # 是否包含评估池
-        eval_pool=eval_pool_info["pool"],  # 评估池实际列表
-    )
+
+    # --- fixed_arch 补丁: 如果指定了单个固定架构，跳过随机采样 ---
+    if args.fixed_arch is not None:
+        _fixed_parts = [int(x.strip()) for x in args.fixed_arch.split(",")]  # 解析逗号分隔的编码
+        if len(_fixed_parts) != 9 or not all(0 <= v <= 2 for v in _fixed_parts):  # 合法性校验
+            raise ValueError(f"--fixed_arch 必须是 9 位 0/1/2 数组, 收到: {args.fixed_arch}")
+        arch_pool = [_fixed_parts]  # 单元素列表
+    else:
+        arch_pool = sample_arch_pool(
+            num_arch_samples=int(args.num_arch_samples),  # 采样子网数量
+            seed=sample_seed,  # 采样随机种子
+            include_eval_pool=include_eval_pool,  # 是否包含评估池
+            eval_pool=eval_pool_info["pool"],  # 评估池实际列表
+        )
 
     output_root = _resolve_output_dir(config=config)  # 解析超网训练输出目录
     ckpt_paths = _build_checkpoint_paths(experiment_dir=output_root)  # 构造 best/last checkpoint 路径
@@ -718,9 +728,16 @@ def main() -> int:
 
     tag = str(args.output_tag).strip()  # 输出目录附加标签
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")  # 时间戳
-    folder_name = f"{args.checkpoint_type}_{len(arch_pool)}_{stamp}" + (f"_{tag}" if tag else "")  # 运行文件夹名
-    run_dir = output_root / "subnet_distribution" / folder_name  # 总运行目录
-    analysis_dir = run_dir / "analysis"  # 分析结果目录
+
+    # --- output_dir 补丁: 如果指定了输出目录，直接使用 ---
+    if args.output_dir is not None:
+        run_dir = Path(args.output_dir)  # 使用用户指定的输出目录
+        analysis_dir = run_dir / "analysis"  # 分析子目录
+    else:
+        folder_name = f"{args.checkpoint_type}_{len(arch_pool)}_{stamp}" + (f"_{tag}" if tag else "")  # 运行文件夹名
+        run_dir = output_root / "subnet_distribution" / folder_name  # 总运行目录
+        analysis_dir = run_dir / "analysis"  # 分析结果目录
+
     analysis_dir.mkdir(parents=True, exist_ok=True)  # 创建分析目录
 
     # 评估采样子网在超网上的 EPE 表现

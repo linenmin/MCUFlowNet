@@ -1,0 +1,64 @@
+# EdgeFlowNAS Agentic Search 配置文件
+# 定义各 Agent 的模型路由、搜索超参数、以及目录路径规范。
+
+# --- LLM 模型路由 ---
+llm:
+  # LiteLLM 兼容的模型标识符。
+  # 格式: "provider/model_name" (例如 "gemini/gemini-2.5-pro")
+  models:
+    agent_a_strategist: "gemini/gemini-2.5-pro"
+    agent_b_generator: "gemini/gemini-2.0-flash"
+    agent_c_distiller: "gemini/gemini-2.0-flash"
+    agent_d_scientist: "gemini/gemini-2.5-pro"
+    agent_d_coder: "gemini/gemini-2.5-pro"
+    agent_d_rule_manager: "gemini/gemini-2.5-pro"
+
+  # 通用 LLM 调用参数
+  temperature: 0.4          # 生成多样性 (Agent B 可稍高)
+  max_tokens: 4096          # 单次调用最大输出 token
+  request_timeout: 120      # 单次 API 调用超时(秒)
+  max_retries: 3            # LiteLLM 内置重试次数 (处理 429 等)
+
+# --- 搜索超参数 ---
+search:
+  total_epochs: 50          # 总搜索轮次
+  batch_size: 40            # 每轮 Agent B 生成的候选子网数量
+  scientist_trigger_interval: 10  # 每隔多少个 Epoch 触发 Agent D 大反思
+  assumption_confidence_threshold: 0.95  # 猜想升格为 Finding 的置信度门槛
+
+# --- 并发参数 ---
+concurrency:
+  max_workers: 4            # ThreadPoolExecutor 最大线程数 (硬件上限)
+
+# --- 评估管线 ---
+evaluation:
+  # 底层 supernet 评估 CLI 脚本路径 (相对于项目根目录)
+  eval_script: "wrappers/run_supernet_subnet_distribution.py"
+  # supernet 训练配置 (传给底层 CLI 的 --config)
+  supernet_config: "configs/supernet_fc2_180x240.yaml"
+  # supernet 检查点类型
+  checkpoint_type: "best"
+  # Vela 编译开关
+  enable_vela: true
+  vela_mode: "verbose"
+  vela_keep_artifacts: true
+  # 喂给 Agent C 的 per-layer.csv 最大行数截断
+  per_layer_csv_max_rows: 200
+
+# --- 目录结构 ---
+paths:
+  # 所有搜索产物的根目录 (相对于项目根)
+  output_root: "outputs/search_v1"
+  # 子目录名称 (在单次实验目录下)
+  metadata_dir: "metadata"
+  dashboard_dir: "dashboard"
+  tmp_workers_dir: "dashboard/tmp_workers"
+  eval_outputs_dir: "dashboard/eval_outputs"
+  scripts_dir: "scripts"
+
+# --- 文件名称约定 ---
+files:
+  history_csv: "history_archive.csv"
+  strategy_log: "search_strategy_log.md"
+  assumptions_json: "assumptions.json"
+  findings_md: "findings.md"
