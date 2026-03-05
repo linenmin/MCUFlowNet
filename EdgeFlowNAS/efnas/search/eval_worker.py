@@ -96,7 +96,7 @@ def evaluate_single_arch(
     run_output_dir = os.path.join(exp_dir, "dashboard", "eval_outputs", f"run_{safe_name}")
     os.makedirs(run_output_dir, exist_ok=True)
 
-    logger.info("[Worker] 寮€濮嬭瘎浼版灦鏋? %s", arch_code_str)
+    logger.info("[Worker] 开始评估架构: %s", arch_code_str)
 
     cmd = _build_eval_command(
         project_root=project_root,
@@ -115,10 +115,10 @@ def evaluate_single_arch(
             cwd=project_root,
         )
     except subprocess.TimeoutExpired:
-        logger.error("[Worker] 璇勪及瓒呮椂 arch=%s (>600s)", arch_code_str)
+        logger.error("[Worker] 评估超时 arch=%s (>600s)", arch_code_str)
         return None
     except Exception:
-        logger.exception("[Worker] subprocess 寮傚父 arch=%s", arch_code_str)
+        logger.exception("[Worker] subprocess 异常 arch=%s", arch_code_str)
         return None
 
     # Always persist raw child logs for troubleshooting.
@@ -132,7 +132,7 @@ def evaluate_single_arch(
 
     if result.returncode != 0:
         logger.error(
-            "[Worker] 璇勪及澶辫触 arch=%s, returncode=%d\nstderr:\n%s",
+            "[Worker] 评估失败 arch=%s, returncode=%d\nstderr:\n%s",
             arch_code_str,
             result.returncode,
             result.stderr[-2000:] if result.stderr else "(empty)",
@@ -170,7 +170,7 @@ def evaluate_single_arch(
     from efnas.search.file_io import write_worker_result
 
     json_path = write_worker_result(exp_dir, arch_code_str, row)
-    logger.info("[Worker] 璇勪及瀹屾垚 arch=%s -> %s", arch_code_str, json_path)
+    logger.info("[Worker] 评估完成 arch=%s -> %s", arch_code_str, json_path)
     return row
 
 
@@ -226,7 +226,7 @@ def _parse_epe(run_output_dir: str, output_tag: str) -> Optional[float]:
         except Exception:
             pass
 
-    logger.warning("鏈兘瑙ｆ瀽 EPE: %s (expected analysis/records.csv)", run_output_dir)
+    logger.warning("未能解析 EPE: %s (expected analysis/records.csv)", run_output_dir)
     return None
 
 
@@ -316,7 +316,7 @@ def _parse_vela_summary(run_output_dir: str) -> Dict[str, Any]:
     if metrics:
         return metrics
 
-    logger.warning("鏈兘瑙ｆ瀽 Vela summary: %s (expected analysis/vela_metrics.csv)", run_output_dir)
+    logger.warning("未能解析 Vela summary: %s (expected analysis/vela_metrics.csv)", run_output_dir)
     return metrics
 
 
@@ -360,9 +360,9 @@ def _invoke_agent_c(
 
     summary_info = json.dumps(vela_metrics, ensure_ascii=False, indent=2) if vela_metrics else "N/A"
     user_msg = (
-        f"## 褰撳墠瀛愮綉鏋舵瀯缂栫爜: {arch_code_str}\n\n"
-        f"## Vela Summary 鍏抽敭鎸囨爣:\n```json\n{summary_info}\n```\n\n"
-        f"## Vela Per-Layer 璇︾粏鎶ュ憡:\n```csv\n{per_layer_text}\n```\n"
+        f"## 当前子网架构编码: {arch_code_str}\n\n"
+        f"## Vela Summary 关键指标:\n```json\n{summary_info}\n```\n\n"
+        f"## Vela Per-Layer 详细报告:\n```csv\n{per_layer_text}\n```\n"
     )
 
     try:
@@ -374,6 +374,6 @@ def _invoke_agent_c(
         )
         return insight.strip()
     except Exception:
-        logger.exception("[Agent C] 钂搁璋冪敤澶辫触 arch=%s", arch_code_str)
-        return "Agent C 璋冪敤澶辫触, 鏃犳硶鐢熸垚纭欢娲炲療"
+        logger.exception("[Agent C] 调用失败 arch=%s", arch_code_str)
+        return "Agent C 调用失败，无法生成硬件洞察"
 
