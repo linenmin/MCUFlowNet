@@ -242,6 +242,14 @@ def _safe_float(value: Any) -> Optional[float]:
     return None  # NaN 或 inf 返回 None
 
 
+def _safe_int(value: Any) -> Optional[int]:
+    """Convert value to int with best effort."""  # 尝试安全地转换成 int
+    number = _safe_float(value)  # 先走 float 安全转换
+    if number is None:
+        return None
+    return int(number)  # 兼容 "123.0" 这类字符串
+
+
 def _safe_fps(inference_ms: Optional[float]) -> Optional[float]:
     """Convert inference time(ms) to FPS."""  # 将推理时间（毫秒）转换为 FPS
     time_ms = _safe_float(inference_ms)  # 先安全转成 float
@@ -323,6 +331,8 @@ def _save_vela_csv(path: Path, records: Sequence[Dict[str, Any]]) -> None:
         "sram_peak_mb",  # 峰值 SRAM
         "inference_ms",  # 推理时间（毫秒）
         "fps",  # FPS
+        "cycles_npu",  # NPU cycles（来自 Vela summary）
+        "macs",  # MACs（来自 Vela summary）
         "vela_status",  # Vela 运行状态
         "vela_error",  # 错误信息
     ]
@@ -331,6 +341,47 @@ def _save_vela_csv(path: Path, records: Sequence[Dict[str, Any]]) -> None:
         writer.writeheader()  # 写入表头
         for row in records:  # 遍历记录
             writer.writerow({key: row.get(key, "") for key in fields})  # 写入一行
+
+
+def _extract_vela_summary_metrics(output_dir: Path) -> Dict[str, Optional[int]]:
+    """Extract cycles/macs from one Vela summary CSV."""  # 从 Vela summary 提取 cycles/macs
+    patterns = [
+        "*_summary_*Sys*Config*.csv",
+        "*_summary_*.csv",
+    ]
+    summary_files: List[Path] = []
+    for pattern in patterns:
+        summary_files.extend(sorted(output_dir.glob(pattern)))
+
+    for summary_path in summary_files:
+        try:
+            with summary_path.open("r", encoding="utf-8", newline="") as handle:
+                reader = csv.DictReader(handle)
+                first_row = next(reader, None)
+            if not first_row:
+                continue
+            cycles = _safe_int(
+                first_row.get("cycles_npu")
+                or first_row.get("npu_cycles")
+                or first_row.get("cycles_total")
+            )
+            macs = _safe_int(
+                first_row.get("nn_macs")
+                or first_row.get("macs")
+                or first_row.get("total_macs")
+                or first_row.get("mac_count")
+            )
+            return {
+                "cycles_npu": cycles,
+                "macs": macs,
+            }
+        except Exception:
+            continue
+
+    return {
+        "cycles_npu": None,
+        "macs": None,
+    }
 
 
 def _evaluate_arch_pool(
@@ -543,12 +594,15 @@ def _run_vela_for_arch(
     sram_peak_mb = _safe_float(sram_mb)  # 安全转换 SRAM 数值
     inference_ms = _safe_float(inference_ms)  # 安全转换推理时间
     fps = _safe_fps(inference_ms)  # 根据推理时间计算 FPS
+    summary_metrics = _extract_vela_summary_metrics(output_dir=output_dir)  # 从 summary 提取 cycles/macs
     status = "ok" if sram_peak_mb is not None and inference_ms is not None and fps is not None else "fail"  # 判断是否成功
     error_text = "" if status == "ok" else "missing_vela_metrics"  # 失败时给出简单错误标记
     return {
         "sram_peak_mb": sram_peak_mb,  # SRAM 峰值（MB）
         "inference_ms": inference_ms,  # 推理时间（毫秒）
         "fps": fps,  # FPS
+        "cycles_npu": summary_metrics.get("cycles_npu"),  # NPU cycles
+        "macs": summary_metrics.get("macs"),  # MACs
         "vela_status": status,  # 状态
         "vela_error": error_text,  # 错误信息
     }
@@ -585,6 +639,8 @@ def _collect_vela_metrics(
                 "sram_peak_mb": None,  # 默认 SRAM 为空
                 "inference_ms": None,  # 默认推理时间为空
                 "fps": None,  # 默认 FPS 为空
+                "cycles_npu": None,  # 默认 NPU cycles 为空
+                "macs": None,  # 默认 MACs 为空
                 "vela_status": "fail",  # 默认视为失败，成功后再覆盖
                 "vela_error": "",  # 默认错误信息为空
             }

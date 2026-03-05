@@ -1,10 +1,14 @@
 """Unit tests for subnet distribution helpers."""
 
+import tempfile
 import unittest
+from pathlib import Path
 
 from efnas.nas.supernet_subnet_distribution import (
     ARCH_SPACE_SIZE,
     _compute_metric_summary,
+    _extract_vela_summary_metrics,
+    _save_vela_csv,
     _safe_fps,
     compute_complexity_scores,
     sample_arch_pool,
@@ -53,6 +57,45 @@ class TestSubnetDistributionHelpers(unittest.TestCase):
         self.assertEqual(summary["count_valid"], 2)
         self.assertEqual(summary["count_invalid"], 2)
         self.assertAlmostEqual(summary["mean"], 2.0)
+
+    def test_extract_vela_summary_metrics_reads_cycles_and_macs(self) -> None:
+        """Should parse cycles_npu and nn_macs from Vela summary CSV."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            summary_path = Path(tmp_dir) / "arch_0000_summary_Grove_Sys_Config.csv"
+            summary_path.write_text(
+                "experiment,cycles_npu,nn_macs,inference_time,sram_memory_used\n"
+                "default,124441439.0,5827230720,0.3111035975,1620.0\n",
+                encoding="utf-8",
+            )
+            metrics = _extract_vela_summary_metrics(Path(tmp_dir))
+            self.assertEqual(metrics["cycles_npu"], 124441439)
+            self.assertEqual(metrics["macs"], 5827230720)
+
+    def test_save_vela_csv_contains_cycles_and_macs_columns(self) -> None:
+        """Vela csv should include cycles_npu and macs columns."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            csv_path = Path(tmp_dir) / "vela_metrics.csv"
+            _save_vela_csv(
+                csv_path,
+                records=[
+                    {
+                        "sample_index": 0,
+                        "arch_code": "0,0,0,0,0,0,0,0,0",
+                        "sram_peak_mb": 1.58203125,
+                        "inference_ms": 120.0,
+                        "fps": 8.33,
+                        "cycles_npu": 124441439,
+                        "macs": 5827230720,
+                        "vela_status": "ok",
+                        "vela_error": "",
+                    }
+                ],
+            )
+            content = csv_path.read_text(encoding="utf-8")
+            self.assertIn("cycles_npu", content.splitlines()[0])
+            self.assertIn("macs", content.splitlines()[0])
+            self.assertIn("124441439", content)
+            self.assertIn("5827230720", content)
 
 
 if __name__ == "__main__":

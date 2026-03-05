@@ -1,5 +1,7 @@
 import os
+import tempfile
 import unittest
+from pathlib import Path
 
 from efnas.search import eval_worker
 
@@ -77,6 +79,32 @@ class TestEvalWorkerCommand(unittest.TestCase):
         self.assertNotIn("--cpu_only", cmd)
         self.assertNotIn("--vela_float32", cmd)
         self.assertNotIn("--vela_verbose_log", cmd)
+
+    def test_parse_vela_summary_backfills_cycles_and_macs_from_nested_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir)
+            analysis = run_dir / "analysis"
+            analysis.mkdir(parents=True, exist_ok=True)
+
+            # Simulate old vela_metrics.csv without cycles/macs.
+            (analysis / "vela_metrics.csv").write_text(
+                "arch_code,sram_peak_mb,inference_ms,fps\n"
+                "0,0,0,0,1.582031,120.801346,8.278300\n",
+                encoding="utf-8",
+            )
+
+            # Vela raw summary stays under analysis/vela_tmp/<arch>/...
+            summary_dir = analysis / "vela_tmp" / "arch_0000"
+            summary_dir.mkdir(parents=True, exist_ok=True)
+            (summary_dir / "arch_0000_summary_Grove_Sys_Config.csv").write_text(
+                "inferences_per_second,sram_memory_used,cycles_npu,nn_macs\n"
+                "8.278299714226886,1658880,48319101,2078899200\n",
+                encoding="utf-8",
+            )
+
+            metrics = eval_worker._parse_vela_summary(str(run_dir))
+            self.assertEqual(metrics.get("cycles_npu"), 48319101)
+            self.assertEqual(metrics.get("macs"), 2078899200)
 
 
 if __name__ == "__main__":
