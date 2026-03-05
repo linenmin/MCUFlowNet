@@ -28,7 +28,7 @@ search:
 
 # --- 并发参数 ---
 concurrency:
-  max_workers: 4            # ThreadPoolExecutor 最大线程数 (硬件上限)
+  max_workers: 1            # 保守模式：单 worker，优先稳定性
 
 # --- 评估管线 ---
 evaluation:
@@ -41,7 +41,7 @@ evaluation:
   # Vela 编译开关
   enable_vela: true
   vela_mode: "verbose"
-  vela_keep_artifacts: true
+  vela_keep_artifacts: false
   # 喂给 Agent C 的 per-layer.csv 最大行数截断
   per_layer_csv_max_rows: 200
 
