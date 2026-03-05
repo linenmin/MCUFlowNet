@@ -214,6 +214,23 @@ def rescue_orphaned_results(exp_dir: str) -> int:
 # assumptions.json 操作
 # ===================================================================
 
+def prune_vela_tflite_artifacts(exp_dir: str) -> int:
+    """Remove heavy Vela *.tflite artifacts while keeping CSV/TXT analysis files."""
+    eval_outputs_dir = os.path.join(exp_dir, "dashboard", "eval_outputs")
+    if not os.path.isdir(eval_outputs_dir):
+        return 0
+
+    pattern = os.path.join(eval_outputs_dir, "run_*", "analysis", "vela_tmp", "**", "*.tflite")
+    removed = 0
+    for path in glob.glob(pattern, recursive=True):
+        try:
+            os.remove(path)
+            removed += 1
+        except OSError as e:
+            logger.warning("删除 Vela tflite 失败: %s (%s)", path, e)
+    return removed
+
+
 def read_assumptions(exp_dir: str) -> List[Dict[str, Any]]:
     """读取猜想队列。"""
     path = os.path.join(exp_dir, "metadata", "assumptions.json")

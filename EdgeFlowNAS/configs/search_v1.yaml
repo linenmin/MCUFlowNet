@@ -42,6 +42,7 @@ evaluation:
   enable_vela: true
   vela_mode: "verbose"
   vela_keep_artifacts: true
+  vela_prune_tflite_after_reduce: true
   # 喂给 Agent C 的 per-layer.csv 最大行数截断
   per_layer_csv_max_rows: 500
 

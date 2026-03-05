@@ -50,6 +50,9 @@ class SearchCoordinator:
         self.scientist_interval: int = search_cfg["scientist_trigger_interval"]
         self.confidence_threshold: float = search_cfg["assumption_confidence_threshold"]
         self.max_workers: int = cfg["concurrency"]["max_workers"]
+        self.prune_tflite_after_reduce: bool = bool(
+            cfg.get("evaluation", {}).get("vela_prune_tflite_after_reduce", False)
+        )
 
         self.llm = LLMClient(cfg)
 
@@ -74,6 +77,7 @@ class SearchCoordinator:
         rescued = file_io.rescue_orphaned_results(self.exp_dir)
         if rescued > 0:
             logger.info("断点恢复完成: 抢救 %d 条结果", rescued)
+        self._maybe_prune_vela_tflite(stage="startup_rescue")
 
         # 推断 start_epoch（从已有数据中找最大 epoch）
         if start_epoch == 0:
@@ -89,12 +93,14 @@ class SearchCoordinator:
             except KeyboardInterrupt:
                 logger.warning("用户中断 (Ctrl+C)，正在执行 Reduce 抢救...")
                 file_io.collect_and_commit_worker_results(self.exp_dir)
+                self._maybe_prune_vela_tflite(stage="interrupt_rescue")
                 logger.info("Reduce 抢救完成，安全退出。")
                 return
             except Exception:
                 logger.exception("Epoch %d 发生未捕获异常", epoch)
                 # 尝试抢救已有结果
                 file_io.collect_and_commit_worker_results(self.exp_dir)
+                self._maybe_prune_vela_tflite(stage="exception_rescue")
                 raise
 
             logger.info("=== Epoch %d 完成 ===", epoch)
@@ -170,6 +176,7 @@ class SearchCoordinator:
         # -------------------------------------------------------
         logger.info("[Phase 7] Reduce 阶段")
         committed = file_io.collect_and_commit_worker_results(self.exp_dir)
+        self._maybe_prune_vela_tflite(stage=f"epoch_{epoch}_reduce")
         logger.info("本轮提交 %d 条评估结果", committed)
 
     # ===============================================================
@@ -277,3 +284,11 @@ class SearchCoordinator:
             return max_epoch + 1
         except (ValueError, TypeError):
             return 0
+
+    def _maybe_prune_vela_tflite(self, stage: str) -> None:
+        """Optionally prune Vela tflite artifacts in main thread after reduce/rescue."""
+        if not self.prune_tflite_after_reduce:
+            return
+        removed = file_io.prune_vela_tflite_artifacts(self.exp_dir)
+        if removed > 0:
+            logger.info("[Prune] %s: 删除 %d 个 Vela tflite 文件", stage, removed)
