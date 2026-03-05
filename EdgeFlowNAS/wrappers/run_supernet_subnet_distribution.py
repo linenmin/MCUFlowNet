@@ -1,12 +1,15 @@
 """Supernet subnet-distribution analysis CLI wrapper."""
 
 import argparse
+import importlib.util
 import shlex
 import subprocess
 import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 
 def _append_opt(cmd, name: str, value) -> None:
@@ -58,14 +61,33 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _resolve_entry_module() -> str:
+    """Resolve callable module path with backward compatibility."""
+    candidates = [
+        "efnas.nas.supernet_subnet_distribution",
+        "code.nas.supernet_subnet_distribution",
+    ]
+    for module_name in candidates:
+        try:
+            if importlib.util.find_spec(module_name) is not None:
+                return module_name
+        except ModuleNotFoundError:
+            continue
+    raise ModuleNotFoundError(
+        "Cannot resolve subnet distribution module. "
+        "Tried: efnas.nas.supernet_subnet_distribution, code.nas.supernet_subnet_distribution"
+    )
+
+
 def main() -> int:
     """CLI entry."""
     parser = _build_parser()
     args = parser.parse_args()
+    entry_module = _resolve_entry_module()
     cmd = [
         sys.executable,
         "-m",
-        "code.nas.supernet_subnet_distribution",
+        entry_module,
         "--config",
         args.config,
         "--checkpoint_type",
