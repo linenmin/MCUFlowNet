@@ -51,7 +51,7 @@
 2. `arch_code[1]` -> `EB1` 深度选择
 3. `arch_code[2]` -> `DB0` 深度选择
 4. `arch_code[3]` -> `DB1` 深度选择
-5. `arch_code[4]` -> `H0Out` kernel 选择（`0=7x7,1=5x5,2=3x3`）
+5. `arch_code[4]` -> `H0Out` kernel 选择（`0=3x3,1=5x5,2=7x7`）
 6. `arch_code[5]` -> `H1` kernel 选择
 7. `arch_code[6]` -> `H1Out` kernel 选择
 8. `arch_code[7]` -> `H2` kernel 选择
