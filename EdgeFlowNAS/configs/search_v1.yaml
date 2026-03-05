@@ -8,9 +8,9 @@ llm:
   models:
     agent_a_strategist: "gemini/gemini-3.1-pro-preview"
     agent_b_generator: "gemini/gemini-3.1-flash-lite-preview"
-    agent_c_distiller: "gemini/gemini-3.1-flash-lite-preview"
+    agent_c_distiller: "gemini/gemini-3-flash-preview"
     agent_d_scientist: "gemini/gemini-3.1-pro-preview"
-    agent_d_coder: "gemini/gemini-3.1-pro-preview"
+    agent_d_coder: "gemini/gemini-3-flash-preview"
     agent_d_rule_manager: "gemini/gemini-3.1-pro-preview"
 
   # 通用 LLM 调用参数

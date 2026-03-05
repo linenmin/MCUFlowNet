@@ -1,5 +1,5 @@
 runtime:
-  experiment_name: "edgeflownas_supernet_fc2_180x240"
+  experiment_name: "edgeflownas_supernet_fc2_180x240_run3"
   output_root: "outputs/supernet"
   seed: 42
 
@@ -11,7 +11,7 @@ train:
   train_sampling_mode: "shuffle_no_replacement"
   train_crop_mode: "random"
   batch_size: 32
-  micro_batch_size: 8
+  micro_batch_size: 32
   lr: 1.0e-4
   optimizer: "adam"
   lr_schedule: "cosine"
@@ -37,7 +37,7 @@ data:
   flow_channels: 2
 
 eval:
-  eval_every_epoch: 1
+  eval_every_epoch: 5
   eval_pool_size: 12
   bn_recal_batches: 32
   eval_batches_per_arch: 16
