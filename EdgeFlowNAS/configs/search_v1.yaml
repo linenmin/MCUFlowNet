@@ -6,12 +6,12 @@ llm:
   # LiteLLM 兼容的模型标识符。
   # 格式: "provider/model_name" (例如 "gemini/gemini-2.5-pro")
   models:
-    agent_a_strategist: "gemini/gemini-2.5-pro"
-    agent_b_generator: "gemini/gemini-2.0-flash"
-    agent_c_distiller: "gemini/gemini-2.0-flash"
-    agent_d_scientist: "gemini/gemini-2.5-pro"
-    agent_d_coder: "gemini/gemini-2.5-pro"
-    agent_d_rule_manager: "gemini/gemini-2.5-pro"
+    agent_a_strategist: "gemini/gemini-3.1-pro-preview"
+    agent_b_generator: "gemini/gemini-3.1-flash-lite-preview"
+    agent_c_distiller: "gemini/gemini-3.1-flash-lite-preview"
+    agent_d_scientist: "gemini/gemini-3.1-pro-preview"
+    agent_d_coder: "gemini/gemini-3.1-pro-preview"
+    agent_d_rule_manager: "gemini/gemini-3.1-pro-preview"
 
   # 通用 LLM 调用参数
   temperature: 0.4          # 生成多样性 (Agent B 可稍高)
