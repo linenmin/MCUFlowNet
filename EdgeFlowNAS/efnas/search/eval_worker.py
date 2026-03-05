@@ -22,6 +22,64 @@ def _analysis_dir(run_output_dir: str) -> str:
     return os.path.join(run_output_dir, "analysis")
 
 
+def _append_opt(cmd: list, name: str, value: Any) -> None:
+    """Append CLI option when value is explicitly provided."""
+    if value is None:
+        return
+    cmd.extend([name, str(value)])
+
+
+def _build_eval_command(
+    project_root: str,
+    eval_cfg: Dict[str, Any],
+    arch_code_str: str,
+    output_tag: str,
+    run_output_dir: str,
+) -> list:
+    """Build eval subprocess command from `evaluation` config."""
+    eval_script = os.path.join(project_root, eval_cfg["eval_script"])
+    supernet_config = os.path.join(project_root, eval_cfg["supernet_config"])
+
+    cmd = [
+        sys.executable,
+        eval_script,
+        "--config",
+        supernet_config,
+        "--checkpoint_type",
+        str(eval_cfg.get("checkpoint_type", "best")),
+        "--fixed_arch",
+        arch_code_str,
+        "--output_tag",
+        output_tag,
+        "--output_dir",
+        run_output_dir,
+    ]
+
+    # Throughput and eval behavior overrides.
+    _append_opt(cmd, "--bn_recal_batches", eval_cfg.get("bn_recal_batches"))
+    _append_opt(cmd, "--eval_batches_per_arch", eval_cfg.get("eval_batches_per_arch"))
+    _append_opt(cmd, "--batch_size", eval_cfg.get("batch_size"))
+    _append_opt(cmd, "--num_workers", eval_cfg.get("num_workers"))
+    if bool(eval_cfg.get("cpu_only", False)):
+        cmd.append("--cpu_only")
+
+    # Vela related options.
+    if bool(eval_cfg.get("enable_vela", False)):
+        cmd.append("--enable_vela")
+        _append_opt(cmd, "--vela_mode", eval_cfg.get("vela_mode", "verbose"))
+    if bool(eval_cfg.get("vela_keep_artifacts", False)):
+        cmd.append("--vela_keep_artifacts")
+    _append_opt(cmd, "--vela_optimise", eval_cfg.get("vela_optimise"))
+    _append_opt(cmd, "--vela_limit", eval_cfg.get("vela_limit"))
+    _append_opt(cmd, "--vela_rep_dataset_samples", eval_cfg.get("vela_rep_dataset_samples"))
+    if bool(eval_cfg.get("vela_float32", False)):
+        cmd.append("--vela_float32")
+    if bool(eval_cfg.get("vela_verbose_log", False)):
+        cmd.append("--vela_verbose_log")
+
+    return cmd
+
+
 def evaluate_single_arch(
     arch_code_str: str,
     epoch: int,
@@ -40,28 +98,13 @@ def evaluate_single_arch(
 
     logger.info("[Worker] 开始评估架构: %s", arch_code_str)
 
-    eval_script = os.path.join(project_root, eval_cfg["eval_script"])
-    supernet_config = os.path.join(project_root, eval_cfg["supernet_config"])
-
-    cmd = [
-        sys.executable,
-        eval_script,
-        "--config",
-        supernet_config,
-        "--checkpoint_type",
-        eval_cfg["checkpoint_type"],
-        "--fixed_arch",
-        arch_code_str,
-        "--output_tag",
-        output_tag,
-        "--output_dir",
-        run_output_dir,
-    ]
-    if eval_cfg.get("enable_vela", False):
-        cmd.append("--enable_vela")
-        cmd.extend(["--vela_mode", eval_cfg.get("vela_mode", "verbose")])
-    if eval_cfg.get("vela_keep_artifacts", False):
-        cmd.append("--vela_keep_artifacts")
+    cmd = _build_eval_command(
+        project_root=project_root,
+        eval_cfg=eval_cfg,
+        arch_code_str=arch_code_str,
+        output_tag=output_tag,
+        run_output_dir=run_output_dir,
+    )
 
     try:
         result = subprocess.run(
@@ -322,4 +365,3 @@ def _invoke_agent_c(
     except Exception:
         logger.exception("[Agent C] 蒸馏调用失败 arch=%s", arch_code_str)
         return "Agent C 调用失败, 无法生成硬件洞察"
-

@@ -22,8 +22,8 @@ llm:
 # --- 搜索超参数 ---
 search:
   total_epochs: 50          # 总搜索轮次
-  batch_size: 40            # 每轮 Agent B 生成的候选子网数量
-  scientist_trigger_interval: 10  # 每隔多少个 Epoch 触发 Agent D 大反思
+  batch_size: 20            # 每轮 Agent B 生成的候选子网数量
+  scientist_trigger_interval: 2  # 每隔多少个 Epoch 触发 Agent D 大反思
   assumption_confidence_threshold: 0.95  # 猜想升格为 Finding 的置信度门槛
 
 # --- 并发参数 ---
@@ -41,9 +41,9 @@ evaluation:
   # Vela 编译开关
   enable_vela: true
   vela_mode: "verbose"
-  vela_keep_artifacts: false
+  vela_keep_artifacts: true
   # 喂给 Agent C 的 per-layer.csv 最大行数截断
-  per_layer_csv_max_rows: 200
+  per_layer_csv_max_rows: 500
 
 # --- 目录结构 ---
 paths:
