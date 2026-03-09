@@ -189,6 +189,7 @@ def _build_eval_graph(config: Dict[str, Any], batch_size: int) -> Dict[str, Any]
     pred_accum = accumulate_predictions(preds)
     epe_tensor = build_epe_metric(pred_tensor=pred_accum, label_ph=label_ph, num_out=flow_channels)
     saver = tf.compat.v1.train.Saver(max_to_keep=5)
+    bn_update_ops = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.UPDATE_OPS)
     return {
         "input_ph": input_ph,
         "label_ph": label_ph,
@@ -197,6 +198,7 @@ def _build_eval_graph(config: Dict[str, Any], batch_size: int) -> Dict[str, Any]
         "pred_tensor": preds[-1],
         "epe": epe_tensor,
         "saver": saver,
+        "bn_update_ops": bn_update_ops,
     }
 
 
@@ -245,7 +247,7 @@ def _run_eval_pool(
                 train_input = standardize_image_tensor(train_input)
                 # Forward pass in training mode to update BN statistics
                 sess.run(
-                    graph_obj["pred_tensor"],
+                    [graph_obj["pred_tensor"], graph_obj["bn_update_ops"]],
                     feed_dict={
                         graph_obj["input_ph"]: train_input,
                         graph_obj["arch_code_ph"]: arch_code,
@@ -301,7 +303,7 @@ def _run_one_arch_eval(
         train_input = standardize_image_tensor(train_input)
         # Forward pass in training mode to update running mean/var
         sess.run(
-            graph_obj["pred_tensor"],
+            [graph_obj["pred_tensor"], graph_obj["bn_update_ops"]],
             feed_dict={
                 graph_obj["input_ph"]: train_input,
                 graph_obj["arch_code_ph"]: arch_code,
