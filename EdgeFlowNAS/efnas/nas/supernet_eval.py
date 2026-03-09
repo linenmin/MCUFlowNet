@@ -238,11 +238,23 @@ def _run_eval_pool(
         for arch_idx, arch_code in enumerate(eval_pool, start=1):
             if hasattr(train_provider, "reset_cursor"):
                 train_provider.reset_cursor(0)
-        for arch_idx, arch_code in enumerate(eval_pool, start=1):
-            if hasattr(train_provider, "reset_cursor"):
-                train_provider.reset_cursor(0)
+            
+            # --- BN Recalibration Phase ---
+            for _ in range(bn_batches):
+                train_input, _, _, _ = train_provider.next_batch(batch_size=batch_size)
+                train_input = standardize_image_tensor(train_input)
+                # Forward pass in training mode to update BN statistics
+                sess.run(
+                    graph_obj["pred_tensor"],
+                    feed_dict={
+                        graph_obj["input_ph"]: train_input,
+                        graph_obj["arch_code_ph"]: arch_code,
+                        graph_obj["is_training_ph"]: True,
+                    },
+                )
+                progress.update(1)
 
-
+            # --- Validation Phase ---
             if hasattr(val_provider, "reset_cursor"):
                 val_provider.reset_cursor(0)
             arch_batch_epes = []
@@ -255,7 +267,7 @@ def _run_eval_pool(
                         graph_obj["input_ph"]: val_input,
                         graph_obj["label_ph"]: val_label,
                         graph_obj["arch_code_ph"]: arch_code,
-                        graph_obj["is_training_ph"]: True,
+                        graph_obj["is_training_ph"]: False,  # MUST BE FALSE FOR EVAL
                     },
                 )
                 arch_batch_epes.append(float(epe_val))
@@ -281,7 +293,23 @@ def _run_one_arch_eval(
     eval_batches_per_arch: int,
 ) -> float:
     """Run BN recalibration + val EPE for one arch."""
-    # Removed BN recalibration calls
+    bn_batches = int(bn_recal_batches)
+    
+    # --- BN Recalibration Phase ---
+    for _ in range(bn_batches):
+        train_input, _, _, _ = train_provider.next_batch(batch_size=batch_size)
+        train_input = standardize_image_tensor(train_input)
+        # Forward pass in training mode to update running mean/var
+        sess.run(
+            graph_obj["pred_tensor"],
+            feed_dict={
+                graph_obj["input_ph"]: train_input,
+                graph_obj["arch_code_ph"]: arch_code,
+                graph_obj["is_training_ph"]: True,
+            },
+        )
+
+    # --- Validation Phase ---
     eval_batches = max(1, int(eval_batches_per_arch))
     arch_batch_epes = []
     for _ in range(eval_batches):
@@ -293,7 +321,7 @@ def _run_one_arch_eval(
                 graph_obj["input_ph"]: val_input,
                 graph_obj["label_ph"]: val_label,
                 graph_obj["arch_code_ph"]: arch_code,
-                graph_obj["is_training_ph"]: True, # Already True, kept as per instruction
+                graph_obj["is_training_ph"]: False,  # MUST BE FALSE FOR EVAL
             },
         )
         arch_batch_epes.append(float(epe_val))
