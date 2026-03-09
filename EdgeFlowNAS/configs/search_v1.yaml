@@ -45,6 +45,8 @@ evaluation:
   vela_prune_tflite_after_reduce: true
   # 喂给 Agent C 的 per-layer.csv 最大行数截断
   per_layer_csv_max_rows: 500
+  batch_size: 8
+  eval_batches_per_arch: 64
 
 # --- 目录结构 ---
 paths:
