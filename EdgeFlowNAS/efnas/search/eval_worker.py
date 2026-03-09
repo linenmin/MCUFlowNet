@@ -106,6 +106,10 @@ def evaluate_single_arch(
         run_output_dir=run_output_dir,
     )
 
+    # Force TensorFlow to allocate GPU memory on demand for concurrent workers
+    env = os.environ.copy()
+    env["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
+
     try:
         result = subprocess.run(
             cmd,
@@ -113,6 +117,7 @@ def evaluate_single_arch(
             text=True,
             timeout=600,
             cwd=project_root,
+            env=env,
         )
     except subprocess.TimeoutExpired:
         logger.error("[Worker] 评估超时 arch=%s (>600s)", arch_code_str)
