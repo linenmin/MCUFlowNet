@@ -28,7 +28,7 @@ search:
 
 # --- 并发参数 ---
 concurrency:
-  max_workers: 1            # 保守模式：单 worker，优先稳定性
+  max_workers: 4            # 保守模式：单 worker，优先稳定性
 
 # --- 评估管线 ---
 evaluation:
