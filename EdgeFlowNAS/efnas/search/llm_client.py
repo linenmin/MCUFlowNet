@@ -34,10 +34,18 @@ class LLMClient:
         """
         llm_cfg = cfg["llm"]
         self._models: Dict[str, str] = llm_cfg["models"]
-        self._temperature: float = llm_cfg.get("temperature", 0.4)
         self._max_tokens: int = llm_cfg.get("max_tokens", 4096)
         self._timeout: int = llm_cfg.get("request_timeout", 120)
         self._max_retries: int = llm_cfg.get("max_retries", 3)
+
+        # 支持 per-role 温度 dict 或全局标量
+        raw_temp = llm_cfg.get("temperature", 0.4)
+        if isinstance(raw_temp, dict):
+            self._temperature_map: Dict[str, float] = raw_temp
+            self._default_temperature: float = 0.4
+        else:
+            self._temperature_map = {}
+            self._default_temperature = float(raw_temp)
 
         # 关闭 LiteLLM 自身日志刷屏
         litellm.suppress_debug_info = True
@@ -51,6 +59,10 @@ class LLMClient:
         if model_id is None:
             raise ValueError(f"配置文件中缺少模型映射: llm.models.{config_key}")
         return model_id
+
+    def _resolve_temperature(self, role: str) -> float:
+        """根据 Agent 角色返回对应的温度值。"""
+        return self._temperature_map.get(role, self._default_temperature)
 
     def chat(
         self,
@@ -84,7 +96,7 @@ class LLMClient:
         kwargs: Dict[str, Any] = {
             "model": model_id,
             "messages": messages,
-            "temperature": temperature if temperature is not None else self._temperature,
+            "temperature": temperature if temperature is not None else self._resolve_temperature(role),
             "max_tokens": max_tokens if max_tokens is not None else self._max_tokens,
             "timeout": self._timeout,
             "num_retries": self._max_retries,

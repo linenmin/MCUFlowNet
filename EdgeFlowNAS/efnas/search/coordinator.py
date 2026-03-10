@@ -179,6 +179,11 @@ class SearchCoordinator:
         self._maybe_prune_vela_tflite(stage=f"epoch_{epoch}_reduce")
         logger.info("本轮提交 %d 条评估结果", committed)
 
+        # -------------------------------------------------------
+        # Phase 8: 记录 Epoch 级可观测指标
+        # -------------------------------------------------------
+        self._record_epoch_metrics(epoch, committed, skipped)
+
     # ===============================================================
     # 子流程：科学家大反思 (D-1 -> D-2)
     # ===============================================================
@@ -292,3 +297,36 @@ class SearchCoordinator:
         removed = file_io.prune_vela_tflite_artifacts(self.exp_dir)
         if removed > 0:
             logger.info("[Prune] %s: 删除 %d 个 Vela tflite 文件", stage, removed)
+
+    def _record_epoch_metrics(self, epoch: int, new_evaluated: int, duplicates: int) -> None:
+        """记录本轮搜索的可观测性指标。"""
+        df = file_io.read_history(self.exp_dir)
+        total = len(df)
+        total_space = 3 ** 9
+
+        best_epe = float("inf")
+        pareto_count = 0
+        if not df.empty and "epe" in df.columns:
+            try:
+                epe_vals = df["epe"].astype(float)
+                best_epe = float(epe_vals.min())
+                if "fps" in df.columns:
+                    fps_vals = df["fps"].astype(float)
+                    pareto_count = agents._count_pareto_2d(epe_vals, fps_vals)
+            except (ValueError, TypeError):
+                pass
+
+        metrics = {
+            "epoch": epoch,
+            "total_evaluated": total,
+            "new_evaluated": new_evaluated,
+            "duplicates": duplicates,
+            "best_epe": round(best_epe, 6) if best_epe != float("inf") else "",
+            "pareto_count": pareto_count,
+            "findings_count": file_io.count_findings(self.exp_dir),
+            "assumptions_count": len(file_io.read_assumptions(self.exp_dir)),
+            "coverage_pct": round(total / total_space * 100, 2),
+        }
+        file_io.append_epoch_metrics(self.exp_dir, metrics)
+        logger.info("[Phase 8] Epoch指标: evaluated=%d, best_epe=%s, pareto=%d, coverage=%.1f%%",
+                     total, metrics["best_epe"], pareto_count, metrics["coverage_pct"])

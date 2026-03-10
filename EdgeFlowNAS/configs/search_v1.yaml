@@ -14,7 +14,13 @@ llm:
     agent_d_rule_manager: "gemini/gemini-3.1-pro-preview"
 
   # 通用 LLM 调用参数
-  temperature: 0.4          # 生成多样性 (Agent B 可稍高)
+  temperature:              # 各角色独立温度 (精确任务低、创意任务高)
+    agent_a: 0.35           # Strategist: 需要稳定决策，但保留规划灵活性
+    agent_b: 0.4            # Generator: 需要多样性，但必须保证格式正确
+    agent_c: 0.15           # Distiller: 精确提取硬件指标，不需要创意
+    agent_d1: 0.45          # Scientist: 假设生成需要创造性思考
+    agent_d2: 0.15          # Coder: 代码生成需要高确定性
+    agent_d3: 0.25          # Rule Manager: 结构化输出，允许少量灵活合并
   max_tokens: 4096          # 单次调用最大输出 token
   request_timeout: 120      # 单次 API 调用超时(秒)
   max_retries: 3            # LiteLLM 内置重试次数 (处理 429 等)

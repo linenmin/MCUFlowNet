@@ -336,6 +336,35 @@ def write_verification_script(exp_dir: str, filename: str, code: str) -> str:
 
 
 # ===================================================================
+# Epoch Metrics (P4: 搜索进度可观测性)
+# ===================================================================
+
+def count_findings(exp_dir: str) -> int:
+    """计算 findings.md 中的规则条目数量 (按 Markdown 标题计)。"""
+    import re
+    content = read_findings(exp_dir)
+    if not content or not content.strip():
+        return 0
+    return len(re.findall(r"^#{1,3}\s+", content, re.MULTILINE))
+
+
+def append_epoch_metrics(exp_dir: str, metrics: Dict[str, Any]) -> None:
+    """追加单条 epoch 指标到 epoch_metrics.csv。"""
+    path = os.path.join(exp_dir, "metadata", "epoch_metrics.csv")
+    columns = [
+        "epoch", "total_evaluated", "new_evaluated", "duplicates",
+        "best_epe", "pareto_count", "findings_count", "assumptions_count",
+        "coverage_pct",
+    ]
+    file_exists = os.path.exists(path)
+    with open(path, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=columns, extrasaction="ignore")
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(metrics)
+
+
+# ===================================================================
 # 内部辅助函数
 # ===================================================================
 

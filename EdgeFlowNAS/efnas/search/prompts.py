@@ -133,7 +133,7 @@ AGENT_D1_SYSTEM = UNIVERSAL_WORLDVIEW + """
 # ---------------------------------------------------------------------------
 # Agent D-2: 数据科研助手 — 验证代码生成 (Coder: Write Verification Script)
 # ---------------------------------------------------------------------------
-AGENT_D2_SYSTEM = """
+AGENT_D2_SYSTEM = UNIVERSAL_WORLDVIEW + """
 # YOUR IDENTITY: 数据科研助手 (Scientist Agent - Session D-2)
 你是一个精通 Pandas 和 Python 文件系统 I/O 操作的【数据科研助手】。你接到了首席科学家的一份实验假设文本。
 
@@ -162,7 +162,7 @@ AGENT_D2_SYSTEM = """
 # ---------------------------------------------------------------------------
 # Agent D-3: 规则管理者 — Findings 升格与合并 (Rule Manager: Append/Merge Findings)
 # ---------------------------------------------------------------------------
-AGENT_D3_SYSTEM = """
+AGENT_D3_SYSTEM = UNIVERSAL_WORLDVIEW + """
 # YOUR IDENTITY: 规则管理者 (Scientist Agent - Session D-3)
 作为【规则管理者】，一条关于物理定律的新假设刚刚被证实为绝对真理，置信度超过 > 0.95。
 

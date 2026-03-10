@@ -84,16 +84,19 @@ def invoke_agent_b(
     读取:
         - findings.md (绝对真理碑，作为硬约束)
         - allocation (来自 Agent A 的名额分配)
+        - history (已评估架构编码，用于避免重复)
 
     Returns:
         逗号分隔的架构编码字符串列表 (如 ["0,1,2,0,0,1,2,1,0", ...])。
     """
     findings = file_io.read_findings(exp_dir)
+    coverage_hint = _build_coverage_hint(exp_dir)
 
     user_msg = (
         f"## 本轮名额分配 (来自战略规划局):\n"
         f"```json\n{json.dumps(allocation, ensure_ascii=False, indent=2)}\n```\n\n"
         f"## 绝对真理碑 (findings.md) — 你必须遵守:\n{findings}\n\n"
+        f"## 搜索覆盖率统计:\n{coverage_hint}\n\n"
         f"请生成 **恰好 {batch_size} 个** 合法的 9 维架构编码。\n"
     )
 
@@ -125,6 +128,8 @@ def invoke_agent_d1(
 
     读取:
         - history_archive.csv (全量数据)
+        - assumptions.json (现有猜想，用于去重)
+        - findings.md (已确认规则，用于去重)
 
     Returns:
         新猜想列表 [{"id": "A01", "description": "..."}, ...]
@@ -135,6 +140,7 @@ def invoke_agent_d1(
         return []
 
     next_id = file_io.get_next_assumption_id(exp_dir)
+    topic_summary = _extract_topic_summary(exp_dir)
 
     system_prompt = prompts.AGENT_D1_SYSTEM.format(next_id=next_id)
 
@@ -143,6 +149,7 @@ def invoke_agent_d1(
     user_msg = (
         f"## 全量历史评估数据 (共 {len(history_df)} 条):\n"
         f"```csv\n{csv_text}\n```\n\n"
+        f"## 已有猜想和规则 (请勿重复这些方向):\n{topic_summary}\n\n"
         f"请基于以上数据提出 1-2 个新的科学猜想。下一个可用 ID 从 A{next_id:02d} 开始。\n"
     )
 
@@ -223,6 +230,10 @@ def invoke_agent_d3(
     """
     current_findings = file_io.read_findings(exp_dir)
 
+    # 安全基线: 记录更新前的规则数量
+    import re
+    rule_count_before = len(re.findall(r"^#{1,3}\s+", current_findings, re.MULTILINE))
+
     user_msg = (
         f"## 被证实的新真理:\n"
         f"- ID: {assumption.get('id')}\n"
@@ -239,6 +250,21 @@ def invoke_agent_d3(
         user_message=user_msg,
         force_json=False,  # D-3 输出纯 Markdown
     )
+
+    # 安全校验: 确保没有丢失已有规则
+    rule_count_after = len(re.findall(r"^#{1,3}\s+", updated_findings, re.MULTILINE))
+    if rule_count_before > 0 and rule_count_after < rule_count_before:
+        logger.warning(
+            "[Agent D-3] 安全回滚! 规则数从 %d 降至 %d，可能丢失已有规则。保留原文并追加。",
+            rule_count_before, rule_count_after,
+        )
+        # 回退策略: 保留原文，仅追加新规则摘要
+        updated_findings = (
+            f"{current_findings}\n\n"
+            f"## [{assumption.get('id')}] {assumption.get('description', '')}\n"
+            f"- 置信度: {confidence:.4f}\n"
+            f"- (自动追加 — D3 全文重写触发安全回滚)\n"
+        )
 
     file_io.write_findings(exp_dir, updated_findings)
     file_io.remove_assumption_by_id(exp_dir, assumption.get("id", ""))
@@ -302,6 +328,50 @@ def execute_verification_script(
 # 内部辅助函数
 # ===================================================================
 
+def _build_coverage_hint(exp_dir: str) -> str:
+    """构建搜索空间覆盖率摘要，帮助 Agent B 避免重复生成。"""
+    evaluated = file_io.get_evaluated_arch_codes(exp_dir)
+    total_space = 3 ** 9  # 19683
+    coverage_pct = len(evaluated) / total_space * 100
+    lines = [
+        f"已评估架构数: {len(evaluated)} / {total_space} ({coverage_pct:.1f}%)",
+    ]
+    # 每维度的值分布
+    if evaluated:
+        from collections import Counter
+        dim_counters = [Counter() for _ in range(9)]
+        for code in evaluated:
+            parts = code.split(",")
+            if len(parts) == 9:
+                for i, v in enumerate(parts):
+                    dim_counters[i][v.strip()] += 1
+        for i, counter in enumerate(dim_counters):
+            dist = ", ".join(f"{v}:{counter.get(v, 0)}" for v in ["0", "1", "2"])
+            lines.append(f"  dim[{i}] 分布: {dist}")
+    return "\n".join(lines)
+
+
+def _extract_topic_summary(exp_dir: str) -> str:
+    """提取现有猜想和 findings 的主题摘要，帮助 D1 避免重复。"""
+    assumptions = file_io.read_assumptions(exp_dir)
+    findings = file_io.read_findings(exp_dir)
+
+    lines = []
+    if assumptions:
+        lines.append("### 现有猜想 (assumptions.json):")
+        for a in assumptions:
+            lines.append(f"  - [{a.get('id', '?')}] {a.get('description', '')[:120]}")
+    else:
+        lines.append("### 现有猜想: (无)")
+
+    if findings and findings.strip():
+        lines.append(f"### 已确认规则 (findings.md, 前500字):\n{findings[:500]}")
+    else:
+        lines.append("### 已确认规则: (无)")
+
+    return "\n".join(lines)
+
+
 def _summarize_history(df) -> str:
     """生成历史数据的简洁统计摘要（避免全量 CSV 塞爆 prompt）。"""
     if df.empty:
@@ -311,7 +381,8 @@ def _summarize_history(df) -> str:
         f"总评估数量: {len(df)}",
     ]
 
-    for col in ["epe", "fps", "sram_kb", "cycles_npu"]:
+    # --- 基础统计 (sram_kb 恒定 1620，排除) ---
+    for col in ["epe", "fps", "cycles_npu"]:
         if col in df.columns:
             numeric = df[col].dropna()
             if len(numeric) > 0:
@@ -324,17 +395,80 @@ def _summarize_history(df) -> str:
                 except (ValueError, TypeError):
                     pass
 
-    # 展示最近 10 条和最佳 5 条 (按 EPE 排序)
+    # --- 操作态统计 (帮 Agent A 感知搜索进度) ---
+    total_space = 3 ** 9
+    coverage_pct = len(df) / total_space * 100
+    lines.append(f"\n搜索覆盖率: {len(df)}/{total_space} ({coverage_pct:.1f}%)")
+
+    if "epe" in df.columns and "fps" in df.columns:
+        try:
+            pareto_count = _count_pareto_2d(df["epe"].astype(float), df["fps"].astype(float), minimize_first=True)
+            lines.append(f"2D Pareto前沿数量 (EPE↓, FPS↑): {pareto_count}")
+        except (ValueError, TypeError):
+            pass
+
+    if "epoch" in df.columns:
+        try:
+            epochs = df["epoch"].astype(int)
+            max_epoch = epochs.max()
+            if max_epoch >= 3:
+                last3 = df[epochs >= max_epoch - 2]
+                if "epe" in df.columns:
+                    global_best = df["epe"].astype(float).min()
+                    last3_best = last3["epe"].astype(float).min()
+                    improved = last3_best < global_best * 1.001  # 0.1% tolerance
+                    lines.append(f"近3轮是否有改进: {'✓ 有' if improved else '✗ 无 (可能停滞)'}")
+        except (ValueError, TypeError):
+            pass
+
+    # --- 展示最佳 5 条 (按 EPE 排序)，附带 micro_insight ---
+    display_cols = ["arch_code", "epe", "fps"]
+    if "micro_insight" in df.columns:
+        display_cols.append("micro_insight")
+
     if "epe" in df.columns:
         try:
             df_sorted = df.copy()
             df_sorted["epe"] = df_sorted["epe"].astype(float)
-            best5 = df_sorted.nsmallest(5, "epe")[["arch_code", "epe", "fps", "sram_kb"]].to_string(index=False)
+            best5_cols = [c for c in display_cols if c in df_sorted.columns]
+            best5 = df_sorted.nsmallest(5, "epe")[best5_cols].to_string(index=False)
             lines.append(f"\nTop-5 最低 EPE:\n{best5}")
         except (ValueError, TypeError):
             pass
 
-    recent = df.tail(10)[["arch_code", "epe", "fps", "sram_kb"]].to_string(index=False)
+    recent_cols = [c for c in display_cols if c in df.columns]
+    recent = df.tail(10)[recent_cols].to_string(index=False)
     lines.append(f"\n最近 10 条评估:\n{recent}")
 
     return "\n".join(lines)
+
+
+def _count_pareto_2d(obj1, obj2, minimize_first: bool = True) -> int:
+    """计算 2D Pareto 前沿点数量。
+
+    Args:
+        obj1: EPE (越小越好 if minimize_first=True)
+        obj2: FPS (越大越好)
+    """
+    import numpy as np
+    arr1 = np.array(obj1, dtype=float)
+    arr2 = np.array(obj2, dtype=float)
+    n = len(arr1)
+    is_pareto = np.ones(n, dtype=bool)
+    for i in range(n):
+        if not is_pareto[i]:
+            continue
+        for j in range(n):
+            if i == j or not is_pareto[j]:
+                continue
+            # j dominates i if j is no worse on both objectives and strictly better on at least one
+            if minimize_first:
+                j_dom = (arr1[j] <= arr1[i] and arr2[j] >= arr2[i] and
+                         (arr1[j] < arr1[i] or arr2[j] > arr2[i]))
+            else:
+                j_dom = (arr1[j] >= arr1[i] and arr2[j] >= arr2[i] and
+                         (arr1[j] > arr1[i] or arr2[j] > arr2[i]))
+            if j_dom:
+                is_pareto[i] = False
+                break
+    return int(is_pareto.sum())
