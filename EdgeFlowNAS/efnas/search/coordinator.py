@@ -54,6 +54,9 @@ class SearchCoordinator:
             cfg.get("evaluation", {}).get("vela_prune_tflite_after_reduce", False)
         )
 
+        # P1c: 上轮有效产出率反馈 (传给 Agent A)
+        self._last_yield_info: str = ""
+
         self.llm = LLMClient(cfg)
 
     # ===============================================================
@@ -124,10 +127,13 @@ class SearchCoordinator:
             self._execute_scientist_macro_reflection()
 
         # -------------------------------------------------------
-        # Phase 2: 验证已有猜想并升格
+        # Phase 2: 验证已有猜想并升格 + Finding 再验证降级
         # -------------------------------------------------------
         logger.info("[Phase 2] 验证已有猜想")
         self._evaluate_pending_assumptions()
+
+        logger.info("[Phase 2b] 再验证已有 Findings")
+        self._revalidate_findings()
 
         # -------------------------------------------------------
         # Phase 3: 战略规划 -> Agent A
@@ -135,6 +141,7 @@ class SearchCoordinator:
         logger.info("[Phase 3] 调用 Agent A (战略规划)")
         agent_a_result = agents.invoke_agent_a(
             self.llm, self.exp_dir, epoch, self.batch_size,
+            last_yield_info=self._last_yield_info,
         )
         allocation = agent_a_result.get("allocation", {})
 
@@ -159,6 +166,13 @@ class SearchCoordinator:
 
         logger.info("[Phase 5] 去重: 候选 %d, 新增 %d, 跳过 %d",
                      len(candidates), len(new_archs), skipped)
+
+        # P1c: 记录有效产出率，供下轮 Agent A 参考
+        yield_pct = len(new_archs) / len(candidates) * 100 if candidates else 0
+        self._last_yield_info = (
+            f"请求 {self.batch_size} 个候选, Agent B 生成 {len(candidates)} 个, "
+            f"去重后实际新评估 {len(new_archs)} 个 (有效率 {yield_pct:.0f}%)"
+        )
 
         if not new_archs:
             logger.info("本轮无新架构需要评估，跳过 Map-Reduce")
@@ -242,6 +256,55 @@ class SearchCoordinator:
             else:
                 logger.info("猜想 %s 尚未达标 (threshold=%.2f, min_samples=5)",
                              aid, self.confidence_threshold)
+
+    # ===============================================================
+    # 子流程：Finding 再验证与降级 (P3)
+    # ===============================================================
+
+    def _revalidate_findings(self) -> None:
+        """重新验证所有 Findings，置信度低于阈值的降级回猜想队列。"""
+        findings = file_io.parse_findings(self.exp_dir)
+        if not findings:
+            return
+
+        data_csv = os.path.join(self.exp_dir, "metadata", "history_archive.csv")
+        demoted_ids: list[str] = []
+
+        for finding in findings:
+            fid = finding["id"]
+            script_name = f"eval_assumption_{fid}.py"
+            script_path = os.path.join(self.exp_dir, "scripts", script_name)
+
+            if not os.path.exists(script_path):
+                logger.debug("Finding %s 无验证脚本，跳过再验证", fid)
+                continue
+
+            result = agents.execute_verification_script(script_path, data_csv)
+            if result is None:
+                logger.warning("Finding %s 再验证脚本执行失败，保留", fid)
+                continue
+
+            confidence = result.get("confidence", 0.0)
+            total = result.get("total_triggered", 0)
+            logger.info("Finding %s 再验证: confidence=%.4f, total=%d",
+                         fid, confidence, total)
+
+            if confidence < self.confidence_threshold:
+                logger.info("Finding %s 降级！confidence=%.4f < threshold=%.2f",
+                             fid, confidence, self.confidence_threshold)
+                demoted_ids.append(fid)
+
+        # 批量执行降级：从 findings.md 删除，加回 assumptions.json
+        for fid in demoted_ids:
+            file_io.remove_finding_by_id(self.exp_dir, fid)
+            # 从 findings.md 原始 block 中提取描述作为猜想描述
+            desc = f"(降级自 Finding) 原 Finding {fid} 再验证未达标，回退到猜想队列重新验证。"
+            file_io.append_assumptions(self.exp_dir, [{"id": fid, "description": desc}])
+            logger.info("Finding %s 已降级为猜想", fid)
+
+        if demoted_ids:
+            logger.info("[P3] 本轮共降级 %d 条 Finding: %s",
+                         len(demoted_ids), ", ".join(demoted_ids))
 
     # ===============================================================
     # 子流程：Map 阶段 (多线程评估)

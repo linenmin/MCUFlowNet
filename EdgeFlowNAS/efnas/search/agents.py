@@ -27,6 +27,7 @@ def invoke_agent_a(
     exp_dir: str,
     epoch: int,
     batch_size: int,
+    last_yield_info: str = "",
 ) -> Dict[str, Any]:
     """调用 Agent A 生成本轮搜索策略与名额分配。
 
@@ -35,6 +36,7 @@ def invoke_agent_a(
         - search_strategy_log.md (历史战术日记)
         - assumptions.json (科学猜想簿)
         - findings.md (绝对真理碑)
+        - last_yield_info (上轮有效产出率反馈)
 
     Returns:
         Agent A 输出的 JSON 字典，包含 strategic_reflection 和 allocation。
@@ -48,11 +50,17 @@ def invoke_agent_a(
 
     system_prompt = prompts.AGENT_A_SYSTEM.format(batch_size=batch_size)
 
+    # P1c: 上轮有效产出率反馈
+    yield_section = ""
+    if last_yield_info:
+        yield_section = f"\n## 上轮执行反馈:\n{last_yield_info}\n"
+
     user_msg = (
         f"# 当前 Epoch: {epoch}\n"
         f"# 本轮预算: {batch_size} 个子网\n\n"
         f"## 历史评估数据摘要 (共 {len(history_df)} 条):\n"
         f"```\n{history_summary}\n```\n\n"
+        f"{yield_section}"
         f"## 过往战术日志:\n{strategy_log}\n\n"
         f"## 当前猜想簿:\n```json\n{json.dumps(assumptions, ensure_ascii=False, indent=2)}\n```\n\n"
         f"## 绝对真理碑 (findings.md):\n{findings}\n"
@@ -92,12 +100,17 @@ def invoke_agent_b(
     findings = file_io.read_findings(exp_dir)
     coverage_hint = _build_coverage_hint(exp_dir)
 
+    # P1: 给 B 全量已评估列表，避免重复生成
+    evaluated_set = file_io.get_evaluated_arch_codes(exp_dir)
+    evaluated_list_str = ", ".join(sorted(evaluated_set)) if evaluated_set else "(尚无)"
+
     user_msg = (
         f"## 本轮名额分配 (来自战略规划局):\n"
         f"```json\n{json.dumps(allocation, ensure_ascii=False, indent=2)}\n```\n\n"
         f"## 绝对真理碑 (findings.md) — 你必须遵守:\n{findings}\n\n"
         f"## 搜索覆盖率统计:\n{coverage_hint}\n\n"
-        f"请生成 **恰好 {batch_size} 个** 合法的 9 维架构编码。\n"
+        f"## 已评估架构列表 (禁止重复生成):\n{evaluated_list_str}\n\n"
+        f"请生成 **恰好 {batch_size} 个** 合法的、**不在上述已评估列表中的** 9 维架构编码。\n"
     )
 
     result = llm.chat_json(role="agent_b", system_prompt=prompts.AGENT_B_SYSTEM, user_message=user_msg)
@@ -230,9 +243,10 @@ def invoke_agent_d3(
     """
     current_findings = file_io.read_findings(exp_dir)
 
-    # 安全基线: 记录更新前的规则数量
+    # 安全基线: 记录更新前的规则数量 (按 '- **ID**:' 标记计)
     import re
-    rule_count_before = len(re.findall(r"^#{1,3}\s+", current_findings, re.MULTILINE))
+    _FINDING_PATTERN = re.compile(r"^- \*\*ID\*\*:", re.MULTILINE)
+    rule_count_before = len(_FINDING_PATTERN.findall(current_findings))
 
     user_msg = (
         f"## 被证实的新真理:\n"
@@ -252,7 +266,7 @@ def invoke_agent_d3(
     )
 
     # 安全校验: 确保没有丢失已有规则
-    rule_count_after = len(re.findall(r"^#{1,3}\s+", updated_findings, re.MULTILINE))
+    rule_count_after = len(_FINDING_PATTERN.findall(updated_findings))
     if rule_count_before > 0 and rule_count_after < rule_count_before:
         logger.warning(
             "[Agent D-3] 安全回滚! 规则数从 %d 降至 %d，可能丢失已有规则。保留原文并追加。",

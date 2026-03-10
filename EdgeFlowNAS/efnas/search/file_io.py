@@ -339,13 +339,40 @@ def write_verification_script(exp_dir: str, filename: str, code: str) -> str:
 # Epoch Metrics (P4: 搜索进度可观测性)
 # ===================================================================
 
-def count_findings(exp_dir: str) -> int:
-    """计算 findings.md 中的规则条目数量 (按 Markdown 标题计)。"""
+def parse_findings(exp_dir: str) -> List[Dict[str, str]]:
+    """解析 findings.md，返回每条 Finding 的结构化列表。
+
+    Returns:
+        [{"id": "A02", "block": "- **ID**: A02\n- **规则描述**: ...\n..."}, ...]
+    """
     import re
     content = read_findings(exp_dir)
     if not content or not content.strip():
-        return 0
-    return len(re.findall(r"^#{1,3}\s+", content, re.MULTILINE))
+        return []
+    # 按 '- **ID**:' 分割，每个块是一条 Finding
+    blocks = re.split(r"(?=^- \*\*ID\*\*:)", content, flags=re.MULTILINE)
+    results = []
+    for block in blocks:
+        block = block.strip()
+        m = re.match(r"^- \*\*ID\*\*:\s*(\S+)", block)
+        if m:
+            results.append({"id": m.group(1), "block": block})
+    return results
+
+
+def remove_finding_by_id(exp_dir: str, finding_id: str) -> None:
+    """从 findings.md 中删除指定 ID 的 Finding 条目。"""
+    findings = parse_findings(exp_dir)
+    remaining_blocks = [f["block"] for f in findings if f["id"] != finding_id]
+    # 重建文件：保留标题 + 剩余条目
+    header = "# EdgeFlowNAS Findings (已证实的绝对真理)\n\n"
+    new_content = header + "\n\n".join(remaining_blocks) + "\n" if remaining_blocks else header
+    write_findings(exp_dir, new_content)
+
+
+def count_findings(exp_dir: str) -> int:
+    """计算 findings.md 中的规则条目数量 (按 '- **ID**:' 标记计)。"""
+    return len(parse_findings(exp_dir))
 
 
 def append_epoch_metrics(exp_dir: str, metrics: Dict[str, Any]) -> None:
