@@ -250,11 +250,11 @@ class SearchCoordinator:
                          aid, confidence, total)
 
             # 置信度门槛检查 + 最少触发样本数检查（避免小样本误判）
-            if confidence >= self.confidence_threshold and total >= 5:
+            if confidence >= self.confidence_threshold and total >= 30:
                 logger.info("猜想 %s 达到升格条件！触发 D-3 写入 Findings", aid)
                 agents.invoke_agent_d3(self.llm, self.exp_dir, assumption, confidence)
             else:
-                logger.info("猜想 %s 尚未达标 (threshold=%.2f, min_samples=5)",
+                logger.info("猜想 %s 尚未达标 (threshold=%.2f, min_samples=30)",
                              aid, self.confidence_threshold)
 
     # ===============================================================
