@@ -1,0 +1,39 @@
+runtime:
+  experiment_name: "fixed_arch_compare_fc2_172x224"
+  output_root: "outputs/fixed_arch_compare"
+  seed: 42
+
+backbone_arch_code: "0,2,1,1,0,0,0,0,0"
+model_variants: "baseline+globalgate4x_bneckeca+globalgate4x_bneckeca_skip8x4x2x"
+model_names: "baseline+ablation+full"
+
+train:
+  gpu_device: 0
+  num_epochs: 400
+  batch_size: 32
+  lr: 1.0e-4
+  lr_min: 1.0e-6
+  optimizer: "adam"
+  lr_schedule: "cosine"
+  weight_decay: 0.0
+  grad_clip_global_norm: 0.0
+  uncertainty_type: "LinearSoftplus"
+  train_sampling_mode: "shuffle_no_replacement"
+  train_crop_mode: "random"
+
+data:
+  dataset: "FC2"
+  base_path: "../"
+  train_dir: "Datasets/FlyingChairs2/train"
+  val_dir: "Datasets/FlyingChairs2/val"
+  input_height: 172
+  input_width: 224
+  flow_channels: 2
+
+eval:
+  eval_every_epoch: 5
+  eval_batches: 0
+
+checkpoint:
+  load_checkpoint: false
+  resume_experiment_name: ""

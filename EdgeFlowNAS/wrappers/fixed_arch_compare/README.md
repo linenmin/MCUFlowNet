@@ -5,6 +5,8 @@
 当前目标用例：
 
 - 固定骨架：`0,2,1,1,0,0,0,0,0`
+- 默认训练输入：`172x224`
+- 默认配置：`configs/fixed_arch_compare_fc2_172x224.yaml`
 - 多模型联合训练：
   - `baseline`
   - `globalgate4x_bneckeca`

@@ -25,7 +25,7 @@ def main():
     )
     parser.add_argument(
         "--config",
-        default="configs/fixed_arch_compare_fc2_180x240.yaml",
+        default="configs/fixed_arch_compare_fc2_172x224.yaml",
         help="YAML config path",
     )
     parser.add_argument(
