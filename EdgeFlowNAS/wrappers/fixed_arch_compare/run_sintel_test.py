@@ -250,6 +250,7 @@ def main():
         results.append(summary)
         print(
             f"[+] model={summary['model_name']} variant={summary['variant']} "
+            f"epoch={summary['epoch']} step={summary['global_step']} "
             f"fc2_val_epe={summary['fc2_val_epe']} sintel_epe={summary['sintel_epe']:.6f}"
         )
 
@@ -272,6 +273,7 @@ def main():
     for item in results:
         print(
             f"{item['model_name']}: variant={item['variant']} "
+            f"epoch={item['epoch']} step={item['global_step']} "
             f"fc2_val_epe={item['fc2_val_epe']} sintel_epe={item['sintel_epe']:.6f}"
         )
     print(f"json: {output_json}")
