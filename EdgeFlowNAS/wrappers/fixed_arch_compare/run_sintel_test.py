@@ -12,7 +12,7 @@ import tensorflow as tf
 
 tf.compat.v1.disable_eager_execution()
 
-project_root = Path(__file__).resolve().parent.parent.parent
+project_root = Path(__file__).resolve().parent.parent.parent.parent
 edgeflownet_dir = project_root / "EdgeFlowNet"
 edgeflownas_dir = project_root / "EdgeFlowNAS"
 
@@ -107,7 +107,13 @@ def _discover_model_dirs(experiment_dir: Path, model_name: str):
 
 
 def _prepare_sintel_lists(dataset_root: Path, sintel_list_rel: str):
-    sintel_list_path = project_root / sintel_list_rel
+    raw_path = Path(sintel_list_rel)
+    if raw_path.is_absolute():
+        sintel_list_path = raw_path
+    elif raw_path.exists():
+        sintel_list_path = raw_path.resolve()
+    else:
+        sintel_list_path = (project_root / raw_path).resolve()
     if not sintel_list_path.exists():
         raise FileNotFoundError(f"Sintel list not found: {sintel_list_path}")
 
