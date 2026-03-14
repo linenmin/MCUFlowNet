@@ -138,10 +138,30 @@ def _evaluate_single_model(model_dir: Path, args, patch_size, img1_list, img2_li
 
     processor = FlowPostProcessor("full", is_multiscale=True)
     for i in tqdm(range(len(img1_list)), desc=f"Evaluating {model_dir.name}", unit="sample"):
+        img1_path = img1_list[i]
+        img2_path = img2_list[i]
+        flo_path = flo_list[i]
+        missing = [p for p in [img1_path, img2_path, flo_path] if not Path(p).exists()]
+        if missing:
+            raise FileNotFoundError(
+                "Sintel sample path missing.\n"
+                f"sample_idx={i}\n"
+                f"img1={img1_path}\n"
+                f"img2={img2_path}\n"
+                f"flo={flo_path}\n"
+                f"missing={missing}"
+            )
+
         input_comb, gt_flow = get_sintel_batch(img1_list[i], img2_list[i], flo_list[i], patch_size)
         if input_comb is None or gt_flow is None:
-            tqdm.write(f"Warning: failed to load sample {i}; skipping")
-            continue
+            raise RuntimeError(
+                "Failed to decode Sintel sample.\n"
+                f"sample_idx={i}\n"
+                f"img1={img1_path}\n"
+                f"img2={img2_path}\n"
+                f"flo={flo_path}\n"
+                "The evaluator is fail-fast by design; fix the dataset path or corrupt file first."
+            )
 
         input_batch = np.expand_dims(input_comb, axis=0)
         input_batch = preprocess_eval_batch(input_batch)
