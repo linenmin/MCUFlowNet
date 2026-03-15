@@ -10,7 +10,13 @@ from efnas.network.base_layers import BaseLayers
 SUPPORTED_VARIANTS = (
     "baseline",
     "globalgate4x_bneckeca",
+    "globalgate4x_bneckeca_skip8x4x",
     "globalgate4x_bneckeca_skip8x4x2x",
+    "globalgate8x4x_bneckeca",
+    "globalgate8x4x_bneckeca_skip8x",
+    "globalgate8x4x_bneckeca_skip8x4x",
+    "globalgate4x_dual_eca8_bneckeca",
+    "skip8x4x",
 )
 
 
@@ -161,12 +167,55 @@ class FixedArchModel(BaseLayers):
         return tf.multiply(target_inputs, gate, name=f"{name}_scale")
 
     def _use_bneck_eca(self) -> bool:
-        return self.variant in ("globalgate4x_bneckeca", "globalgate4x_bneckeca_skip8x4x2x")
+        return self.variant in (
+            "globalgate4x_bneckeca",
+            "globalgate4x_bneckeca_skip8x4x",
+            "globalgate4x_bneckeca_skip8x4x2x",
+            "globalgate8x4x_bneckeca",
+            "globalgate8x4x_bneckeca_skip8x",
+            "globalgate8x4x_bneckeca_skip8x4x",
+            "globalgate4x_dual_eca8_bneckeca",
+        )
+
+    def _use_encoder_eca_8x(self) -> bool:
+        return self.variant == "globalgate4x_dual_eca8_bneckeca"
+
+    def _use_global_gate_8x(self) -> bool:
+        return self.variant in (
+            "globalgate8x4x_bneckeca",
+            "globalgate8x4x_bneckeca_skip8x",
+            "globalgate8x4x_bneckeca_skip8x4x",
+        )
 
     def _use_global_gate_4x(self) -> bool:
-        return self.variant in ("globalgate4x_bneckeca", "globalgate4x_bneckeca_skip8x4x2x")
+        return self.variant in (
+            "globalgate4x_bneckeca",
+            "globalgate4x_bneckeca_skip8x4x",
+            "globalgate4x_bneckeca_skip8x4x2x",
+            "globalgate8x4x_bneckeca",
+            "globalgate8x4x_bneckeca_skip8x",
+            "globalgate8x4x_bneckeca_skip8x4x",
+            "globalgate4x_dual_eca8_bneckeca",
+        )
 
-    def _use_full_skips(self) -> bool:
+    def _use_skip_8x(self) -> bool:
+        return self.variant in (
+            "globalgate4x_bneckeca_skip8x4x",
+            "globalgate4x_bneckeca_skip8x4x2x",
+            "globalgate8x4x_bneckeca_skip8x",
+            "globalgate8x4x_bneckeca_skip8x4x",
+            "skip8x4x",
+        )
+
+    def _use_skip_4x(self) -> bool:
+        return self.variant in (
+            "globalgate4x_bneckeca_skip8x4x",
+            "globalgate4x_bneckeca_skip8x4x2x",
+            "globalgate8x4x_bneckeca_skip8x4x",
+            "skip8x4x",
+        )
+
+    def _use_skip_2x(self) -> bool:
         return self.variant == "globalgate4x_bneckeca_skip8x4x2x"
 
     def build(self):
@@ -200,6 +249,8 @@ class FixedArchModel(BaseLayers):
             net = self.bn(inputs=net, name="Down1BN")
             net = self.relu(inputs=net, name="Down1ReLU")
             net = self._deep_choice_block(inputs=net, filters=c2, choice_idx=arch[1], name="EB1")
+            if self._use_encoder_eca_8x():
+                net = self._eca_block(inputs=net, kernel_size=3, name="eca_encoder_8x")
             skip_8x = net
 
             net = self.conv(inputs=net, filters=c3, kernel_size=(3, 3), strides=(2, 2), activation=None, name="Down2Conv")
@@ -213,7 +264,14 @@ class FixedArchModel(BaseLayers):
             net_mid = self.resize_conv(inputs=net_low, filters=c4, kernel_size=(3, 3), name="Up1")
             net_mid = self.bn(inputs=net_mid, name="Up1BN")
             net_mid = self.relu(inputs=net_mid, name="Up1ReLU")
-            if self._use_full_skips():
+            if self._use_global_gate_8x():
+                net_mid = self._global_broadcast_gate(
+                    context_inputs=bottleneck_context,
+                    target_inputs=net_mid,
+                    target_filters=c4,
+                    name="global_gate_8x",
+                )
+            if self._use_skip_8x():
                 net_mid = self._compressed_additive_skip(
                     decoder_inputs=net_mid,
                     encoder_inputs=skip_8x,
@@ -232,7 +290,7 @@ class FixedArchModel(BaseLayers):
                     target_filters=c5,
                     name="global_gate_4x",
                 )
-            if self._use_full_skips():
+            if self._use_skip_4x():
                 net_high = self._compressed_additive_skip(
                     decoder_inputs=net_high,
                     encoder_inputs=skip_4x,
@@ -246,7 +304,7 @@ class FixedArchModel(BaseLayers):
             h1 = self._head_choice_resize_conv(inputs=net_high, filters=h1_filters, choice_idx=arch[5], name="H1")
             h1 = self.bn(inputs=h1, name="H1BN")
             h1 = self.relu(inputs=h1, name="H1ReLU")
-            if self._use_full_skips():
+            if self._use_skip_2x():
                 h1 = self._compressed_additive_skip(
                     decoder_inputs=h1,
                     encoder_inputs=skip_2x,

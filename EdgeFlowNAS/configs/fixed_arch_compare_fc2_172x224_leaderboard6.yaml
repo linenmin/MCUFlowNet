@@ -1,0 +1,33 @@
+runtime:
+  output_dir: "outputs/fixed_arch_compare"
+  experiment_name: "fixed_arch_compare_fc2_172x224_leaderboard6"
+  seed: 2026
+
+backbone_arch_code: "0,2,1,1,0,0,0,0,0"
+
+model_variants: "globalgate4x_bneckeca_skip8x4x+globalgate8x4x_bneckeca+globalgate8x4x_bneckeca_skip8x+globalgate4x_dual_eca8_bneckeca+globalgate8x4x_bneckeca_skip8x4x+skip8x4x"
+model_names: "m1_skip8x4x+m2_gate8x4x+m3_gate8x4x_skip8x+m4_dualeca8+m5_gate8x4x_skip8x4x+m6_skip8x4x_plain"
+
+data:
+  base_path: "../"
+  train_dir: "Datasets/FlyingChairs2/train"
+  val_dir: "Datasets/FlyingChairs2/val"
+  input_height: 172
+  input_width: 224
+  flow_channels: 2
+
+train:
+  gpu_device: 0
+  batch_size: 32
+  num_epochs: 400
+  lr: 1.0e-4
+  lr_min: 1.0e-6
+  weight_decay: 0.0
+  grad_clip: 0.0
+
+eval:
+  eval_every_epoch: 5
+
+checkpoint:
+  load_checkpoint: false
+  resume_experiment_name: ""
