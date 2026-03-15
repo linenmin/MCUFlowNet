@@ -1,5 +1,5 @@
 runtime:
-  output_dir: "outputs/fixed_arch_compare"
+  output_root: "outputs/fixed_arch_compare"
   experiment_name: "fixed_arch_compare_fc2_172x224_leaderboard6"
   seed: 2026
 
