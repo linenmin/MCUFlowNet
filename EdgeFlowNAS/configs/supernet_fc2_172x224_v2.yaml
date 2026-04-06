@@ -1,0 +1,50 @@
+runtime:
+  experiment_name: "edgeflownas_supernet_v2_fc2_172x224"
+  output_root: "outputs/supernet"
+  seed: 42
+
+train:
+  gpu_device: 0
+  num_epochs: 200
+  epoch_mode: "full_pass"
+  steps_per_epoch: 50
+  train_sampling_mode: "shuffle_no_replacement"
+  train_crop_mode: "random"
+  batch_size: 32
+  micro_batch_size: 32
+  lr: 1.0e-4
+  optimizer: "adam"
+  lr_schedule: "cosine"
+  weight_decay: 4.0e-5
+  grad_clip_global_norm: 200.0
+  supernet_mode: "fairnas_a1_irregular"
+  uncertainty_type: "LinearSoftplus"
+  distill:
+    enabled: false
+    lambda: 1.0
+    teacher_type: "edgeflownet"
+    teacher_ckpt: "../EdgeFlowNet/checkpoints/best.ckpt"
+    teacher_arch_code: "0 0 0 0 0 0 1 1 1 1 1"
+    layer_weights: ""
+
+data:
+  dataset: "FC2"
+  base_path: "../"
+  train_dir: "Datasets/FlyingChairs2/train"
+  val_dir: "Datasets/FlyingChairs2/val"
+  input_height: 172
+  input_width: 224
+  flow_channels: 2
+
+eval:
+  eval_every_epoch: 5
+  eval_pool_size: 12
+  bn_recal_batches: 32
+  eval_batches_per_arch: 16
+  early_stop_patience: 200
+  early_stop_min_delta: 0.002
+
+checkpoint:
+  load_checkpoint: false
+  resume_experiment_name: ""
+  reset_early_stop_on_resume: false

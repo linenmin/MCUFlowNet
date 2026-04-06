@@ -43,10 +43,13 @@
     - `python -m efnas.nas.eval_pool_builder_v2 --size 12 --check`
     - `python -m efnas.nas.fair_sampler_v2 --cycles 20 --seed 42`
   - Confirmed current WSL base Python does not have TensorFlow, so TF graph smoke and 1-step training smoke remain pending
+  - Added `configs/supernet_fc2_172x224_v2.yaml` as the formal V2 search-training config
+  - Kept `configs/supernet_fc2_180x240_v2.yaml` unchanged as the historical smoke-compatible config
 - Files created/modified:
   - `plan/supernet_v2/task_plan.md`
   - `plan/supernet_v2/findings.md`
   - `plan/supernet_v2/progress.md`
+  - `configs/supernet_fc2_172x224_v2.yaml`
   - `configs/supernet_fc2_180x240_v2.yaml`
   - `wrappers/run_supernet_train_v2.py`
   - `efnas/app/train_supernet_app_v2.py`

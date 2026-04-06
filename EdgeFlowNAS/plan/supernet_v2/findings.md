@@ -155,6 +155,7 @@ The first implementation pass now exists as a parallel V2 path.
 New files:
 
 - `configs/supernet_fc2_180x240_v2.yaml`
+- `configs/supernet_fc2_172x224_v2.yaml`
 - `wrappers/run_supernet_train_v2.py`
 - `efnas/app/train_supernet_app_v2.py`
 - `efnas/network/MultiScaleResNet_supernet_v2.py`
@@ -185,3 +186,20 @@ Blocked in current WSL environment:
 Reason:
 
 - current WSL base Python does not have TensorFlow installed
+
+## Training Resolution Decision
+
+The formal V2 supernet training resolution should align with the deployment and fixed-arch comparison resolution.
+
+That aligned resolution is `172x224`.
+
+Reason:
+
+- stem operator evaluation in `model_design` uses `172x224`
+- fixed-arch compare training already uses `172x224`
+- the V2 search space now includes `E0`, `E1`, and head kernel choices, which are resolution-sensitive
+
+Implementation choice:
+
+- keep `configs/supernet_fc2_180x240_v2.yaml` as the historical smoke-compatible config
+- add `configs/supernet_fc2_172x224_v2.yaml` as the formal V2 search-training config
