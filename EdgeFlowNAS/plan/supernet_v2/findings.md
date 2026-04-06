@@ -78,16 +78,22 @@ So V2 must redefine what one fairness cycle means.
 
 ## Fairness Design Options
 
-### Chosen fairness mode
+### Current fairness mode
 
 - Keep `3` single-path models per cycle.
-- Use FairNAS supplementary Appendix A.1 irregular-space preprocessing.
-- For each 2-choice head block, expand temporary slots from `2` to `3` by random resampling from valid options.
+- Keep the FairNAS Appendix A.1 irregular-space idea of expanding 2-choice head blocks to temporary 3-slot lists.
+- Replace random duplication with under-sampled-first duplication.
+- If both options have the same count, break the tie randomly.
 - Then run the same without-replacement 3-path cycle used by FairNAS strict fairness.
 
-This is not perfect strict fairness.
+This is a project-specific balanced irregular-fairness extension.
 
-This is the FairNAS A.1 style approximated-SF extension for irregular search spaces.
+It is no longer the exact A.1 random-resampling rule.
+
+Its purpose is simple:
+
+- preserve the low 3-path training cost
+- reduce long-run count drift on 2-choice head blocks
 
 ## Recommended File Strategy
 
@@ -177,6 +183,7 @@ Completed:
 - `arch_codec_v2` self test
 - `eval_pool_builder_v2 --check`
 - `fair_sampler_v2` smoke run
+- balanced irregular sampler smoke run shows `fairness_gap = 0` after 20 cycles with seed 42
 
 Blocked in current WSL environment:
 
@@ -186,6 +193,16 @@ Blocked in current WSL environment:
 Reason:
 
 - current WSL base Python does not have TensorFlow installed
+
+## Resume Compatibility Note
+
+The fairness mode string now changed from the earlier A.1 random version to:
+
+- `balanced_irregular_fairness`
+
+This means a new run should use a new experiment name.
+
+Resuming an older run that was started with the earlier random-irregular config is not recommended.
 
 ## Training Resolution Decision
 

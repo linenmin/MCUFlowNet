@@ -17,7 +17,7 @@ train:
   lr_schedule: "cosine"
   weight_decay: 4.0e-5
   grad_clip_global_norm: 200.0
-  supernet_mode: "fairnas_a1_irregular"
+  supernet_mode: "balanced_irregular_fairness"
   uncertainty_type: "LinearSoftplus"
   distill:
     enabled: false

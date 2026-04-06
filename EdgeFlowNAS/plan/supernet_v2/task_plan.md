@@ -129,7 +129,7 @@ Phase 2
 - keep v1 untouched
 - add a parallel V2 training path
 - only share small helpers when they are already generic
-- keep FairNAS A.1 irregular-space preprocessing with 3-path cycles
+- keep 3-path cycles and use balanced irregular-space duplication for 2-choice head blocks
 
 ### Proposed V2 file set
 
@@ -176,7 +176,7 @@ Search-specific code can stay untouched in the first implementation pass if V2 t
 ## Decision Gate Before Implementation
 
 1. fairness mode
-   - `Chosen`: `3-path approximated SF` with FairNAS A.1 irregular-space preprocessing
+   - `Chosen`: `3-path balanced irregular fairness` with under-sampled-first head duplication
 2. code organization
    - `Chosen`: parallel v2 modules
 3. local validation

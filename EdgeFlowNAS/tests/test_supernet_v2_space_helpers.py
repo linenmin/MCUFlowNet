@@ -1,10 +1,11 @@
 """Unit tests for Supernet V2 search-space helpers."""
 
 import unittest
+import random
 
 from efnas.nas.arch_codec_v2 import decode_arch_code
 from efnas.nas.eval_pool_builder_v2 import build_eval_pool, check_eval_pool_coverage
-from efnas.nas.fair_sampler_v2 import generate_fair_cycle
+from efnas.nas.fair_sampler_v2 import generate_fair_cycle, run_cycles
 from efnas.nas.search_space_v2 import get_num_blocks, get_num_choices
 
 
@@ -28,8 +29,6 @@ class TestSupernetV2SpaceHelpers(unittest.TestCase):
 
     def test_fair_sampler_v2_outputs_valid_codes(self) -> None:
         """Sampler should emit valid 11-d arch codes with mixed ranges."""
-        import random
-
         cycle_codes = generate_fair_cycle(rng=random.Random(42))
         self.assertEqual(len(cycle_codes), 3)
         for arch_code in cycle_codes:
@@ -37,6 +36,11 @@ class TestSupernetV2SpaceHelpers(unittest.TestCase):
             for block_idx, value in enumerate(arch_code):
                 self.assertGreaterEqual(int(value), 0)
                 self.assertLess(int(value), get_num_choices(block_idx))
+
+    def test_fair_sampler_v2_keeps_gap_small_under_balanced_duplication(self) -> None:
+        """Balanced duplication should keep the global gap very small."""
+        result = run_cycles(cycles=20, seed=42)
+        self.assertLessEqual(int(result["fairness_gap"]), 1)
 
 
 if __name__ == "__main__":

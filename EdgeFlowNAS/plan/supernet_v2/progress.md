@@ -45,6 +45,9 @@
   - Confirmed current WSL base Python does not have TensorFlow, so TF graph smoke and 1-step training smoke remain pending
   - Added `configs/supernet_fc2_172x224_v2.yaml` as the formal V2 search-training config
   - Kept `configs/supernet_fc2_180x240_v2.yaml` unchanged as the historical smoke-compatible config
+  - Replaced the earlier random A.1 head-duplication rule with under-sampled-first duplication in `fair_sampler_v2.py`
+  - Updated V2 config mode string to `balanced_irregular_fairness`
+  - Confirmed the balanced irregular sampler now gives `fairness_gap = 0` in a 20-cycle local smoke check with seed 42
 - Files created/modified:
   - `plan/supernet_v2/task_plan.md`
   - `plan/supernet_v2/findings.md`

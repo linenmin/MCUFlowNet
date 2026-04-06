@@ -72,7 +72,7 @@ def _build_resume_signature_v2(config: Dict[str, Any]) -> Dict[str, Any]:
         "dataset": data_cfg.get("dataset", ""),
         "input_shape": [int(data_cfg.get("input_height", 0)), int(data_cfg.get("input_width", 0))],
         "flow_channels": int(data_cfg.get("flow_channels", 2)),
-        "supernet_mode": train_cfg.get("supernet_mode", "fairnas_a1_irregular"),
+        "supernet_mode": train_cfg.get("supernet_mode", "balanced_irregular_fairness"),
         "uncertainty_type": train_cfg.get("uncertainty_type", "LinearSoftplus"),
         "arch_semantics_version": "supernet_v2_mixed_11d_front6_3choice_head5_2choice",
         "network": "MultiScaleResNet_supernet_v2",
@@ -478,7 +478,7 @@ def _try_restore_training_state(
 
 
 def train_supernet(config: Dict[str, Any]) -> int:
-    """Run FairNAS A.1 style supernet V2 training."""
+    """Run balanced irregular-fairness supernet V2 training."""
     tf.compat.v1.disable_eager_execution()
     tf.compat.v1.reset_default_graph()
 
@@ -492,7 +492,7 @@ def train_supernet(config: Dict[str, Any]) -> int:
 
     experiment_dir = _resolve_output_dir(config)
     logger = build_logger("edgeflownas_supernet_v2", str(experiment_dir / "train.log"))
-    logger.info("start supernet V2 training with FairNAS A.1 irregular-space sampling")
+    logger.info("start supernet V2 training with balanced irregular-space sampling")
     _apply_gpu_device_setting(train_cfg=train_cfg, logger=logger)
 
     batch_size = int(train_cfg.get("batch_size", 32))
@@ -607,7 +607,7 @@ def train_supernet(config: Dict[str, Any]) -> int:
             epoch_distill_sum = 0.0
             epoch_lr_last = float(base_lr)
             for _ in step_iterator:
-                cycle_codes = generate_fair_cycle(rng=sampler_rng)
+                cycle_codes = generate_fair_cycle(rng=sampler_rng, fairness_counts=fairness_counts)
                 _update_fairness_counts(counts=fairness_counts, cycle_codes=cycle_codes)
 
                 input_batch, _, _, label_batch = train_provider.next_batch(batch_size=batch_size)
