@@ -19,12 +19,11 @@ from efnas.data.transforms_180x240 import standardize_image_tensor
 from efnas.engine.supernet_v2_evaluator import setup_supernet_v2_eval_model
 from efnas.nas.arch_codec_v2 import decode_arch_code
 from efnas.nas.search_space_v2 import V2_REFERENCE_ARCH_CODE, get_num_blocks, get_num_choices, validate_arch_code
+from efnas.utils.import_bootstrap import bootstrap_project_paths
 from efnas.utils.path_utils import ensure_directory, project_root
 
 PROJECT_ROOT = project_root()
-PROJECT_PARENT = PROJECT_ROOT.parent
-if str(PROJECT_PARENT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_PARENT))
+bootstrap_project_paths(anchor_file=__file__)
 
 
 def _iter_all_arch_codes_v2() -> Iterable[List[int]]:

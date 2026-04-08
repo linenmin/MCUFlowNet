@@ -12,23 +12,14 @@ import tensorflow as tf
 
 tf.compat.v1.disable_eager_execution()
 
-project_root = Path(__file__).resolve().parent.parent.parent.parent
-edgeflownet_dir = project_root / "EdgeFlowNet"
-edgeflownas_dir = project_root / "EdgeFlowNAS"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-edgeflownet_code_dir = edgeflownet_dir / "code"
-edgeflownas_code_dir = edgeflownas_dir / "code"
+from efnas.utils.import_bootstrap import bootstrap_project_paths, resolve_project_paths
 
-if str(edgeflownet_dir) not in sys.path:
-    sys.path.insert(0, str(edgeflownet_dir))
-if str(edgeflownet_code_dir) not in sys.path:
-    sys.path.insert(0, str(edgeflownet_code_dir))
-if str(edgeflownas_dir) not in sys.path:
-    sys.path.insert(0, str(edgeflownas_dir))
-if str(edgeflownas_code_dir) not in sys.path:
-    sys.path.insert(0, str(edgeflownas_code_dir))
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
+bootstrap_project_paths(anchor_file=__file__)
+project_root = resolve_project_paths(anchor_file=__file__)["mcu_root"]
 
 from efnas.engine.fixed_arch_compare_evaluator import setup_fixed_arch_eval_model, preprocess_eval_batch
 from EdgeFlowNet.code.misc.processor import FlowPostProcessor
