@@ -1,0 +1,65 @@
+"""Unit tests for V2 rank-consistency diagnostic helpers."""
+
+import unittest
+
+from efnas.nas.search_space_v2 import V2_REFERENCE_ARCH_CODE, get_num_blocks, get_num_choices
+from efnas.nas.supernet_v2_rank_consistency import (
+    compute_rank_consistency_summary,
+    compute_v2_complexity_score,
+    run_rank_consistency_diagnostic,
+    sample_probe_arch_pool_v2,
+)
+
+
+class TestSupernetV2RankConsistencyHelpers(unittest.TestCase):
+    """Validate pure helper behavior for the V2 FC2/Sintel diagnostic."""
+
+    def test_sample_probe_arch_pool_v2_is_deterministic_and_valid(self) -> None:
+        """Sampling should be reproducible, unique, and respect mixed choice ranges."""
+        pool_a = sample_probe_arch_pool_v2(num_arch_samples=50, seed=42)
+        pool_b = sample_probe_arch_pool_v2(num_arch_samples=50, seed=42)
+        self.assertEqual(pool_a, pool_b)
+        self.assertEqual(len(pool_a), 50)
+        self.assertEqual(len(pool_a), len({tuple(code) for code in pool_a}))
+        self.assertIn([int(v) for v in V2_REFERENCE_ARCH_CODE], pool_a)
+        for arch_code in pool_a:
+            self.assertEqual(len(arch_code), get_num_blocks())
+            for block_idx, value in enumerate(arch_code):
+                self.assertGreaterEqual(int(value), 0)
+                self.assertLess(int(value), get_num_choices(block_idx))
+
+    def test_sample_probe_arch_pool_v2_spans_complexity_range(self) -> None:
+        """Probe pool should cover clearly distinct complexity levels."""
+        pool = sample_probe_arch_pool_v2(num_arch_samples=50, seed=7)
+        scores = [compute_v2_complexity_score(code) for code in pool]
+        self.assertGreater(max(scores) - min(scores), 4.0)
+
+    def test_compute_rank_consistency_summary_reports_overlap_and_correlation(self) -> None:
+        """Summary should expose strong disagreement when FC2 and Sintel ranks diverge."""
+        records = [
+            {"arch_code": "a", "fc2_epe": 1.0, "sintel_epe": 5.0},
+            {"arch_code": "b", "fc2_epe": 2.0, "sintel_epe": 4.0},
+            {"arch_code": "c", "fc2_epe": 3.0, "sintel_epe": 3.0},
+            {"arch_code": "d", "fc2_epe": 4.0, "sintel_epe": 2.0},
+            {"arch_code": "e", "fc2_epe": 5.0, "sintel_epe": 1.0},
+        ]
+        summary = compute_rank_consistency_summary(records=records, top_ks=(1, 3))
+        self.assertAlmostEqual(float(summary["spearman"]), -1.0, places=6)
+        self.assertEqual(int(summary["topk_overlap"]["1"]["overlap"]), 0)
+        self.assertEqual(int(summary["topk_overlap"]["3"]["overlap"]), 1)
+        self.assertEqual(summary["largest_rank_shift"]["arch_code"], "a")
+
+    def test_dry_run_uses_generated_search_v2_output_dir_when_not_provided(self) -> None:
+        """Dry-run should synthesize an outputs/search_v2 path instead of stringifying None."""
+        result = run_rank_consistency_diagnostic(
+            config_path="configs/supernet_fc2_172x224_v2.yaml",
+            overrides={},
+            options={"num_arch_samples": 5, "sample_seed": 1, "dry_run": True, "output_dir": None},
+        )
+        self.assertIn("outputs", str(result["resolved_output_dir"]))
+        self.assertIn("search_v2", str(result["resolved_output_dir"]))
+        self.assertNotIn("None", str(result["resolved_output_dir"]))
+
+
+if __name__ == "__main__":
+    unittest.main()
