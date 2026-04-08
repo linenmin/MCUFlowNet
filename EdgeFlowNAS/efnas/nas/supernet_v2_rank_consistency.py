@@ -360,19 +360,39 @@ def _run_bn_recalibration(
         )
 
 
+def build_fc2_eval_windows(num_samples: int, batch_size: int, max_samples: Optional[int] = None) -> List[Tuple[int, int]]:
+    """Build sequential FC2 eval windows that cover each chosen sample exactly once."""
+    total = max(0, int(num_samples))
+    bs = max(1, int(batch_size))
+    if max_samples is not None:
+        total = min(total, max(0, int(max_samples)))
+    windows: List[Tuple[int, int]] = []
+    offset = 0
+    while offset < total:
+        current_bs = min(bs, total - offset)
+        windows.append((int(offset), int(current_bs)))
+        offset += current_bs
+    return windows
+
+
 def _evaluate_fc2_one_arch(
     eval_model: Dict[str, Any],
     val_provider: Any,
     arch_code: Sequence[int],
-    eval_batches_per_arch: int,
     batch_size: int,
+    max_samples: Optional[int] = None,
 ) -> float:
-    """Evaluate one architecture on FC2 val."""
-    if hasattr(val_provider, "reset_cursor"):
-        val_provider.reset_cursor(0)
+    """Evaluate one architecture on FC2 val with full sequential coverage."""
+    windows = build_fc2_eval_windows(
+        num_samples=len(val_provider),
+        batch_size=int(batch_size),
+        max_samples=max_samples,
+    )
     epes: List[float] = []
-    for _ in range(max(1, int(eval_batches_per_arch))):
-        input_batch, _, _, label_batch = val_provider.next_batch(batch_size=int(batch_size))
+    for offset, current_bs in windows:
+        if hasattr(val_provider, "reset_cursor"):
+            val_provider.reset_cursor(int(offset))
+        input_batch, _, _, label_batch = val_provider.next_batch(batch_size=int(current_bs))
         input_batch = standardize_image_tensor(input_batch)
         epe_val = eval_model["sess"].run(
             eval_model["epe_tensor"],
@@ -540,8 +560,8 @@ def run_rank_consistency_diagnostic(
                 eval_model=eval_model,
                 val_provider=fc2_val_provider,
                 arch_code=arch_code,
-                eval_batches_per_arch=int(options.get("eval_batches_per_arch", config.get("eval", {}).get("eval_batches_per_arch", 16))),
                 batch_size=int(options.get("eval_batch_size", config.get("train", {}).get("batch_size", 8))),
+                max_samples=options.get("max_fc2_val_samples", None),
             )
             sintel_epe = _evaluate_sintel_one_arch(
                 eval_model=eval_model,
@@ -575,7 +595,8 @@ def run_rank_consistency_diagnostic(
         "sintel_list": sintel_list_path,
         "sintel_patch_size": sintel_patch_size,
         "bn_recal_batches": int(options.get("bn_recal_batches", 16)),
-        "eval_batches_per_arch": int(options.get("eval_batches_per_arch", config.get("eval", {}).get("eval_batches_per_arch", 16))),
+        "fc2_val_total_samples": int(len(fc2_val_provider)),
+        "max_fc2_val_samples": options.get("max_fc2_val_samples", None),
         "sample_seed": int(options.get("sample_seed", 42)),
         "num_arch_samples": int(len(sample_pool)),
         "summary": summary,

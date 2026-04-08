@@ -30,6 +30,9 @@
   - FC2 validation EPE
   - Sintel EPE
 - The implementation restores the original supernet checkpoint before each arch, then performs FC2-train BN recalibration before measuring FC2 and Sintel.
+- BN recalibration remains fixed-batch by design.
+- FC2 validation was updated to full sequential coverage without wraparound repetition.
+- Sintel evaluation already used full list coverage unless an explicit sample cap is provided.
 
 ## Decision Metrics
 

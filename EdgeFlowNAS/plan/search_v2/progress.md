@@ -24,6 +24,18 @@
   - dry-run produced a valid `outputs/search_v2/rank_consistency_*` path
   - no dataset access was required for dry-run validation
 
+## Session: 2026-04-08 (Coverage Fix)
+
+### FC2 Evaluation Control
+
+- **Status:** complete
+- **Actions taken:**
+  - reviewed the initial diagnostic and confirmed FC2 validation still used a fixed batch count rather than full-set coverage
+  - added `build_fc2_eval_windows()` so FC2 val now runs sequentially across the whole split without wraparound duplication
+  - kept BN recalibration as fixed-batch calibration rather than full-train evaluation
+  - added regression tests for full-set and capped FC2 window generation
+  - re-ran local and `tf_work_hpc` tests plus wrapper dry-run
+
 ## Intended HPC Deliverable
 
 - One output directory under `outputs/search_v2/`

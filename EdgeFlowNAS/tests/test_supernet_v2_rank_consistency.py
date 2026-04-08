@@ -4,6 +4,7 @@ import unittest
 
 from efnas.nas.search_space_v2 import V2_REFERENCE_ARCH_CODE, get_num_blocks, get_num_choices
 from efnas.nas.supernet_v2_rank_consistency import (
+    build_fc2_eval_windows,
     compute_rank_consistency_summary,
     compute_v2_complexity_score,
     run_rank_consistency_diagnostic,
@@ -48,6 +49,16 @@ class TestSupernetV2RankConsistencyHelpers(unittest.TestCase):
         self.assertEqual(int(summary["topk_overlap"]["1"]["overlap"]), 0)
         self.assertEqual(int(summary["topk_overlap"]["3"]["overlap"]), 1)
         self.assertEqual(summary["largest_rank_shift"]["arch_code"], "a")
+
+    def test_build_fc2_eval_windows_covers_full_set_without_wrap(self) -> None:
+        """Full FC2 evaluation should consume each validation sample exactly once."""
+        windows = build_fc2_eval_windows(num_samples=100, batch_size=32, max_samples=None)
+        self.assertEqual(windows, [(0, 32), (32, 32), (64, 32), (96, 4)])
+
+    def test_build_fc2_eval_windows_supports_optional_cap(self) -> None:
+        """Optional sample cap should still avoid wraparound in the tail batch."""
+        windows = build_fc2_eval_windows(num_samples=100, batch_size=32, max_samples=50)
+        self.assertEqual(windows, [(0, 32), (32, 18)])
 
     def test_dry_run_uses_generated_search_v2_output_dir_when_not_provided(self) -> None:
         """Dry-run should synthesize an outputs/search_v2 path instead of stringifying None."""

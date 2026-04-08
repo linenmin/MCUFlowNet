@@ -43,6 +43,12 @@ Phase 3
 - [ ] Review Spearman / Kendall / top-k overlap
 - **Status:** pending
 
+## Validation Notes
+
+- `BN recal` intentionally stays fixed-batch for runtime control.
+- `FC2 val` must use full sequential coverage for rank-comparison validity.
+- `Sintel` uses full list coverage unless a manual cap is requested for pilot runs.
+
 ### Phase 5: Search V2 Decision Gate
 
 - [ ] If correlation is high, keep FC2-driven search and use Sintel only for shortlist re-ranking

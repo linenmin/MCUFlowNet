@@ -15,6 +15,7 @@ class TestRunSupernetV2RankConsistencyWrapper(unittest.TestCase):
         self.assertEqual(args.config, "configs/supernet_fc2_172x224_v2.yaml")
         self.assertEqual(args.num_arch_samples, 50)
         self.assertEqual(args.checkpoint_type, "best")
+        self.assertIsNone(args.max_fc2_val_samples)
 
 
 if __name__ == "__main__":

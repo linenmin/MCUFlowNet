@@ -27,7 +27,6 @@ def _build_overrides(args: argparse.Namespace) -> Dict[str, Any]:
     _put_override(overrides, "data.train_dir", args.train_dir)
     _put_override(overrides, "data.val_dir", args.val_dir)
     _put_override(overrides, "train.batch_size", args.batch_size)
-    _put_override(overrides, "eval.eval_batches_per_arch", args.eval_batches_per_arch)
     return overrides
 
 
@@ -54,10 +53,16 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--sintel_patch_size", default="416,1024", help="Sintel evaluation size H,W")
     parser.add_argument("--max_sintel_samples", type=int, default=None, help="optional cap for quick pilot runs")
+    parser.add_argument("--max_fc2_val_samples", type=int, default=None, help="optional cap for quick pilot runs on FC2 val")
 
     parser.add_argument("--bn_recal_batches", type=int, default=16, help="FC2-train BN recalibration batches per arch")
     parser.add_argument("--bn_recal_batch_size", type=int, default=None, help="BN recalibration batch size")
-    parser.add_argument("--eval_batches_per_arch", type=int, default=16, help="FC2 val batches per arch")
+    parser.add_argument(
+        "--eval_batches_per_arch",
+        type=int,
+        default=None,
+        help="deprecated and ignored; FC2 val now uses full sequential coverage unless --max_fc2_val_samples is set",
+    )
     parser.add_argument("--eval_batch_size", type=int, default=None, help="FC2 val batch size")
     parser.add_argument("--gpu_device", type=int, default=None, help="GPU index to expose via CUDA_VISIBLE_DEVICES")
 
@@ -80,9 +85,9 @@ def main() -> int:
         "sintel_list": args.sintel_list,
         "sintel_patch_size": args.sintel_patch_size,
         "max_sintel_samples": args.max_sintel_samples,
+        "max_fc2_val_samples": args.max_fc2_val_samples,
         "bn_recal_batches": args.bn_recal_batches,
         "bn_recal_batch_size": args.bn_recal_batch_size,
-        "eval_batches_per_arch": args.eval_batches_per_arch,
         "eval_batch_size": args.eval_batch_size,
         "gpu_device": args.gpu_device,
         "dry_run": args.dry_run,
