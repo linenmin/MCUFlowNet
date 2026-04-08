@@ -72,12 +72,13 @@ class BaseLayers:  # 定义基础层类
     def resize_conv(self, inputs, filters, kernel_size=None, name=None):  # 定义上采样卷积函数
         """执行双线性上采样后卷积。"""  # 说明函数用途
         kernel_size = kernel_size or self.kernel_size  # 设置卷积核尺寸
-        input_shape = inputs.get_shape().as_list()  # 读取输入静态形状
+        input_shape = tf.shape(inputs)  # 读取输入动态形状，兼容可变分辨率评估图
         height = input_shape[1] * 2  # 计算上采样后高度
         width = input_shape[2] * 2  # 计算上采样后宽度
+        target_size = tf.stack([height, width], axis=0, name=(None if name is None else f"{name}_size"))
         resized = tf.compat.v1.image.resize_bilinear(  # 执行双线性上采样
             images=inputs,  # 传入输入张量
-            size=[height, width],  # 指定目标尺寸
+            size=target_size,  # 指定目标尺寸
             align_corners=False,  # 关闭角点对齐
             half_pixel_centers=False,  # 关闭半像素中心
             name=(None if name is None else f"{name}_resize"),  # 指定上采样层名称
