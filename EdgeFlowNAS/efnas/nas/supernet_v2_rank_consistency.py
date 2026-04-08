@@ -306,6 +306,12 @@ def _resolve_path(path_text: str, base_path: Optional[str] = None) -> Path:
     return (project_root() / raw).resolve()
 
 
+def _option_or_default(options: Dict[str, Any], key: str, default: Any) -> Any:
+    """Return option value unless it is explicitly None, then use the provided default."""
+    value = options.get(key, None)
+    return default if value is None else value
+
+
 def _prepare_sintel_lists(dataset_root: Path, sintel_list_text: str) -> Tuple[List[str], List[str], List[str], str]:
     """Resolve Sintel file lists in the same way as existing wrappers."""
     from argparse import Namespace
@@ -466,8 +472,8 @@ def run_rank_consistency_diagnostic(
     """Run the FC2/Sintel ranking diagnostic or a dry-run preview."""
     config = _merge_overrides(_load_yaml(config_path), overrides)
     sample_pool = sample_probe_arch_pool_v2(
-        num_arch_samples=int(options.get("num_arch_samples", 50)),
-        seed=int(options.get("sample_seed", 42)),
+        num_arch_samples=int(_option_or_default(options, "num_arch_samples", 50)),
+        seed=int(_option_or_default(options, "sample_seed", 42)),
     )
 
     output_dir_raw = options.get("output_dir", "")
@@ -552,15 +558,19 @@ def run_rank_consistency_diagnostic(
                 eval_model=eval_model,
                 train_provider=fc2_train_provider,
                 arch_code=arch_code,
-                num_batches=int(options.get("bn_recal_batches", 16)),
-                batch_size=int(options.get("bn_recal_batch_size", config.get("train", {}).get("batch_size", 8))),
+                num_batches=int(_option_or_default(options, "bn_recal_batches", 16)),
+                batch_size=int(
+                    _option_or_default(options, "bn_recal_batch_size", config.get("train", {}).get("batch_size", 8))
+                ),
             )
             fc2_epe = _evaluate_fc2_one_arch(
                 eval_model=eval_model,
                 val_provider=fc2_val_provider,
                 arch_code=arch_code,
-                batch_size=int(options.get("eval_batch_size", config.get("train", {}).get("batch_size", 8))),
-                max_samples=options.get("max_fc2_val_samples", None),
+                batch_size=int(
+                    _option_or_default(options, "eval_batch_size", config.get("train", {}).get("batch_size", 8))
+                ),
+                max_samples=_option_or_default(options, "max_fc2_val_samples", None),
             )
             sintel_epe = _evaluate_sintel_one_arch(
                 eval_model=eval_model,
@@ -569,7 +579,7 @@ def run_rank_consistency_diagnostic(
                 img2_list=img2_list,
                 flo_list=flo_list,
                 patch_size=sintel_patch_size,
-                max_samples=options.get("max_sintel_samples", None),
+                max_samples=_option_or_default(options, "max_sintel_samples", None),
             )
             records.append(
                 {
@@ -593,10 +603,10 @@ def run_rank_consistency_diagnostic(
         "dataset_root": str(dataset_root),
         "sintel_list": sintel_list_path,
         "sintel_patch_size": sintel_patch_size,
-        "bn_recal_batches": int(options.get("bn_recal_batches", 16)),
+        "bn_recal_batches": int(_option_or_default(options, "bn_recal_batches", 16)),
         "fc2_val_total_samples": int(len(fc2_val_provider)),
-        "max_fc2_val_samples": options.get("max_fc2_val_samples", None),
-        "sample_seed": int(options.get("sample_seed", 42)),
+        "max_fc2_val_samples": _option_or_default(options, "max_fc2_val_samples", None),
+        "sample_seed": int(_option_or_default(options, "sample_seed", 42)),
         "num_arch_samples": int(len(sample_pool)),
         "summary": summary,
     }

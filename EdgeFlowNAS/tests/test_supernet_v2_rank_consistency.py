@@ -4,6 +4,7 @@ import unittest
 
 from efnas.nas.search_space_v2 import V2_REFERENCE_ARCH_CODE, get_num_blocks, get_num_choices
 from efnas.nas.supernet_v2_rank_consistency import (
+    _option_or_default,
     build_fc2_eval_windows,
     compute_rank_consistency_summary,
     compute_v2_complexity_score,
@@ -59,6 +60,11 @@ class TestSupernetV2RankConsistencyHelpers(unittest.TestCase):
         """Optional sample cap should still avoid wraparound in the tail batch."""
         windows = build_fc2_eval_windows(num_samples=100, batch_size=32, max_samples=50)
         self.assertEqual(windows, [(0, 32), (32, 18)])
+
+    def test_option_or_default_treats_none_as_missing(self) -> None:
+        """Optional CLI args set to None should fall back to config defaults."""
+        self.assertEqual(_option_or_default({"bn_recal_batch_size": None}, "bn_recal_batch_size", 32), 32)
+        self.assertEqual(_option_or_default({"bn_recal_batch_size": 8}, "bn_recal_batch_size", 32), 8)
 
     def test_dry_run_uses_generated_search_v2_output_dir_when_not_provided(self) -> None:
         """Dry-run should synthesize an outputs/search_v2 path instead of stringifying None."""
