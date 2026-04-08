@@ -10,7 +10,7 @@ def extract_flow_prediction(pred_tensor: tf.Tensor, num_out: int = 2) -> tf.Tens
 def build_epe_metric(pred_tensor: tf.Tensor, label_ph: tf.Tensor, num_out: int = 2) -> tf.Tensor:  # 定义EPE指标构建函数
     """构建平均端点误差(EPE)指标。"""  # 说明函数用途
     flow_pred = extract_flow_prediction(pred_tensor=pred_tensor, num_out=num_out)  # 提取光流预测分支
-    pred_size = [int(flow_pred.shape[1]), int(flow_pred.shape[2])]  # 读取预测输出空间尺寸
+    pred_size = tf.shape(flow_pred)[1:3]  # 读取预测输出运行时空间尺寸，兼容动态分辨率
     label_resized = tf.compat.v1.image.resize(label_ph, size=pred_size, method=tf.image.ResizeMethod.BILINEAR)  # 对标签执行同尺度缩放
     diff = flow_pred - label_resized  # 计算预测与标签差值
     sq = tf.square(diff)  # 计算逐元素平方误差
@@ -26,9 +26,10 @@ def accumulate_predictions(preds: list) -> tf.Tensor:
         if pred_accum is None:
             pred_accum = pred_i
             continue
+        target_size = tf.shape(pred_i)[1:3]
         pred_accum = tf.compat.v1.image.resize_bilinear(
             pred_accum,
-            [pred_i.shape[1], pred_i.shape[2]],
+            target_size,
             align_corners=False,
             half_pixel_centers=False,
             name=f"AccumResize{idx}",
