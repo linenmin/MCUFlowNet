@@ -49,6 +49,7 @@ class SearchCoordinator:
         self.batch_size: int = search_cfg["batch_size"]
         self.scientist_interval: int = search_cfg["scientist_trigger_interval"]
         self.confidence_threshold: float = search_cfg["assumption_confidence_threshold"]
+        self.search_space_size: int = int(search_cfg.get("search_space_size", 3 ** 9))
         self.max_workers: int = cfg["concurrency"]["max_workers"]
         self.prune_tflite_after_reduce: bool = bool(
             cfg.get("evaluation", {}).get("vela_prune_tflite_after_reduce", False)
@@ -365,7 +366,7 @@ class SearchCoordinator:
         """记录本轮搜索的可观测性指标。"""
         df = file_io.read_history(self.exp_dir)
         total = len(df)
-        total_space = 3 ** 9
+        total_space = max(1, int(self.search_space_size))
 
         best_epe = float("inf")
         pareto_count = 0

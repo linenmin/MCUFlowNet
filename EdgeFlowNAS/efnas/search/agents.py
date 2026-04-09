@@ -95,7 +95,7 @@ def invoke_agent_b(
         - history (已评估架构编码，用于避免重复)
 
     Returns:
-        逗号分隔的架构编码字符串列表 (如 ["0,1,2,0,0,1,2,1,0", ...])。
+        逗号分隔的架构编码字符串列表 (如 ["2,1,2,1,2,1,0,1,0,1,0", ...])。
     """
     findings = file_io.read_findings(exp_dir)
     coverage_hint = _build_coverage_hint(exp_dir)
@@ -110,7 +110,7 @@ def invoke_agent_b(
         f"## 绝对真理碑 (findings.md) — 你必须遵守:\n{findings}\n\n"
         f"## 搜索覆盖率统计:\n{coverage_hint}\n\n"
         f"## 已评估架构列表 (禁止重复生成):\n{evaluated_list_str}\n\n"
-        f"请生成 **恰好 {batch_size} 个** 合法的、**不在上述已评估列表中的** 9 维架构编码。\n"
+        f"请生成 **恰好 {batch_size} 个** 合法的、**不在上述已评估列表中的** 11 维架构编码。\n"
     )
 
     result = llm.chat_json(role="agent_b", system_prompt=prompts.AGENT_B_SYSTEM, user_message=user_msg)
@@ -120,7 +120,11 @@ def invoke_agent_b(
     valid = []
     for c in candidates:
         parts = [p.strip() for p in c.split(",")]
-        if len(parts) == 9 and all(p in ("0", "1", "2") for p in parts):
+        if (
+            len(parts) == 11
+            and all(p in ("0", "1", "2") for p in parts[:6])
+            and all(p in ("0", "1") for p in parts[6:])
+        ):
             valid.append(",".join(parts))
         else:
             logger.warning("[Agent B] 丢弃非法编码: %s", c)
@@ -345,7 +349,7 @@ def execute_verification_script(
 def _build_coverage_hint(exp_dir: str) -> str:
     """构建搜索空间覆盖率摘要，帮助 Agent B 避免重复生成。"""
     evaluated = file_io.get_evaluated_arch_codes(exp_dir)
-    total_space = 3 ** 9  # 19683
+    total_space = (3 ** 6) * (2 ** 5)  # 23328
     coverage_pct = len(evaluated) / total_space * 100
     lines = [
         f"已评估架构数: {len(evaluated)} / {total_space} ({coverage_pct:.1f}%)",
@@ -353,10 +357,10 @@ def _build_coverage_hint(exp_dir: str) -> str:
     # 每维度的值分布
     if evaluated:
         from collections import Counter
-        dim_counters = [Counter() for _ in range(9)]
+        dim_counters = [Counter() for _ in range(11)]
         for code in evaluated:
             parts = code.split(",")
-            if len(parts) == 9:
+            if len(parts) == 11:
                 for i, v in enumerate(parts):
                     dim_counters[i][v.strip()] += 1
         for i, counter in enumerate(dim_counters):
@@ -410,7 +414,7 @@ def _summarize_history(df) -> str:
                     pass
 
     # --- 操作态统计 (帮 Agent A 感知搜索进度) ---
-    total_space = 3 ** 9
+    total_space = (3 ** 6) * (2 ** 5)
     coverage_pct = len(df) / total_space * 100
     lines.append(f"\n搜索覆盖率: {len(df)}/{total_space} ({coverage_pct:.1f}%)")
 

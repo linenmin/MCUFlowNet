@@ -7,6 +7,26 @@ from efnas.search import eval_worker
 
 
 class TestEvalWorkerCommand(unittest.TestCase):
+    def test_build_eval_command_passes_through_fc2_full_eval_cap_override(self) -> None:
+        project_root = os.path.abspath(".")
+        eval_cfg = {
+            "eval_script": "wrappers/run_supernet_subnet_distribution_v2.py",
+            "supernet_config": "configs/supernet_fc2_172x224_v2.yaml",
+            "checkpoint_type": "best",
+            "max_fc2_val_samples": 128,
+        }
+
+        cmd = eval_worker._build_eval_command(
+            project_root=project_root,
+            eval_cfg=eval_cfg,
+            arch_code_str="0,1,2,0,1,2,0,1,0,1,0",
+            output_tag="agent_eval_v2",
+            run_output_dir=os.path.join(project_root, "outputs", "tmp_run"),
+        )
+
+        self.assertIn("--max_fc2_val_samples", cmd)
+        self.assertIn("128", cmd)
+
     def test_build_eval_command_passes_through_eval_overrides(self) -> None:
         project_root = os.path.abspath(".")
         eval_cfg = {
@@ -57,24 +77,26 @@ class TestEvalWorkerCommand(unittest.TestCase):
     def test_build_eval_command_omits_unset_eval_overrides(self) -> None:
         project_root = os.path.abspath(".")
         eval_cfg = {
-            "eval_script": "wrappers/run_supernet_subnet_distribution.py",
-            "supernet_config": "configs/supernet_fc2_180x240.yaml",
+            "eval_script": "wrappers/run_supernet_subnet_distribution_v2.py",
+            "supernet_config": "configs/supernet_fc2_172x224_v2.yaml",
             "checkpoint_type": "best",
             "enable_vela": False,
             "vela_keep_artifacts": False,
+            "max_fc2_val_samples": None,
         }
 
         cmd = eval_worker._build_eval_command(
             project_root=project_root,
             eval_cfg=eval_cfg,
-            arch_code_str="0,0,0,0,0,0,0,0,0",
-            output_tag="agent_eval_000000000",
+            arch_code_str="0,0,0,0,0,0,0,0,0,0,0",
+            output_tag="agent_eval_00000000000",
             run_output_dir=os.path.join(project_root, "outputs", "tmp_run"),
         )
 
         self.assertNotIn("--batch_size", cmd)
         self.assertNotIn("--bn_recal_batches", cmd)
         self.assertNotIn("--eval_batches_per_arch", cmd)
+        self.assertNotIn("--max_fc2_val_samples", cmd)
         self.assertNotIn("--num_workers", cmd)
         self.assertNotIn("--cpu_only", cmd)
         self.assertNotIn("--vela_float32", cmd)

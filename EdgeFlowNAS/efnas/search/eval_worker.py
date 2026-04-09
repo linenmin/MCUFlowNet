@@ -58,6 +58,7 @@ def _build_eval_command(
     # Throughput and eval behavior overrides.
     _append_opt(cmd, "--bn_recal_batches", eval_cfg.get("bn_recal_batches"))
     _append_opt(cmd, "--eval_batches_per_arch", eval_cfg.get("eval_batches_per_arch"))
+    _append_opt(cmd, "--max_fc2_val_samples", eval_cfg.get("max_fc2_val_samples"))
     _append_opt(cmd, "--batch_size", eval_cfg.get("batch_size"))
     _append_opt(cmd, "--num_workers", eval_cfg.get("num_workers"))
     if bool(eval_cfg.get("cpu_only", False)):
@@ -381,4 +382,3 @@ def _invoke_agent_c(
     except Exception:
         logger.exception("[Agent C] 调用失败 arch=%s", arch_code_str)
         return "Agent C 调用失败，无法生成硬件洞察"
-

@@ -1,0 +1,59 @@
+# EdgeFlowNAS Agentic Search 配置文件 (V2 first-stage search)
+
+llm:
+  models:
+    agent_a_strategist: "gemini/gemini-3.1-pro-preview"
+    agent_b_generator: "gemini/gemini-3.1-flash-lite-preview"
+    agent_c_distiller: "gemini/gemini-3-flash-preview"
+    agent_d_scientist: "gemini/gemini-3.1-pro-preview"
+    agent_d_coder: "gemini/gemini-3-flash-preview"
+    agent_d_rule_manager: "gemini/gemini-3.1-pro-preview"
+
+  temperature:
+    agent_a: 0.60
+    agent_b: 0.60
+    agent_c: 0.15
+    agent_d1: 0.45
+    agent_d2: 0.15
+    agent_d3: 0.25
+  max_tokens: 4096
+  request_timeout: 120
+  max_retries: 3
+
+search:
+  total_epochs: 50
+  batch_size: 16
+  scientist_trigger_interval: 5
+  assumption_confidence_threshold: 0.95
+  search_space_size: 23328
+
+concurrency:
+  max_workers: 4
+
+evaluation:
+  eval_script: "wrappers/run_supernet_subnet_distribution_v2.py"
+  supernet_config: "configs/supernet_fc2_172x224_v2.yaml"
+  checkpoint_type: "best"
+  enable_vela: true
+  vela_mode: "verbose"
+  vela_keep_artifacts: true
+  vela_prune_tflite_after_reduce: true
+  per_layer_csv_max_rows: 500
+  bn_recal_batches: 16
+  batch_size: 32
+  eval_batches_per_arch: null
+  max_fc2_val_samples: null
+
+paths:
+  output_root: "outputs/search_v2"
+  metadata_dir: "metadata"
+  dashboard_dir: "dashboard"
+  tmp_workers_dir: "dashboard/tmp_workers"
+  eval_outputs_dir: "dashboard/eval_outputs"
+  scripts_dir: "scripts"
+
+files:
+  history_csv: "history_archive.csv"
+  strategy_log: "search_strategy_log.md"
+  assumptions_json: "assumptions.json"
+  findings_md: "findings.md"
