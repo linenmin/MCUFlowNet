@@ -203,3 +203,114 @@
   - `conda run -n tf_work_hpc python -m unittest tests.test_run_supernet_subnet_distribution_v2_wrapper tests.test_eval_worker_command tests.test_search_coordinator_v2_metrics`
   - module import check for `efnas.nas.supernet_subnet_distribution_v2`
   - wrapper `--dry_run` for `run_supernet_subnet_distribution_v2.py`
+
+## Session: 2026-04-09 (FC2 vs Sintel Timing Probe)
+
+### Single-Subnet Timing Result
+
+- **Status:** complete
+- **Output reviewed:**
+  - `outputs/search_v2/timing_probe_ref/metadata/timing_probe_summary.json`
+- **Probe target:**
+  - `arch_code = 0,0,0,0,0,0,1,1,1,1,1`
+  - checkpoint = `supernet_best.ckpt`
+- **Measured times:**
+  - `BN recal = 25.57s`
+  - `FC2 eval = 17.53s` over `640` samples
+  - `Sintel eval = 124.85s` over `1041` samples
+  - `Sintel / FC2 eval ratio = 7.12x`
+  - `Sintel / FC2 per-sample ratio = 4.38x`
+
+### Search Implication
+
+- **Status:** complete
+- **Decision reinforced:**
+  - do not replace first-stage `FC2 val` with full-list `Sintel`
+  - keep `FC2 val` as the stage-1 search evaluator for throughput
+  - reserve `Sintel` for later re-ranking / validation because the inherited-weight eval path is materially more expensive on Sintel
+
+### Gemini Temperature Note
+
+- **Status:** review complete
+- **Current interpretation:**
+  - if the run stays on Gemini `3 / 3.1` preview models, `temperature = 1.0` should be treated as the compatibility baseline, not as an intentionally high-creativity setting
+  - future control over output discipline should rely primarily on prompt constraints, schema constraints, and model choice rather than low-temperature tuning on Gemini 3-family models
+
+## Session: 2026-04-09 (Baseline Selection)
+
+### Single Baseline Decision
+
+- **Status:** complete
+- **Decision taken:**
+  - if only one non-agent baseline is implemented for the paper, use `NSGA-II`
+  - do not prioritize `Random Search` as a main baseline
+  - keep `Local Search` only as a backup option, not the first implementation target
+
+### Rationale
+
+- **Status:** complete
+- **Why `NSGA-II`:**
+  - the current search problem is explicitly a two-objective Pareto search on `EPE↓` and `FPS↑`
+  - `NSGA-II` is the canonical and most widely recognized multi-objective evolutionary baseline
+  - this makes it a cleaner authority-backed comparison point for the agent-team search than `Local Search`
+- **Why not `Random Search` first:**
+  - the paper does not need to spend implementation budget re-proving that a mature Pareto optimizer is stronger than random exploration
+  - if random is ever needed, it can be added later as a lightweight sanity check
+
+### Pending Confirmation Before Implementation
+
+- **Status:** pending
+- **Need to confirm:**
+  - preferred `population_size`
+  - exact generation count once `population_size` is fixed
+
+## Session: 2026-04-09 (NSGA-II Baseline Scope Lock)
+
+### Confirmed Design Choices
+
+- **Status:** complete
+- **User-confirmed settings:**
+  - match the agent run's planned total evaluation budget
+  - optimize only `EPE↓` and `FPS↑`
+  - do not add SRAM as a hard constraint because the current V2 search space is already SRAM-safe
+  - use a fixed-generation stop rule
+  - use standard `crossover + mutation`
+
+### Remaining Open Point
+
+- **Status:** pending
+- **Still to settle:**
+  - `population_size`, which will also determine the final generation count under the fixed budget
+  - this choice should be informed by an existing recognized NAS / multi-objective NAS implementation rather than chosen ad hoc
+
+## Session: 2026-04-09 (NSGA-II Baseline Implementation)
+
+### Implemented Runtime Surface
+
+- **Status:** complete
+- **Actions taken:**
+  - added `efnas/baselines/` as a dedicated home for non-agent baselines
+  - implemented `efnas/baselines/nsga2_search.py`
+  - added CLI entrypoint `wrappers/run_nsga2_search.py`
+  - added dedicated config `configs/nsga2_v2.yaml`
+
+### Implementation Decisions
+
+- **Status:** complete
+- **Decisions applied in code:**
+  - keep the baseline separate from the agentic search coordinator
+  - reuse the existing V2 subprocess evaluator via `evaluate_single_arch(...)`
+  - reuse the existing `history_archive.csv` and `epoch_metrics.csv` conventions for easier comparison
+  - derive `total_generations = total_evaluations / population_size = 800 / 50 = 16`
+  - use project-native categorical `uniform crossover + mutation` rather than adding a new external optimization dependency in the first version
+
+### Verification
+
+- **Status:** partial local verification complete
+- **Checks passed:**
+  - `python -m unittest tests.test_nsga2_baseline tests.test_run_nsga2_search_wrapper`
+  - `python -m py_compile efnas\\baselines\\__init__.py efnas\\baselines\\nsga2_search.py wrappers\\run_nsga2_search.py`
+  - `python wrappers\\run_nsga2_search.py --help`
+- **Known local limitation:**
+  - full end-to-end execution was not run in the default Windows Python because the local `pandas/pyarrow` stack is currently binary-incompatible with local NumPy
+  - the real runtime validation therefore still belongs on the user's HPC / `tf_work` environment

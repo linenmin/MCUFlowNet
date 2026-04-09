@@ -117,6 +117,11 @@ Phase 3
 4. Practical shortlist rule supported by this diagnostic
    - all `Sintel top-10` probe architectures were contained inside `FC2 top-20`
    - `FC2 top-15` already covered `9/10` of the `Sintel top-10`
+5. Runtime-cost confirmation from the dedicated timing probe
+   - `FC2 eval = 17.53s` over `640` samples
+   - `Sintel eval = 124.85s` over `1041` samples
+   - `Sintel / FC2 eval ratio = 7.12x`
+   - therefore stage-1 search should stay on `FC2 val`
 
 ## Current Search-V1.5 Decision
 
@@ -175,3 +180,64 @@ Phase 3
    - point evaluation to a V2-capable worker entrypoint
    - update epoch coverage accounting to `23328`
    - verify the end-to-end evaluation path accepts 11D codes all the way through
+
+## Current Operating Decision
+
+1. Search evaluation
+   - proceed with `FC2 val` as the first-stage search evaluator
+   - do not switch the full search loop to `Sintel`
+2. Gemini temperature policy
+   - if warnings persist on Gemini `3 / 3.1` roles, prefer moving those roles to `temperature = 1.0`
+   - treat `1.0` as the model-family baseline rather than as a deliberate creativity boost
+   - if output discipline becomes the concern, fix that through prompting/schema/model choice first
+3. Baseline policy
+   - if only one non-agent baseline is implemented, choose `NSGA-II`
+   - do not spend extra time implementing `Random Search` just to re-prove a weaker baseline
+   - treat `Local Search` as a respected NAS baseline, but not the primary one for this paper's multi-objective Pareto setting
+
+## Current Baseline Decision
+
+1. The first comparison baseline for the agent team will be `NSGA-II`
+   - rationale: this project is explicitly a two-objective Pareto search (`EPE↓`, `FPS↑`)
+   - rationale: `NSGA-II` is the canonical and most widely accepted multi-objective evolutionary baseline
+   - rationale: this choice is better aligned with the paper narrative than `Local Search`, which is strong but less canonical as a Pareto optimizer
+2. `Local Search` remains a backup option
+   - if `NSGA-II` integration proves unexpectedly awkward, `Local Search` can still be revived as a secondary NAS-style baseline
+   - but it is not the first implementation target
+3. `Random Search` is intentionally de-prioritized
+   - the paper does not need to spend effort re-establishing that `NSGA-II` beats random exploration
+   - if needed later, random can be added as a lightweight appendix-only sanity baseline rather than a main comparison
+
+## NSGA-II Baseline Preparation Gate
+
+Before implementation starts, confirm:
+
+1. Search budget parity
+   - use the same nominal total evaluation budget as the agent run
+   - note that the agent run may realize fewer than `800` valid evaluations because of duplicates, but the baseline target remains the same planned budget
+2. Objective definition
+   - optimize `EPE↓` and `FPS↑` only
+   - do not add SRAM as a hard constraint because the current V2 subnet space is already SRAM-safe
+3. Population schedule
+   - stopping rule should use fixed generations
+   - the only remaining open hyperparameter is the preferred `population_size`
+4. Candidate encoding operators
+   - use standard `crossover + mutation`
+5. External reference check
+   - before implementation, anchor the first parameter choice to a recognized NAS / one-shot NAS codebase that already uses `NSGA-II`, to avoid purely ad-hoc settings
+
+## NSGA-II Baseline Implementation Status
+
+1. Scope
+   - create a standalone `NSGA-II` baseline entrypoint rather than mixing it into the agentic runtime
+   - reuse the existing V2 fixed-subnet evaluator and metadata conventions where practical
+2. Directory structure
+   - baseline algorithm code should live under `efnas/baselines/`
+   - CLI entrypoint should live under `wrappers/`
+   - dedicated config should live under `configs/`
+3. Current implementation target
+   - `population_size = 50`
+   - `total_evaluations = 800`
+   - derived `total_generations = 16`
+   - objectives = `EPE↓`, `FPS↑`
+   - operators = standard crossover + mutation

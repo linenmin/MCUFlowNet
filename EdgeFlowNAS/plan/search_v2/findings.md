@@ -98,6 +98,22 @@
   - broad exploration on `FC2 + hardware`
   - periodic or end-of-round `Sintel` re-scoring on the top `15-20` FC2 candidates
 
+## Measured Cost Gap Between FC2 And Sintel
+
+- A dedicated single-subnet timing probe was run on:
+  - `arch_code = 0,0,0,0,0,0,1,1,1,1,1`
+  - checkpoint = `supernet_best.ckpt`
+- Measured wall time:
+  - `BN recal = 25.57s`
+  - `FC2 eval = 17.53s` over `640` samples
+  - `Sintel eval = 124.85s` over `1041` samples
+- Derived ratios:
+  - `Sintel / FC2 eval ratio = 7.12x`
+  - `Sintel / FC2 per-sample ratio = 4.38x`
+- Interpretation:
+  - this cost gap is large enough that replacing first-stage FC2 search evaluation with full-list Sintel would sharply reduce search throughput
+  - the measured runtime now directly supports keeping `FC2 val` as the search-stage evaluator
+
 ## Reassessment Of Search-V1 Collapse
 
 - The first search round should not be summarized as simple mechanism failure.
@@ -194,3 +210,48 @@
 - `agent_b` controls candidate diversity under the given strategy.
 - `agent_c` and `agent_d2` are precision-oriented roles, so raising their temperature would mainly add noise.
 - `agent_d1` and `agent_d3` can be revisited later if the `v1.5` rerun still shows premature narrative lock-in.
+
+## Updated Gemini-3 Temperature Interpretation
+
+- Google now recommends keeping Gemini 3-family models at the default `temperature = 1.0`, because lower values can cause looping or degraded reasoning on complex tasks.
+- For this project, that means `temperature = 1.0` should be treated as the safe compatibility baseline for Gemini `3 / 3.1` preview roles, not as an intentionally over-creative setting in the old tuning sense.
+- Therefore, if the search loop remains on Gemini 3-family models and low-temperature warnings continue, moving all active Gemini roles to `1.0` is the more defensible operational choice.
+- If finer determinism control is still needed later, it is better to change model family or tighten prompt/schema constraints than to keep fighting Gemini 3-family temperature guidance.
+
+## Baseline Selection Finding
+
+- For this paper, if only one non-agent baseline is implemented, `NSGA-II` is the most defensible choice.
+- The reason is not that `Local Search` is weak.
+- The reason is that this project is explicitly a multi-objective Pareto search, and `NSGA-II` is the canonical, authority-backed optimizer for that setting.
+- `Local Search` remains a strong NAS baseline, but it is less canonical as the single flagship Pareto baseline.
+- `Random Search` is not required as a first implementation target if the paper goal is to compare against one serious, established baseline rather than re-prove that structured Pareto optimization beats random exploration.
+
+## Baseline-Implementation Constraint
+
+- Before coding the `NSGA-II` baseline, the remaining open decisions are operational rather than conceptual:
+  - population size and exact generation count
+  - logging/resume compatibility expectations
+
+## Locked NSGA-II Baseline Scope
+
+- The baseline should use the same nominal total evaluation budget as the agent run.
+- It should optimize only `EPE↓` and `FPS↑`.
+- SRAM should not be added as a hard constraint for the first baseline, because the current V2 subnet space is already SRAM-safe.
+- The first implementation should use standard `crossover + mutation`.
+- The only major algorithmic hyperparameter still open is the `population_size`, and that choice should be anchored to a known NAS / one-shot NAS implementation rather than chosen arbitrarily.
+
+## First NSGA-II Baseline Implementation Choice
+
+- The first implementation does not pull in a new optimizer framework.
+- Instead, it implements a project-native, limited-scope NSGA-II specialized for the current V2 categorical search space.
+- This keeps the baseline maintainable inside the current repository and avoids introducing a new external dependency just to drive candidate generation.
+- The baseline still reuses the same V2 evaluator as the agentic search, so the comparison remains evaluator-aligned.
+
+## Baseline Runtime Reuse Decision
+
+- The baseline should not fork a second evaluation pipeline.
+- It should reuse:
+  - the existing V2 fixed-subnet subprocess evaluator
+  - the same `history_archive.csv` schema
+  - the same `epoch_metrics.csv` schema
+- This keeps the comparison between agent search and NSGA-II on the same measurement surface and reduces maintenance burden.
