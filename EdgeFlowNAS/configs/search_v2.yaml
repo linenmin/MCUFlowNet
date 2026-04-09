@@ -10,12 +10,12 @@ llm:
     agent_d_rule_manager: "gemini/gemini-3.1-pro-preview"
 
   temperature:
-    agent_a: 0.60
-    agent_b: 0.60
-    agent_c: 0.15
-    agent_d1: 0.45
-    agent_d2: 0.15
-    agent_d3: 0.25
+    agent_a: 1.0
+    agent_b: 1.0
+    agent_c: 1.0
+    agent_d1: 1.0
+    agent_d2: 1.0
+    agent_d3: 1.0
   max_tokens: 4096
   request_timeout: 120
   max_retries: 3
