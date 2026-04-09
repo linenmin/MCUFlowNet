@@ -303,7 +303,14 @@ def _resolve_path(path_text: str, base_path: Optional[str] = None) -> Path:
         return raw
     if base_path:
         return (Path(str(base_path)) / raw).resolve()
-    return (project_root() / raw).resolve()
+    resolved = (project_root() / raw).resolve()
+    if resolved.exists():
+        return resolved
+    if raw.parts and raw.parts[0] == "EdgeFlowNet":
+        sibling = (project_root().parent / raw).resolve()
+        if sibling.exists():
+            return sibling
+    return resolved
 
 
 def _option_or_default(options: Dict[str, Any], key: str, default: Any) -> Any:

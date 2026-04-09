@@ -1,9 +1,13 @@
 """Unit tests for V2 rank-consistency diagnostic helpers."""
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from efnas.nas.search_space_v2 import V2_REFERENCE_ARCH_CODE, get_num_blocks, get_num_choices
 from efnas.nas.supernet_v2_rank_consistency import (
+    _resolve_path,
     _option_or_default,
     build_fc2_eval_windows,
     compute_rank_consistency_summary,
@@ -65,6 +69,20 @@ class TestSupernetV2RankConsistencyHelpers(unittest.TestCase):
         """Optional CLI args set to None should fall back to config defaults."""
         self.assertEqual(_option_or_default({"bn_recal_batch_size": None}, "bn_recal_batch_size", 32), 32)
         self.assertEqual(_option_or_default({"bn_recal_batch_size": 8}, "bn_recal_batch_size", 32), 8)
+
+    def test_resolve_path_falls_back_to_sibling_edgeflownet_repo(self) -> None:
+        """Relative EdgeFlowNet paths should resolve to the sibling repo when absent in EdgeFlowNAS."""
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            edgeflownas_root = root / "EdgeFlowNAS"
+            edgeflownet_root = root / "EdgeFlowNet"
+            edgeflownas_root.mkdir()
+            target = edgeflownet_root / "code" / "dataset_paths" / "MPI_Sintel_Final_train_list.txt"
+            target.parent.mkdir(parents=True)
+            target.write_text("dummy\n", encoding="utf-8")
+            with patch("efnas.nas.supernet_v2_rank_consistency.project_root", return_value=edgeflownas_root):
+                resolved = _resolve_path("EdgeFlowNet/code/dataset_paths/MPI_Sintel_Final_train_list.txt")
+            self.assertEqual(resolved, target.resolve())
 
     def test_dry_run_uses_generated_search_v2_output_dir_when_not_provided(self) -> None:
         """Dry-run should synthesize an outputs/search_v2 path instead of stringifying None."""
