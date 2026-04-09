@@ -1,5 +1,5 @@
 runtime:
-  experiment_name: "edgeflownas_supernet_v2_fc2_172x224"
+  experiment_name: "edgeflownas_supernet_v2_fc2_172x224_run1_balance"
   output_root: "outputs/supernet"
   seed: 42
 
