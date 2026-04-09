@@ -83,16 +83,17 @@ def init_experiment_dir(output_root: str, experiment_name: str) -> str:
 
 
 def find_latest_experiment_dir(output_root: str) -> Optional[str]:
-    """查找 output_root 下最新的实验目录（用于断点恢复）。"""
+    """查找 output_root 下最新的真实搜索实验目录（用于断点恢复）。"""
     if not os.path.isdir(output_root):
         return None
-    candidates = sorted(
-        [d for d in os.listdir(output_root)
-         if os.path.isdir(os.path.join(output_root, d))],
-        reverse=True,
-    )
+    candidates = [
+        os.path.join(output_root, d)
+        for d in os.listdir(output_root)
+        if os.path.isdir(os.path.join(output_root, d))
+        and _is_valid_search_experiment_dir(os.path.join(output_root, d))
+    ]
     if candidates:
-        return os.path.join(output_root, candidates[0])
+        return max(candidates, key=os.path.getmtime)
     return None
 
 
@@ -418,3 +419,22 @@ def _touch_md(path: str, default: str = "") -> None:
         return
     with open(path, "w", encoding="utf-8") as f:
         f.write(default)
+
+
+def _is_valid_search_experiment_dir(exp_dir: str) -> bool:
+    """Return True only for real agent-search experiment directories.
+
+    This guards `--resume` from accidentally picking diagnostic folders such as
+    `timing_probe_*` or `rank_consistency_*` that may share the same output root
+    but do not contain the full search-run metadata layout.
+    """
+    required_paths = [
+        os.path.join(exp_dir, "metadata", "history_archive.csv"),
+        os.path.join(exp_dir, "metadata", "assumptions.json"),
+        os.path.join(exp_dir, "metadata", "findings.md"),
+        os.path.join(exp_dir, "metadata", "search_strategy_log.md"),
+        os.path.join(exp_dir, "dashboard", "tmp_workers"),
+        os.path.join(exp_dir, "dashboard", "eval_outputs"),
+        os.path.join(exp_dir, "scripts"),
+    ]
+    return all(os.path.exists(path) for path in required_paths)
