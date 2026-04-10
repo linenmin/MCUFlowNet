@@ -132,20 +132,29 @@ class LLMClient:
             json.JSONDecodeError: 模型返回内容无法解析为 JSON。
         """
         raw = self.chat(role, system_prompt, user_message, force_json=True, **kwargs)
+        try:
+            return json.loads(self._strip_json_fence(raw))
+        except json.JSONDecodeError:
+            logger.error("JSON 解析失败，原始返回:\n%s", raw)
 
-        # 兜底：如果模型返回了 ```json ... ``` 包裹的文本，尝试剥离
+        repair_msg = (
+            f"{user_message}\n\n"
+            "你上一次返回的 JSON 不合法或被截断。"
+            "请只重新输出一个完整、可被 json.loads 解析的 JSON 对象。"
+            "不要解释，不要补充文本。"
+        )
+        repaired = self.chat(role, system_prompt, repair_msg, force_json=True, **kwargs)
+        return json.loads(self._strip_json_fence(repaired))
+
+    @staticmethod
+    def _strip_json_fence(raw: str) -> str:
+        """去掉 ```json fenced block 并返回干净 JSON 文本。"""
         stripped = raw.strip()
         if stripped.startswith("```"):
             lines = stripped.split("\n")
-            # 去掉首行 ```json 和末行 ```
             if lines[-1].strip() == "```":
                 lines = lines[1:-1]
             else:
                 lines = lines[1:]
             stripped = "\n".join(lines).strip()
-
-        try:
-            return json.loads(stripped)
-        except json.JSONDecodeError:
-            logger.error("JSON 解析失败，原始返回:\n%s", raw)
-            raise
+        return stripped

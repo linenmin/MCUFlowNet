@@ -255,3 +255,52 @@
   - the same `history_archive.csv` schema
   - the same `epoch_metrics.csv` schema
 - This keeps the comparison between agent search and NSGA-II on the same measurement surface and reduces maintenance burden.
+
+## Agent-Team Control-Loop Refactor Direction
+
+### Over-Design Was Rejected
+
+- The control loop should not be rebuilt around a large family of persistent summary files.
+- Most strategist context should be prepared at invocation time from existing search facts instead of being stored as extra metadata artifacts.
+- This keeps the system maintainable and avoids turning the search loop into a document pipeline.
+
+### Findings Contract Direction
+
+- Prose-style `findings.md` should be retired from the control loop.
+- The replacement should be a compact `findings.json` registry plus reusable rule scripts such as `scripts/rule_Axx.py`.
+- The rule logic itself should live in code, not in a rigid mini-DSL.
+- `findings.json` should only store governance-level state:
+  - identity
+  - active/inactive state
+  - scope
+  - confidence/support
+  - enforcement type
+  - backing script path
+
+### Agent-A Input Direction
+
+- `assumptions.json` should no longer feed back into Agent A.
+- Raw `findings` should also not be used as strategist input in the first refactor pass.
+- Agent A should instead plan from search facts only:
+  - `history_archive.csv`
+  - `epoch_metrics.csv`
+  - runtime-computed current Pareto-point list
+- `search_strategy_log.md` should also be removed from Agent A input.
+- If strategic reflections are still kept, they should be treated as human-facing audit logs only, not as strategist memory.
+
+### Role Split Direction
+
+- Agent A should focus on search planning only.
+- Agent A should no longer allocate scientist-verification budget directly.
+- Agent B should remain the candidate generator.
+- The coordinator/engine should own:
+  - scientist scheduling
+  - assumption promotion
+  - finding revalidation
+  - final candidate legality checks
+
+### Runtime-Consistency Direction
+
+- A minimal `run_state.json` should be added for phase-aware resume.
+- `chat_json()` should gain malformed-JSON retry/repair handling.
+- Runtime correctness should be improved without expanding the metadata surface beyond what is needed.

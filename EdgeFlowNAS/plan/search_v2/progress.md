@@ -314,3 +314,82 @@
 - **Known local limitation:**
   - full end-to-end execution was not run in the default Windows Python because the local `pandas/pyarrow` stack is currently binary-incompatible with local NumPy
   - the real runtime validation therefore still belongs on the user's HPC / `tf_work` environment
+
+## Session: 2026-04-10 (Agent-Team Control-Loop Refactor Decision)
+
+### Over-Design Rejected
+
+- **Status:** complete
+- **Decision taken:**
+  - reject the earlier idea of creating many new persistent summary files just to steer the agents
+  - keep the control-loop state surface small and maintainable
+  - prefer runtime-computed prompt sections over document proliferation
+
+### Findings Direction Locked
+
+- **Status:** complete
+- **Decision taken:**
+  - retire prose-style `findings.md` from the control loop
+  - move to a script-first finding system backed by `findings.json`
+  - each promoted finding should keep one reusable rule script (for verification, revalidation, and candidate checking)
+  - `findings.json` should remain a compact registry rather than a rigid rule-DSL
+
+### Agent-A Input Direction Locked
+
+- **Status:** partial decision complete
+- **Decision taken:**
+  - `assumptions.json` should no longer feed back into Agent A
+  - Agent A should be driven by:
+    - `history_archive.csv`
+    - `epoch_metrics.csv`
+    - runtime-computed current Pareto-point list
+  - do not introduce dedicated `strategy_memory.json` / `search_progress.json` / similar summary artifacts just to feed A
+- **Still open:**
+  - whether Agent A should continue seeing its own previous strategy record in any form
+
+### Runtime-Consistency Direction Locked
+
+- **Status:** complete
+- **Decision taken:**
+  - add a minimal `run_state.json` for phase-aware resume
+  - add malformed-JSON retry/repair in `chat_json()`
+  - avoid expanding the metadata surface beyond what is needed for correctness
+
+### Role Split Direction
+
+- **Status:** complete
+- **Decision taken:**
+  - Agent A should focus on search planning only
+  - Agent A should not directly allocate scientist verification budget
+  - Agent B should remain the generator and receive active-rule guidance
+  - the coordinator/engine should own scientist scheduling and final rule enforcement
+
+## Session: 2026-04-10 (Control-Loop Refactor Implementation)
+
+### Implemented Refactor Surface
+
+- **Status:** complete
+- **Actions taken:**
+  - switched the control loop from prose-style `findings.md` to registry-style `findings.json`
+  - kept legacy `findings.md` helpers only as compatibility shims for old tools and old experiment folders
+  - added `run_state.json` and made coordinator resume phase-aware
+  - removed `assumptions / findings / strategy_log` from Agent A runtime input
+  - changed Agent A to use:
+    - `history_archive.csv`
+    - `epoch_metrics.csv`
+    - runtime-computed current Pareto-point list
+  - kept `search_strategy_log.md` only as a human-facing audit log
+  - updated Agent B to consume active finding hints rather than raw findings markdown
+  - updated D2/D3 prompts toward a script-first rule workflow
+  - added malformed-JSON retry in `LLMClient.chat_json()`
+
+### Verification Status
+
+- **Status:** mostly complete
+- **Checks passed:**
+  - `D:\\Anaconda3\\envs\\tf_work_hpc\\python.exe -m py_compile ...`
+  - `D:\\Anaconda3\\envs\\tf_work_hpc\\python.exe -m unittest tests.test_search_coordinator_v2_metrics tests.test_eval_worker_command tests.test_file_io_resume_selection tests.test_agent_control_loop_refactor tests.test_llm_json_retry tests.test_file_io_registry_and_run_state`
+  - `D:\\Anaconda3\\envs\\tf_work_hpc\\python.exe tests/test_search_dryrun.py`
+- **Known local limitation:**
+  - local Windows environments here still do not have `litellm` installed, so `run_agentic_search.py --help` could not be verified locally through a real import path
+  - this is an environment gap, not a failing unit test in the refactor itself

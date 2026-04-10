@@ -56,7 +56,7 @@ class SearchCoordinator:
         )
 
         # P1c: 上轮有效产出率反馈 (传给 Agent A)
-        self._last_yield_info: str = ""
+        self._last_yield_info: str = file_io.read_run_state(exp_dir).get("last_yield_info", "")
 
         self.llm = LLMClient(cfg)
 
@@ -119,40 +119,82 @@ class SearchCoordinator:
 
     def _run_single_epoch(self, epoch: int) -> None:
         """执行单个 Epoch 的完整流程。"""
+        state = file_io.read_run_state(self.exp_dir)
+        if state.get("current_epoch") != epoch:
+            state = file_io.begin_epoch_state(
+                self.exp_dir,
+                epoch,
+                last_yield_info=self._last_yield_info,
+            )
 
         # -------------------------------------------------------
         # Phase 1: 触发科学家大反思 (每 N 个 Epoch)
         # -------------------------------------------------------
-        if epoch > 0 and epoch % self.scientist_interval == 0:
+        if (
+            epoch > 0
+            and epoch % self.scientist_interval == 0
+            and not state.get("scientist_done", False)
+        ):
             logger.info("[Phase 1] 触发科学家大反思 (interval=%d)", self.scientist_interval)
             self._execute_scientist_macro_reflection()
+            state = file_io.update_run_state(
+                self.exp_dir,
+                scientist_done=True,
+                phase="scientist_done",
+            )
 
         # -------------------------------------------------------
         # Phase 2: 验证已有猜想并升格 + Finding 再验证降级
         # -------------------------------------------------------
-        logger.info("[Phase 2] 验证已有猜想")
-        self._evaluate_pending_assumptions()
+        if not state.get("assumptions_evaluated", False):
+            logger.info("[Phase 2] 验证已有猜想")
+            self._evaluate_pending_assumptions()
+            state = file_io.update_run_state(
+                self.exp_dir,
+                assumptions_evaluated=True,
+                phase="assumptions_evaluated",
+            )
 
-        logger.info("[Phase 2b] 再验证已有 Findings")
-        self._revalidate_findings()
+        if not state.get("findings_revalidated", False):
+            logger.info("[Phase 2b] 再验证已有 Findings")
+            self._revalidate_findings()
+            state = file_io.update_run_state(
+                self.exp_dir,
+                findings_revalidated=True,
+                phase="findings_revalidated",
+            )
 
         # -------------------------------------------------------
         # Phase 3: 战略规划 -> Agent A
         # -------------------------------------------------------
-        logger.info("[Phase 3] 调用 Agent A (战略规划)")
-        agent_a_result = agents.invoke_agent_a(
-            self.llm, self.exp_dir, epoch, self.batch_size,
-            last_yield_info=self._last_yield_info,
-        )
+        agent_a_result = state.get("agent_a_result")
+        if not agent_a_result:
+            logger.info("[Phase 3] 调用 Agent A (战略规划)")
+            agent_a_result = agents.invoke_agent_a(
+                self.llm, self.exp_dir, epoch, self.batch_size,
+                last_yield_info=self._last_yield_info,
+            )
+            state = file_io.update_run_state(
+                self.exp_dir,
+                agent_a_result=agent_a_result,
+                phase="agent_a_done",
+            )
         allocation = agent_a_result.get("allocation", {})
 
         # -------------------------------------------------------
         # Phase 4: 编码生成 -> Agent B
         # -------------------------------------------------------
-        logger.info("[Phase 4] 调用 Agent B (编码生成)")
-        candidates = agents.invoke_agent_b(
-            self.llm, self.exp_dir, allocation, self.batch_size,
-        )
+        candidates = list(state.get("candidates") or [])
+        if not candidates:
+            logger.info("[Phase 4] 调用 Agent B (编码生成)")
+            candidates = agents.invoke_agent_b(
+                self.llm, self.exp_dir, allocation, self.batch_size,
+            )
+            state = file_io.update_run_state(
+                self.exp_dir,
+                candidates=candidates,
+                phase="agent_b_done",
+            )
 
         if not candidates:
             logger.warning("Agent B 未返回有效候选，跳过本轮评估")
@@ -161,43 +203,87 @@ class SearchCoordinator:
         # -------------------------------------------------------
         # Phase 5: 去重过滤
         # -------------------------------------------------------
-        evaluated = file_io.get_evaluated_arch_codes(self.exp_dir)
-        new_archs = [c for c in candidates if c not in evaluated]
-        skipped = len(candidates) - len(new_archs)
+        new_archs = list(state.get("new_archs") or [])
+        skipped = int(state.get("duplicates", 0) or 0)
+        rule_rejected = int(state.get("rule_rejected", 0) or 0)
+        if not new_archs and state.get("phase") not in {"dedup_done", "map_done", "reduce_done"}:
+            evaluated = file_io.get_evaluated_arch_codes(self.exp_dir)
+            deduped_archs = [c for c in candidates if c not in evaluated]
+            skipped = len(candidates) - len(deduped_archs)
+            filtered_archs, rule_rejected = agents.filter_candidates_by_findings(
+                self.exp_dir,
+                deduped_archs,
+                context={"allocation": allocation, "epoch": epoch},
+            )
+            new_archs = filtered_archs
 
-        logger.info("[Phase 5] 去重: 候选 %d, 新增 %d, 跳过 %d",
-                     len(candidates), len(new_archs), skipped)
+            logger.info(
+                "[Phase 5] 去重/规则过滤: 候选 %d, 新增 %d, 历史重复 %d, 规则拒绝 %d",
+                len(candidates),
+                len(new_archs),
+                skipped,
+                rule_rejected,
+            )
 
-        # P1c: 记录有效产出率，供下轮 Agent A 参考
-        yield_pct = len(new_archs) / len(candidates) * 100 if candidates else 0
-        self._last_yield_info = (
-            f"请求 {self.batch_size} 个候选, Agent B 生成 {len(candidates)} 个, "
-            f"去重后实际新评估 {len(new_archs)} 个 (有效率 {yield_pct:.0f}%)"
-        )
+            yield_pct = len(new_archs) / len(candidates) * 100 if candidates else 0
+            self._last_yield_info = (
+                f"请求 {self.batch_size} 个候选, Agent B 生成 {len(candidates)} 个, "
+                f"历史去重后 {len(candidates) - skipped} 个, 规则拒绝 {rule_rejected} 个, "
+                f"实际新评估 {len(new_archs)} 个 (有效率 {yield_pct:.0f}%)"
+            )
+            state = file_io.update_run_state(
+                self.exp_dir,
+                new_archs=new_archs,
+                duplicates=skipped,
+                rule_rejected=rule_rejected,
+                last_yield_info=self._last_yield_info,
+                phase="dedup_done",
+            )
+        else:
+            evaluated = file_io.get_evaluated_arch_codes(self.exp_dir)
+            new_archs = [c for c in new_archs if c not in evaluated]
 
         if not new_archs:
             logger.info("本轮无新架构需要评估，跳过 Map-Reduce")
+            self._record_epoch_metrics(epoch, 0, skipped, rule_rejected=rule_rejected)
+            file_io.clear_epoch_state(self.exp_dir, last_yield_info=self._last_yield_info)
             return
 
         # -------------------------------------------------------
         # Phase 6: Map 阶段 — 多线程评估 + Agent C 蒸馏
         # -------------------------------------------------------
-        logger.info("[Phase 6] Map 阶段: %d 个架构, %d 个工作线程",
-                     len(new_archs), self.max_workers)
-        self._map_evaluate(new_archs, epoch)
+        if not state.get("map_done", False):
+            logger.info("[Phase 6] Map 阶段: %d 个架构, %d 个工作线程",
+                         len(new_archs), self.max_workers)
+            self._map_evaluate(new_archs, epoch)
+            state = file_io.update_run_state(
+                self.exp_dir,
+                map_done=True,
+                phase="map_done",
+            )
 
         # -------------------------------------------------------
         # Phase 7: Reduce 阶段 — 归并到全局 CSV
         # -------------------------------------------------------
-        logger.info("[Phase 7] Reduce 阶段")
-        committed = file_io.collect_and_commit_worker_results(self.exp_dir)
-        self._maybe_prune_vela_tflite(stage=f"epoch_{epoch}_reduce")
-        logger.info("本轮提交 %d 条评估结果", committed)
+        committed = 0
+        if not state.get("reduce_done", False):
+            logger.info("[Phase 7] Reduce 阶段")
+            committed = file_io.collect_and_commit_worker_results(self.exp_dir)
+            self._maybe_prune_vela_tflite(stage=f"epoch_{epoch}_reduce")
+            logger.info("本轮提交 %d 条评估结果", committed)
+            state = file_io.update_run_state(
+                self.exp_dir,
+                reduce_done=True,
+                phase="reduce_done",
+            )
+        else:
+            logger.info("[Phase 7] Reduce 已完成，跳过重复提交")
 
         # -------------------------------------------------------
         # Phase 8: 记录 Epoch 级可观测指标
         # -------------------------------------------------------
-        self._record_epoch_metrics(epoch, committed, skipped)
+        self._record_epoch_metrics(epoch, committed, skipped, rule_rejected=rule_rejected)
+        file_io.clear_epoch_state(self.exp_dir, last_yield_info=self._last_yield_info)
 
     # ===============================================================
     # 子流程：科学家大反思 (D-1 -> D-2)
@@ -231,8 +317,7 @@ class SearchCoordinator:
 
         for assumption in list(assumptions):  # 使用 list() 复制，避免迭代中修改
             aid = assumption.get("id", "unknown")
-            script_name = f"eval_assumption_{aid}.py"
-            script_path = os.path.join(self.exp_dir, "scripts", script_name)
+            script_path = self._resolve_rule_script_path(aid)
 
             if not os.path.exists(script_path):
                 logger.debug("猜想 %s 尚无验证脚本，跳过", aid)
@@ -264,7 +349,11 @@ class SearchCoordinator:
 
     def _revalidate_findings(self) -> None:
         """重新验证所有 Findings，置信度低于阈值的降级回猜想队列。"""
-        findings = file_io.parse_findings(self.exp_dir)
+        findings = [
+            {"id": f.get("id", "")}
+            for f in file_io.read_findings_registry(self.exp_dir)
+            if f.get("active", True)
+        ]
         if not findings:
             return
 
@@ -273,8 +362,7 @@ class SearchCoordinator:
 
         for finding in findings:
             fid = finding["id"]
-            script_name = f"eval_assumption_{fid}.py"
-            script_path = os.path.join(self.exp_dir, "scripts", script_name)
+            script_path = self._resolve_rule_script_path(fid)
 
             if not os.path.exists(script_path):
                 logger.debug("Finding %s 无验证脚本，跳过再验证", fid)
@@ -295,10 +383,9 @@ class SearchCoordinator:
                              fid, confidence, self.confidence_threshold)
                 demoted_ids.append(fid)
 
-        # 批量执行降级：从 findings.md 删除，加回 assumptions.json
+        # 批量执行降级：将 finding 置为 inactive，并加回 assumptions.json
         for fid in demoted_ids:
             file_io.remove_finding_by_id(self.exp_dir, fid)
-            # 从 findings.md 原始 block 中提取描述作为猜想描述
             desc = f"(降级自 Finding) 原 Finding {fid} 再验证未达标，回退到猜想队列重新验证。"
             file_io.append_assumptions(self.exp_dir, [{"id": fid, "description": desc}])
             logger.info("Finding %s 已降级为猜想", fid)
@@ -345,6 +432,15 @@ class SearchCoordinator:
 
     def _infer_start_epoch(self) -> int:
         """从已有历史数据推断应该从哪个 epoch 开始。"""
+        state = file_io.read_run_state(self.exp_dir)
+        current_epoch = state.get("current_epoch")
+        phase = str(state.get("phase", "idle"))
+        if current_epoch is not None and phase not in {"idle"} and not state.get("reduce_done", False):
+            try:
+                return int(current_epoch)
+            except (ValueError, TypeError):
+                pass
+
         df = file_io.read_history(self.exp_dir)
         if df.empty or "epoch" not in df.columns:
             return 0
@@ -362,7 +458,18 @@ class SearchCoordinator:
         if removed > 0:
             logger.info("[Prune] %s: 删除 %d 个 Vela tflite 文件", stage, removed)
 
-    def _record_epoch_metrics(self, epoch: int, new_evaluated: int, duplicates: int) -> None:
+    def _resolve_rule_script_path(self, rule_id: str) -> str:
+        """Resolve new rule_Axx.py name first, then fall back to legacy eval_assumption_Axx.py."""
+        candidates = [
+            os.path.join(self.exp_dir, "scripts", f"rule_{rule_id}.py"),
+            os.path.join(self.exp_dir, "scripts", f"eval_assumption_{rule_id}.py"),
+        ]
+        for path in candidates:
+            if os.path.exists(path):
+                return path
+        return candidates[0]
+
+    def _record_epoch_metrics(self, epoch: int, new_evaluated: int, duplicates: int, *, rule_rejected: int = 0) -> None:
         """记录本轮搜索的可观测性指标。"""
         df = file_io.read_history(self.exp_dir)
         total = len(df)
@@ -385,6 +492,7 @@ class SearchCoordinator:
             "total_evaluated": total,
             "new_evaluated": new_evaluated,
             "duplicates": duplicates,
+            "rule_rejected": rule_rejected,
             "best_epe": round(best_epe, 6) if best_epe != float("inf") else "",
             "pareto_count": pareto_count,
             "findings_count": file_io.count_findings(self.exp_dir),

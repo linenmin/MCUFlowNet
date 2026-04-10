@@ -241,3 +241,55 @@ Before implementation starts, confirm:
    - derived `total_generations = 16`
    - objectives = `EPE↓`, `FPS↑`
    - operators = standard crossover + mutation
+
+## Current Control-Loop Refactor Direction
+
+### Priority 1: Findings Contract
+
+1. Replace prose-style `findings.md` with machine-owned `findings.json`
+2. Do not maintain a parallel human-facing findings document in the control loop
+3. Treat each finding as a script-backed rule rather than a fixed template sentence
+   - each rule keeps one reusable script such as `scripts/rule_Axx.py`
+   - the same rule script is reused across assumption verification, finding promotion, revalidation, and runtime candidate checking
+4. `findings.json` should act only as a registry/governance layer
+   - it stores identity, active/inactive state, scope, confidence/support, enforcement type, and script path
+   - it does not try to encode the full scientific logic in a rigid mini-language
+
+### Priority 2: Agent-A Input Simplification
+
+1. Do not add extra summary files just to feed Agent A
+2. Agent A should consume only search facts and runtime-computed Pareto context
+3. Current agreed direction:
+   - keep `history_archive.csv` as the global fact table
+   - keep `epoch_metrics.csv` as the global search-health table
+   - compute the current Pareto-point list on demand at invocation time rather than persisting a large family of summary artifacts
+4. Current agreed exclusions:
+   - `assumptions.json` should not be fed back to Agent A
+   - `findings` should not be used as raw strategist input in the first refactor pass
+   - `search_strategy_log.md` should not be fed back to Agent A
+5. Implementation note:
+   - Agent A may still append a human-readable `strategic_reflection` to `search_strategy_log.md`
+   - but that file is now for audit / human reading only, not strategist memory
+
+### Priority 3: Runtime Consistency
+
+1. Add a minimal `run_state.json`
+   - store current epoch, current phase, and which side effects have already been committed
+   - use it to make resume behavior phase-aware instead of replaying blindly
+2. Add `chat_json()` malformed-JSON retry / repair logic
+   - avoid hard failure of a full epoch due to one truncated LLM response
+3. Keep the runtime state surface small
+   - do not introduce a broad family of new metadata files unless a later need is proven
+
+### Role Split Under The New Direction
+
+1. Agent A
+   - should plan from search facts only
+   - should not schedule scientist validation work directly
+2. Agent B
+   - remains the candidate generator
+   - should be aware of active finding constraints in a generator-friendly form
+3. Coordinator / engine
+   - owns scientist scheduling
+   - owns assumption promotion / finding revalidation
+   - remains the final rule executor for candidate legality

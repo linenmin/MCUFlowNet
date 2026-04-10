@@ -9,7 +9,7 @@ import logging
 import os
 import subprocess
 import sys
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from efnas.search import file_io
 from efnas.search.llm_client import LLMClient
@@ -32,10 +32,9 @@ def invoke_agent_a(
     """调用 Agent A 生成本轮搜索策略与名额分配。
 
     读取:
-        - history_archive.csv (全局数据板)
-        - search_strategy_log.md (历史战术日记)
-        - assumptions.json (科学猜想簿)
-        - findings.md (绝对真理碑)
+        - history_archive.csv (全局事实表)
+        - epoch_metrics.csv (搜索健康度)
+        - 当前 Pareto 点列表（运行时计算）
         - last_yield_info (上轮有效产出率反馈)
 
     Returns:
@@ -44,9 +43,9 @@ def invoke_agent_a(
     # 组装上下文
     history_df = file_io.read_history(exp_dir)
     history_summary = _summarize_history(history_df)
-    strategy_log = file_io.read_strategy_log(exp_dir)
-    assumptions = file_io.read_assumptions(exp_dir)
-    findings = file_io.read_findings(exp_dir)
+    epoch_metrics_df = file_io.read_epoch_metrics(exp_dir)
+    pareto_section = _summarize_current_pareto(history_df)
+    metrics_section = _summarize_epoch_metrics(epoch_metrics_df)
 
     system_prompt = prompts.AGENT_A_SYSTEM.format(batch_size=batch_size)
 
@@ -58,12 +57,13 @@ def invoke_agent_a(
     user_msg = (
         f"# 当前 Epoch: {epoch}\n"
         f"# 本轮预算: {batch_size} 个子网\n\n"
-        f"## 历史评估数据摘要 (共 {len(history_df)} 条):\n"
+        f"## 历史评估事实摘要 (共 {len(history_df)} 条):\n"
         f"```\n{history_summary}\n```\n\n"
+        f"## 当前 Pareto 前沿成员摘要:\n"
+        f"```\n{pareto_section}\n```\n\n"
+        f"## 最近搜索健康度:\n"
+        f"```\n{metrics_section}\n```\n\n"
         f"{yield_section}"
-        f"## 过往战术日志:\n{strategy_log}\n\n"
-        f"## 当前猜想簿:\n```json\n{json.dumps(assumptions, ensure_ascii=False, indent=2)}\n```\n\n"
-        f"## 绝对真理碑 (findings.md):\n{findings}\n"
     )
 
     result = llm.chat_json(role="agent_a", system_prompt=system_prompt, user_message=user_msg)
@@ -90,14 +90,14 @@ def invoke_agent_b(
     """调用 Agent B 根据策略分配生成候选架构编码列表。
 
     读取:
-        - findings.md (绝对真理碑，作为硬约束)
+        - active findings hints (生成约束提示)
         - allocation (来自 Agent A 的名额分配)
         - history (已评估架构编码，用于避免重复)
 
     Returns:
         逗号分隔的架构编码字符串列表 (如 ["2,1,2,1,2,1,0,1,0,1,0", ...])。
     """
-    findings = file_io.read_findings(exp_dir)
+    findings = file_io.render_active_finding_hints(exp_dir)
     coverage_hint = _build_coverage_hint(exp_dir)
 
     # P1: 给 B 全量已评估列表，避免重复生成
@@ -107,7 +107,7 @@ def invoke_agent_b(
     user_msg = (
         f"## 本轮名额分配 (来自战略规划局):\n"
         f"```json\n{json.dumps(allocation, ensure_ascii=False, indent=2)}\n```\n\n"
-        f"## 绝对真理碑 (findings.md) — 你必须遵守:\n{findings}\n\n"
+        f"## Active Finding Hints:\n{findings}\n\n"
         f"## 搜索覆盖率统计:\n{coverage_hint}\n\n"
         f"## 已评估架构列表 (禁止重复生成):\n{evaluated_list_str}\n\n"
         f"请生成 **恰好 {batch_size} 个** 合法的、**不在上述已评估列表中的** 11 维架构编码。\n"
@@ -146,7 +146,7 @@ def invoke_agent_d1(
     读取:
         - history_archive.csv (全量数据)
         - assumptions.json (现有猜想，用于去重)
-        - findings.md (已确认规则，用于去重)
+        - active findings 摘要（用于去重与避免重复主题）
 
     Returns:
         新猜想列表 [{"id": "A01", "description": "..."}, ...]
@@ -213,7 +213,7 @@ def invoke_agent_d2(
 
     result = llm.chat_json(role="agent_d2", system_prompt=system_prompt, user_message=user_msg)
 
-    filename = result.get("target_filename", f"eval_assumption_{assumption.get('id', 'unknown')}.py")
+    filename = result.get("target_filename", f"rule_{assumption.get('id', 'unknown')}.py")
     code = result.get("python_code", "")
 
     if not code:
@@ -235,56 +235,46 @@ def invoke_agent_d3(
     assumption: Dict[str, Any],
     confidence: float,
 ) -> None:
-    """调用 Agent D-3 将已证实猜想升格写入 findings.md。
+    """调用 Agent D-3 将已证实猜想升格写入 findings.json。
 
     Reads:
-        - 当前 findings.md 全文
+        - 当前 findings registry
         - 被升格的 assumption 及其置信度
 
     Side effects:
-        - 更新 findings.md
+        - 更新 findings.json
         - 从 assumptions.json 中删除该猜想
     """
-    current_findings = file_io.read_findings(exp_dir)
-
-    # 安全基线: 记录更新前的规则数量 (按 '- **ID**:' 标记计)
-    import re
-    _FINDING_PATTERN = re.compile(r"^- \*\*ID\*\*:", re.MULTILINE)
-    rule_count_before = len(_FINDING_PATTERN.findall(current_findings))
+    current_findings = file_io.read_findings_registry(exp_dir)
+    rule_script = os.path.join("scripts", f"rule_{assumption.get('id')}.py")
 
     user_msg = (
         f"## 被证实的新真理:\n"
         f"- ID: {assumption.get('id')}\n"
         f"- 描述: {assumption.get('description')}\n"
         f"- 置信度: {confidence:.4f}\n\n"
-        f"## 当前 findings.md 全文:\n"
-        f"```markdown\n{current_findings}\n```\n\n"
-        f"请输出更新后的完整 findings.md 内容。\n"
+        f"## 当前 findings registry:\n"
+        f"```json\n{json.dumps(current_findings, ensure_ascii=False, indent=2)}\n```\n\n"
+        f"## 对应规则脚本:\n- {rule_script}\n\n"
+        f"请输出新 finding 的 registry 条目。\n"
     )
 
-    updated_findings = llm.chat(
+    result = llm.chat_json(
         role="agent_d3",
         system_prompt=prompts.AGENT_D3_SYSTEM,
         user_message=user_msg,
-        force_json=False,  # D-3 输出纯 Markdown
     )
+    finding_payload = dict(result.get("finding") or {})
+    if not finding_payload:
+        logger.error("[Agent D-3] 未返回 finding 条目，放弃升格: %s", assumption.get("id"))
+        return
 
-    # 安全校验: 确保没有丢失已有规则
-    rule_count_after = len(_FINDING_PATTERN.findall(updated_findings))
-    if rule_count_before > 0 and rule_count_after < rule_count_before:
-        logger.warning(
-            "[Agent D-3] 安全回滚! 规则数从 %d 降至 %d，可能丢失已有规则。保留原文并追加。",
-            rule_count_before, rule_count_after,
-        )
-        # 回退策略: 保留原文，仅追加新规则摘要
-        updated_findings = (
-            f"{current_findings}\n\n"
-            f"## [{assumption.get('id')}] {assumption.get('description', '')}\n"
-            f"- 置信度: {confidence:.4f}\n"
-            f"- (自动追加 — D3 全文重写触发安全回滚)\n"
-        )
-
-    file_io.write_findings(exp_dir, updated_findings)
+    finding_payload["id"] = assumption.get("id")
+    finding_payload["confidence"] = round(float(confidence), 4)
+    finding_payload["script"] = finding_payload.get("script") or rule_script
+    finding_payload["active"] = bool(finding_payload.get("active", True))
+    finding_payload["support"] = finding_payload.get("support", None)
+    file_io.upsert_finding(exp_dir, finding_payload)
     file_io.remove_assumption_by_id(exp_dir, assumption.get("id", ""))
 
     logger.info("[Agent D-3] Finding 升格完成: %s (confidence=%.4f)", assumption.get("id"), confidence)
@@ -308,16 +298,25 @@ def execute_verification_script(
         解析后的结果字典 {"total_triggered": int, "expected_met": int, "confidence": float}
         或 None（如果执行失败）。
     """
-    cmd = [sys.executable, script_path, "--data_csv", data_csv_path]
+    commands = [
+        [sys.executable, script_path, "--mode", "verify", "--data_csv", data_csv_path],
+        [sys.executable, script_path, "--data_csv", data_csv_path],
+    ]
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        if result.returncode != 0:
-            logger.error("验证脚本执行失败: %s\nstderr: %s", script_path, result.stderr[-500:])
+        result = None
+        for cmd in commands:
+            trial = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if trial.returncode == 0:
+                result = trial
+                break
+            result = trial
+        if result is None or result.returncode != 0:
+            logger.error("验证脚本执行失败: %s\nstderr: %s", script_path, result.stderr[-500:] if result else "")
             return None
 
         # 从 stdout 解析 JSON
@@ -340,6 +339,91 @@ def execute_verification_script(
     except Exception:
         logger.exception("验证脚本异常: %s", script_path)
         return None
+
+
+def execute_candidate_check_script(
+    script_path: str,
+    arch_code: str,
+    context: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """执行规则脚本的单候选检查模式。"""
+    context_json = json.dumps(context or {}, ensure_ascii=False)
+    cmd = [
+        sys.executable,
+        script_path,
+        "--mode",
+        "check",
+        "--arch_code",
+        arch_code,
+        "--context_json",
+        context_json,
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            logger.warning("规则检查脚本执行失败: %s\nstderr: %s", script_path, result.stderr[-500:])
+            return None
+
+        stdout = result.stdout.strip()
+        for line in reversed(stdout.split("\n")):
+            line = line.strip()
+            if line.startswith("{"):
+                try:
+                    return json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+        return None
+    except subprocess.TimeoutExpired:
+        logger.warning("规则检查脚本超时: %s", script_path)
+        return None
+    except Exception:
+        logger.exception("规则检查脚本异常: %s", script_path)
+        return None
+
+
+def filter_candidates_by_findings(
+    exp_dir: str,
+    arch_codes: List[str],
+    *,
+    context: Optional[Dict[str, Any]] = None,
+) -> tuple[List[str], int]:
+    """用 active hard-filter findings 对候选做最终引擎裁决。"""
+    findings = [f for f in file_io.read_findings_registry(exp_dir) if f.get("active", True)]
+    if not findings:
+        return arch_codes, 0
+
+    kept: List[str] = []
+    rejected = 0
+    for arch in arch_codes:
+        blocked = False
+        for finding in findings:
+            if finding.get("enforcement") != "hard_filter":
+                continue
+            script_rel = str(finding.get("script") or "").strip()
+            if not script_rel:
+                continue
+            script_path = os.path.join(exp_dir, script_rel.replace("/", os.sep))
+            if not os.path.exists(script_path):
+                continue
+            result = execute_candidate_check_script(script_path, arch, context=context)
+            if result and result.get("reject", False):
+                blocked = True
+                rejected += 1
+                logger.info(
+                    "[Engine] 候选被 active finding 拒绝: arch=%s, rule=%s, reason=%s",
+                    arch,
+                    finding.get("id", "?"),
+                    result.get("reason", ""),
+                )
+                break
+        if not blocked:
+            kept.append(arch)
+    return kept, rejected
 
 
 # ===================================================================
@@ -372,7 +456,7 @@ def _build_coverage_hint(exp_dir: str) -> str:
 def _extract_topic_summary(exp_dir: str) -> str:
     """提取现有猜想和 findings 的主题摘要，帮助 D1 避免重复。"""
     assumptions = file_io.read_assumptions(exp_dir)
-    findings = file_io.read_findings(exp_dir)
+    findings = file_io.summarize_active_findings(exp_dir)
 
     lines = []
     if assumptions:
@@ -383,7 +467,7 @@ def _extract_topic_summary(exp_dir: str) -> str:
         lines.append("### 现有猜想: (无)")
 
     if findings and findings.strip():
-        lines.append(f"### 已确认规则 (findings.md, 前500字):\n{findings[:500]}")
+        lines.append(f"### 已确认规则 (findings registry 摘要):\n{findings[:500]}")
     else:
         lines.append("### 已确认规则: (无)")
 
@@ -459,6 +543,55 @@ def _summarize_history(df) -> str:
     lines.append(f"\n最近 10 条评估:\n{recent}")
 
     return "\n".join(lines)
+
+
+def _summarize_current_pareto(df, limit: int = 20) -> str:
+    """生成当前 Pareto 成员列表摘要。"""
+    if df.empty or "epe" not in df.columns or "fps" not in df.columns:
+        return "(尚无 Pareto 点)"
+
+    try:
+        work = df.copy()
+        work["epe"] = work["epe"].astype(float)
+        work["fps"] = work["fps"].astype(float)
+    except (ValueError, TypeError):
+        return "(Pareto 数据解析失败)"
+
+    values = work[["epe", "fps"]].to_numpy()
+    pareto_idx: List[int] = []
+    for i in range(len(values)):
+        dominated = False
+        for j in range(len(values)):
+            if i == j:
+                continue
+            if (
+                values[j, 0] <= values[i, 0]
+                and values[j, 1] >= values[i, 1]
+                and (values[j, 0] < values[i, 0] or values[j, 1] > values[i, 1])
+            ):
+                dominated = True
+                break
+        if not dominated:
+            pareto_idx.append(i)
+
+    if not pareto_idx:
+        return "(尚无 Pareto 点)"
+
+    cols = [c for c in ["arch_code", "epe", "fps", "epoch"] if c in work.columns]
+    pareto_df = work.iloc[pareto_idx][cols].sort_values(by=["epe", "fps"], ascending=[True, False])
+    return pareto_df.head(limit).to_string(index=False)
+
+
+def _summarize_epoch_metrics(df) -> str:
+    """生成最近若干轮搜索健康度摘要。"""
+    if df is None or getattr(df, "empty", True):
+        return "(尚无 epoch 级健康度数据)"
+
+    cols = [c for c in ["epoch", "new_evaluated", "duplicates", "rule_rejected", "pareto_count", "best_epe"] if c in df.columns]
+    if not cols:
+        return "(epoch metrics 缺少关键列)"
+    recent = df.tail(8)[cols]
+    return recent.to_string(index=False)
 
 
 def _count_pareto_2d(obj1, obj2, minimize_first: bool = True) -> int:
