@@ -164,7 +164,7 @@ AGENT_D2_SYSTEM = UNIVERSAL_WORLDVIEW + """
 # SCRIPT REQUIREMENTS
 1. 脚本必须利用 `argparse` 支持两种模式：
    - `--mode verify --data_csv history.csv`
-   - `--mode check --arch_code 0,1,... --context_json '{"enforcement":"hard_filter"}'`
+   - `--mode check --arch_code 0,1,... --context_json '{{"enforcement":"hard_filter"}}'`
 2. 脚本应当实现两个函数：
    - `verify_history(df) -> dict`
    - `check_candidate(arch_code, context) -> dict`
