@@ -32,7 +32,7 @@ class _CaptureLLM:
 
 
 class TestAgentControlLoopRefactor(unittest.TestCase):
-    def test_agent_a_uses_fact_only_inputs(self) -> None:
+    def test_agent_a_uses_fact_only_inputs_and_coverage_view(self) -> None:
         llm = _CaptureLLM(
             {
                 "strategic_reflection": "focus on uncovered pareto regions",
@@ -49,20 +49,22 @@ class TestAgentControlLoopRefactor(unittest.TestCase):
                 "arch_code": [
                     "0,0,0,0,0,0,0,0,0,0,0",
                     "2,2,0,1,2,0,0,0,0,0,0",
+                    "1,0,0,1,0,0,0,0,0,0,0",
                 ],
-                "epe": [4.3, 4.0],
-                "fps": [9.1, 6.0],
-                "epoch": [0, 1],
-                "micro_insight": ["a", "b"],
+                "epe": [4.3, 4.0, 4.6],
+                "fps": [9.1, 6.0, 8.4],
+                "epoch": [0, 1, 2],
+                "micro_insight": ["insight-a", "insight-b", "insight-c"],
             }
         )
         metrics_df = pd.DataFrame(
             {
-                "epoch": [0, 1],
-                "new_evaluated": [16, 15],
-                "duplicates": [0, 1],
-                "pareto_count": [8, 10],
-                "best_epe": [4.3, 4.0],
+                "epoch": [0, 1, 2],
+                "new_evaluated": [16, 15, 14],
+                "duplicates": [0, 1, 2],
+                "pareto_count": [8, 10, 11],
+                "best_epe": [4.3, 4.0, 4.0],
+                "best_fps": [9.1, 9.1, 9.1],
             }
         )
 
@@ -91,6 +93,13 @@ class TestAgentControlLoopRefactor(unittest.TestCase):
         self.assertNotIn("过往战术日志", user_msg)
         self.assertNotIn("当前猜想簿", user_msg)
         self.assertNotIn("绝对真理碑", user_msg)
+        self.assertIn("搜索空间覆盖率结构", user_msg)
+        self.assertIn("dim[0] 分布", user_msg)
+        self.assertIn("Lowest-EPE end", user_msg)
+        self.assertIn("Highest-FPS end", user_msg)
+        self.assertNotIn("Top-5 最低 EPE", user_msg)
+        self.assertNotIn("近3轮是否有改进", user_msg)
+        self.assertNotIn("insight-a", user_msg)
 
     def test_agent_b_uses_generator_hints_instead_of_raw_findings_markdown(self) -> None:
         llm = _CaptureLLM({"generated_candidates": ["0,0,0,0,0,0,0,0,0,0,0"]})
@@ -114,6 +123,35 @@ class TestAgentControlLoopRefactor(unittest.TestCase):
         mock_read_findings.assert_not_called()
         self.assertIn("avoid H2Out=1", user_msg)
         self.assertNotIn("findings.md", user_msg)
+
+    def test_agent_d1_uses_fact_table_without_micro_insight_column(self) -> None:
+        llm = _CaptureLLM({"assumptions": [{"id": "A01", "description": "conditional trend"}]})
+        history_df = pd.DataFrame(
+            {
+                "arch_code": ["0,0,0,0,0,0,0,0,0,0,0"],
+                "epe": [4.3],
+                "fps": [9.1],
+                "micro_insight": ["do not leak this"],
+                "epoch": [0],
+            }
+        )
+
+        with patch("efnas.search.agents.file_io.read_history", return_value=history_df), patch(
+            "efnas.search.agents.file_io.get_next_assumption_id",
+            return_value=1,
+        ), patch(
+            "efnas.search.agents._extract_topic_summary",
+            return_value="### 现有猜想: (无)",
+        ), patch(
+            "efnas.search.agents.file_io.append_assumptions"
+        ):
+            agents.invoke_agent_d1(llm, exp_dir="dummy_exp")
+
+        self.assertEqual(len(llm.calls), 1)
+        call = llm.calls[0]
+        self.assertNotIn("micro_insight", call["user_message"])
+        self.assertIn("条件趋势", call["system_prompt"])
+        self.assertIn("存在反例", call["system_prompt"])
 
 
 class TestAgentD3FindingRegistry(unittest.TestCase):

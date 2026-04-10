@@ -349,7 +349,11 @@ def upsert_finding(exp_dir: str, finding: Dict[str, Any]) -> None:
 
 def render_active_finding_hints(exp_dir: str) -> str:
     """渲染给 Generator 的短约束提示文本。"""
-    findings = [f for f in read_findings_registry(exp_dir) if f.get("active", True)]
+    findings = [
+        f
+        for f in read_findings_registry(exp_dir)
+        if f.get("active", True) and str(f.get("enforcement", "")).strip() == "hard_filter"
+    ]
     if findings:
         lines = []
         for finding in findings:
@@ -534,9 +538,20 @@ def append_epoch_metrics(exp_dir: str, metrics: Dict[str, Any]) -> None:
     path = os.path.join(exp_dir, "metadata", "epoch_metrics.csv")
     columns = [
         "epoch", "total_evaluated", "new_evaluated", "duplicates",
-        "rule_rejected", "best_epe", "pareto_count", "findings_count", "assumptions_count",
+        "rule_rejected", "best_epe", "best_fps", "pareto_count", "findings_count", "assumptions_count",
         "coverage_pct",
     ]
+    if os.path.exists(path) and os.path.getsize(path) > 0:
+        with open(path, "r", newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            existing_columns = list(reader.fieldnames or [])
+            if existing_columns != columns:
+                old_rows = list(reader)
+                with open(path, "w", newline="", encoding="utf-8") as wf:
+                    writer = csv.DictWriter(wf, fieldnames=columns, extrasaction="ignore")
+                    writer.writeheader()
+                    for row in old_rows:
+                        writer.writerow({col: row.get(col, "") for col in columns})
     file_exists = os.path.exists(path)
     with open(path, "a", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=columns, extrasaction="ignore")

@@ -476,6 +476,7 @@ class SearchCoordinator:
         total_space = max(1, int(self.search_space_size))
 
         best_epe = float("inf")
+        best_fps = float("-inf")
         pareto_count = 0
         if not df.empty and "epe" in df.columns:
             try:
@@ -483,6 +484,7 @@ class SearchCoordinator:
                 best_epe = float(epe_vals.min())
                 if "fps" in df.columns:
                     fps_vals = df["fps"].astype(float)
+                    best_fps = float(fps_vals.max())
                     pareto_count = agents._count_pareto_2d(epe_vals, fps_vals)
             except (ValueError, TypeError):
                 pass
@@ -494,11 +496,12 @@ class SearchCoordinator:
             "duplicates": duplicates,
             "rule_rejected": rule_rejected,
             "best_epe": round(best_epe, 6) if best_epe != float("inf") else "",
+            "best_fps": round(best_fps, 6) if best_fps != float("-inf") else "",
             "pareto_count": pareto_count,
             "findings_count": file_io.count_findings(self.exp_dir),
             "assumptions_count": len(file_io.read_assumptions(self.exp_dir)),
             "coverage_pct": round(total / total_space * 100, 2),
         }
         file_io.append_epoch_metrics(self.exp_dir, metrics)
-        logger.info("[Phase 8] Epoch指标: evaluated=%d, best_epe=%s, pareto=%d, coverage=%.1f%%",
-                     total, metrics["best_epe"], pareto_count, metrics["coverage_pct"])
+        logger.info("[Phase 8] Epoch指标: evaluated=%d, best_epe=%s, best_fps=%s, pareto=%d, coverage=%.1f%%",
+                     total, metrics["best_epe"], metrics["best_fps"], pareto_count, metrics["coverage_pct"])

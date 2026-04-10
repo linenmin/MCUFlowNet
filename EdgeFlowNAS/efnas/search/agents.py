@@ -46,6 +46,7 @@ def invoke_agent_a(
     epoch_metrics_df = file_io.read_epoch_metrics(exp_dir)
     pareto_section = _summarize_current_pareto(history_df)
     metrics_section = _summarize_epoch_metrics(epoch_metrics_df)
+    coverage_section = _build_coverage_hint(exp_dir)
 
     system_prompt = prompts.AGENT_A_SYSTEM.format(batch_size=batch_size)
 
@@ -61,6 +62,8 @@ def invoke_agent_a(
         f"```\n{history_summary}\n```\n\n"
         f"## 当前 Pareto 前沿成员摘要:\n"
         f"```\n{pareto_section}\n```\n\n"
+        f"## 搜索空间覆盖率结构:\n"
+        f"```\n{coverage_section}\n```\n\n"
         f"## 最近搜索健康度:\n"
         f"```\n{metrics_section}\n```\n\n"
         f"{yield_section}"
@@ -162,7 +165,8 @@ def invoke_agent_d1(
     system_prompt = prompts.AGENT_D1_SYSTEM.format(next_id=next_id)
 
     # 将完整 CSV 文本化喂入（历史数据量在万级以下，可以全量输入）
-    csv_text = history_df.to_csv(index=False)
+    history_for_scientist = history_df.drop(columns=["micro_insight"], errors="ignore")
+    csv_text = history_for_scientist.to_csv(index=False)
     user_msg = (
         f"## 全量历史评估数据 (共 {len(history_df)} 条):\n"
         f"```csv\n{csv_text}\n```\n\n"
@@ -509,36 +513,7 @@ def _summarize_history(df) -> str:
         except (ValueError, TypeError):
             pass
 
-    if "epoch" in df.columns:
-        try:
-            epochs = df["epoch"].astype(int)
-            max_epoch = epochs.max()
-            if max_epoch >= 3:
-                last3 = df[epochs >= max_epoch - 2]
-                if "epe" in df.columns:
-                    global_best = df["epe"].astype(float).min()
-                    last3_best = last3["epe"].astype(float).min()
-                    improved = last3_best < global_best * 1.001  # 0.1% tolerance
-                    lines.append(f"近3轮是否有改进: {'✓ 有' if improved else '✗ 无 (可能停滞)'}")
-        except (ValueError, TypeError):
-            pass
-
-    # --- 展示最佳 5 条 (按 EPE 排序)，附带 micro_insight ---
-    display_cols = ["arch_code", "epe", "fps"]
-    if "micro_insight" in df.columns:
-        display_cols.append("micro_insight")
-
-    if "epe" in df.columns:
-        try:
-            df_sorted = df.copy()
-            df_sorted["epe"] = df_sorted["epe"].astype(float)
-            best5_cols = [c for c in display_cols if c in df_sorted.columns]
-            best5 = df_sorted.nsmallest(5, "epe")[best5_cols].to_string(index=False)
-            lines.append(f"\nTop-5 最低 EPE:\n{best5}")
-        except (ValueError, TypeError):
-            pass
-
-    recent_cols = [c for c in display_cols if c in df.columns]
+    recent_cols = [c for c in ["arch_code", "epe", "fps"] if c in df.columns]
     recent = df.tail(10)[recent_cols].to_string(index=False)
     lines.append(f"\n最近 10 条评估:\n{recent}")
 
@@ -546,7 +521,7 @@ def _summarize_history(df) -> str:
 
 
 def _summarize_current_pareto(df, limit: int = 20) -> str:
-    """生成当前 Pareto 成员列表摘要。"""
+    """生成当前 Pareto 成员列表摘要，显式展示 EPE 端与 FPS 端。"""
     if df.empty or "epe" not in df.columns or "fps" not in df.columns:
         return "(尚无 Pareto 点)"
 
@@ -578,8 +553,11 @@ def _summarize_current_pareto(df, limit: int = 20) -> str:
         return "(尚无 Pareto 点)"
 
     cols = [c for c in ["arch_code", "epe", "fps", "epoch"] if c in work.columns]
-    pareto_df = work.iloc[pareto_idx][cols].sort_values(by=["epe", "fps"], ascending=[True, False])
-    return pareto_df.head(limit).to_string(index=False)
+    pareto_df = work.iloc[pareto_idx][cols]
+    half = max(1, limit // 2)
+    low_epe = pareto_df.sort_values(by=["epe", "fps"], ascending=[True, False]).head(half).to_string(index=False)
+    high_fps = pareto_df.sort_values(by=["fps", "epe"], ascending=[False, True]).head(half).to_string(index=False)
+    return f"Lowest-EPE end:\n{low_epe}\n\nHighest-FPS end:\n{high_fps}"
 
 
 def _summarize_epoch_metrics(df) -> str:
@@ -587,7 +565,18 @@ def _summarize_epoch_metrics(df) -> str:
     if df is None or getattr(df, "empty", True):
         return "(尚无 epoch 级健康度数据)"
 
-    cols = [c for c in ["epoch", "new_evaluated", "duplicates", "rule_rejected", "pareto_count", "best_epe"] if c in df.columns]
+    cols = [
+        c for c in [
+            "epoch",
+            "new_evaluated",
+            "duplicates",
+            "rule_rejected",
+            "pareto_count",
+            "best_epe",
+            "best_fps",
+        ]
+        if c in df.columns
+    ]
     if not cols:
         return "(epoch metrics 缺少关键列)"
     recent = df.tail(8)[cols]
