@@ -57,6 +57,17 @@ def _build_provider(config: Dict[str, Any], split: str, seed_offset: int, provid
     raise ValueError(f"unsupported dataset for retrain_v2: {dataset}")
 
 
+def _build_warmstart_var_map(scope_name: str, scope_global_vars: List[tf.Variable]) -> Dict[str, tf.Variable]:
+    warmstart_map: Dict[str, tf.Variable] = {}
+    for var in scope_global_vars:
+        var_name = var.op.name
+        if "/Adam" in var_name:
+            continue
+        warm_name = var_name[len(scope_name) + 1 :]
+        warmstart_map[warm_name] = var
+    return warmstart_map
+
+
 def _build_single_model_graph(
     scope_name: str,
     arch_code: List[int],
@@ -112,10 +123,7 @@ def _build_single_model_graph(
         epe_tensor = build_epe_metric(pred_tensor=pred_accum, label_ph=label_ph, num_out=flow_channels)
         scope_global_vars = [v for v in tf.compat.v1.global_variables() if v.name.startswith(f"{scope_name}/")]
         saver = tf.compat.v1.train.Saver(var_list=scope_global_vars, max_to_keep=3)
-        warmstart_map = {}
-        for var in scope_global_vars:
-            warm_name = var.op.name[len(scope_name) + 1 :]
-            warmstart_map[warm_name] = var
+        warmstart_map = _build_warmstart_var_map(scope_name=scope_name, scope_global_vars=scope_global_vars)
         warmstart_saver = tf.compat.v1.train.Saver(var_list=warmstart_map)
 
     return {
@@ -132,6 +140,7 @@ def _build_single_model_graph(
         "warmstart_saver": warmstart_saver,
         "trainable_vars": trainable_vars,
         "scope_global_vars": scope_global_vars,
+        "warmstart_keys": sorted(warmstart_map.keys()),
     }
 
 

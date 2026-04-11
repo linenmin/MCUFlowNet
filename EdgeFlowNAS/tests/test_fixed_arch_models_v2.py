@@ -4,6 +4,7 @@ import unittest
 
 import tensorflow as tf
 
+from efnas.engine.retrain_v2_trainer import _build_single_model_graph
 from efnas.network.fixed_arch_models_v2 import FixedArchModelV2
 from efnas.network.MultiScaleResNet_supernet_v2 import MultiScaleResNetSupernetV2
 
@@ -72,6 +73,30 @@ class TestFixedArchModelV2(unittest.TestCase):
         supernet_names = {var.op.name for var in tf.compat.v1.global_variables() if not var.op.name.startswith("candidate/")}
         self.assertTrue(fixed_names)
         self.assertTrue(fixed_names.issubset(supernet_names))
+
+    def test_warmstart_mapping_excludes_optimizer_slot_variables(self) -> None:
+        """Warm-start restore should never require Adam slot tensors from source checkpoint."""
+        input_ph = tf.compat.v1.placeholder(tf.float32, shape=[1, 64, 64, 6], name="input_ph")
+        label_ph = tf.compat.v1.placeholder(tf.float32, shape=[1, 64, 64, 2], name="label_ph")
+        lr_ph = tf.compat.v1.placeholder(tf.float32, shape=(), name="lr_ph")
+        is_training_ph = tf.compat.v1.placeholder(tf.bool, shape=(), name="is_training_ph")
+
+        graph = _build_single_model_graph(
+            scope_name="candidate",
+            arch_code=[2, 1, 0, 1, 2, 1, 0, 0, 0, 0, 1],
+            input_ph=input_ph,
+            label_ph=label_ph,
+            lr_ph=lr_ph,
+            is_training_ph=is_training_ph,
+            flow_channels=2,
+            pred_channels=4,
+            weight_decay=0.0,
+            grad_clip_global_norm=0.0,
+        )
+
+        self.assertTrue(any("/Adam" in var.op.name for var in graph["scope_global_vars"]))
+        self.assertTrue(graph["warmstart_keys"])
+        self.assertFalse(any("/Adam" in key for key in graph["warmstart_keys"]))
 
 
 if __name__ == "__main__":
