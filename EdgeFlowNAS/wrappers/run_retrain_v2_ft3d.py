@@ -26,6 +26,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--experiment_name", default=None, help="Experiment name")
     parser.add_argument("--fc2_experiment_dir", default=None, help="FC2 stage experiment directory for warm-start")
     parser.add_argument("--base_path", default=None, help="Dataset base path")
+    parser.add_argument("--frames_base_path", default=None, help="FT3D frames root")
+    parser.add_argument("--flow_base_path", default=None, help="FT3D flow root")
     parser.add_argument("--train_dir", default=None, help="FT3D train split path")
     parser.add_argument("--val_dir", default=None, help="FT3D val split path")
     parser.add_argument("--gpu_device", type=int, default=None, help="GPU index, -1=CPU")
@@ -56,6 +58,10 @@ def main() -> int:
         config.setdefault("checkpoint", {})["init_experiment_dir"] = args.fc2_experiment_dir
     if args.base_path is not None:
         config.setdefault("data", {})["base_path"] = args.base_path
+    if args.frames_base_path is not None:
+        config.setdefault("data", {})["ft3d_frames_base_path"] = args.frames_base_path
+    if args.flow_base_path is not None:
+        config.setdefault("data", {})["ft3d_flow_base_path"] = args.flow_base_path
     if args.train_dir is not None:
         config.setdefault("data", {})["train_dir"] = args.train_dir
     if args.val_dir is not None:

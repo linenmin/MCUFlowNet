@@ -19,11 +19,12 @@ class TestFT3DDataset(unittest.TestCase):
         """Resolver should keep only frames with a valid next frame and future flow."""
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
-            self._touch(root / "frames_cleanpass" / "TRAIN" / "A" / "0001" / "left" / "0006.png")
-            self._touch(root / "frames_cleanpass" / "TRAIN" / "A" / "0001" / "left" / "0007.png")
+            frames_root = root / "frames_cleanpass"
+            flow_root = root / "optical_flow"
+            self._touch(frames_root / "TRAIN" / "A" / "0001" / "left" / "0006.png")
+            self._touch(frames_root / "TRAIN" / "A" / "0001" / "left" / "0007.png")
             self._touch(
-                root
-                / "optical_flow"
+                flow_root
                 / "TRAIN"
                 / "A"
                 / "0001"
@@ -32,19 +33,24 @@ class TestFT3DDataset(unittest.TestCase):
                 / "OpticalFlowIntoFuture_0006_L.pfm"
             )
 
-            samples = resolve_ft3d_samples_from_folder(base_path=str(root), split_dir="TRAIN")
+            samples = resolve_ft3d_samples_from_folder(
+                frames_base_path=str(frames_root),
+                flow_base_path=str(flow_root),
+                split_dir="TRAIN",
+            )
             self.assertEqual(len(samples), 1)
             self.assertTrue(samples[0].endswith("0006.png"))
 
-    def test_build_ft3d_provider_uses_train_test_roots(self) -> None:
-        """Provider builder should support split roots like ../Datasets/optical_flow/TRAIN and TEST."""
+    def test_build_ft3d_provider_uses_separate_frame_and_flow_roots(self) -> None:
+        """Provider builder should support explicit frame and flow roots."""
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
-            self._touch(root / "frames_cleanpass" / "TRAIN" / "A" / "0001" / "left" / "0006.png")
-            self._touch(root / "frames_cleanpass" / "TRAIN" / "A" / "0001" / "left" / "0007.png")
+            frames_root = root / "frames_cleanpass"
+            flow_root = root / "optical_flow"
+            self._touch(frames_root / "TRAIN" / "A" / "0001" / "left" / "0006.png")
+            self._touch(frames_root / "TRAIN" / "A" / "0001" / "left" / "0007.png")
             self._touch(
-                root
-                / "optical_flow"
+                flow_root
                 / "TRAIN"
                 / "A"
                 / "0001"
@@ -52,11 +58,10 @@ class TestFT3DDataset(unittest.TestCase):
                 / "left"
                 / "OpticalFlowIntoFuture_0006_L.pfm"
             )
-            self._touch(root / "frames_cleanpass" / "TEST" / "A" / "0001" / "left" / "0006.png")
-            self._touch(root / "frames_cleanpass" / "TEST" / "A" / "0001" / "left" / "0007.png")
+            self._touch(frames_root / "TEST" / "A" / "0001" / "left" / "0006.png")
+            self._touch(frames_root / "TEST" / "A" / "0001" / "left" / "0007.png")
             self._touch(
-                root
-                / "optical_flow"
+                flow_root
                 / "TEST"
                 / "A"
                 / "0001"
@@ -68,7 +73,8 @@ class TestFT3DDataset(unittest.TestCase):
                 "runtime": {"seed": 42},
                 "train": {"train_sampling_mode": "shuffle_no_replacement", "train_crop_mode": "random"},
                 "data": {
-                    "base_path": str(root),
+                    "ft3d_frames_base_path": str(frames_root),
+                    "ft3d_flow_base_path": str(flow_root),
                     "train_dir": "TRAIN",
                     "val_dir": "TEST",
                     "input_height": 480,

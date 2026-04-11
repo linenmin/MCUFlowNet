@@ -73,16 +73,20 @@ def build_ft3d_provider(
     split_key = "train_dir" if split == "train" else "val_dir"
     split_dir = str(data_cfg.get(split_key, "")).strip()
     base_path = data_cfg.get("base_path", None)
-    frames_subdir = str(data_cfg.get("ft3d_frames_subdir", "frames_cleanpass")).strip()
-    flow_subdir = str(data_cfg.get("ft3d_flow_subdir", "optical_flow")).strip()
+    frames_base_path = data_cfg.get("ft3d_frames_base_path", base_path)
+    flow_base_path = data_cfg.get("ft3d_flow_base_path", base_path)
+    frames_subdir = str(data_cfg.get("ft3d_frames_subdir", "")).strip()
+    flow_subdir = str(data_cfg.get("ft3d_flow_subdir", "")).strip()
 
     sample_paths = resolve_ft3d_samples_from_folder(
-        base_path=base_path,
+        frames_base_path=frames_base_path,
+        flow_base_path=flow_base_path,
         split_dir=split_dir,
         frames_subdir=frames_subdir,
         flow_subdir=flow_subdir,
     )
-    source_dir = _resolve_source_dir(base_path=str(base_path or ""), split_dir=split_dir)
+    source_dir = _resolve_source_dir(base_path=str(frames_base_path or ""), split_dir=str(Path(frames_subdir) / split_dir) if frames_subdir else split_dir)
+    flow_dir = _resolve_source_dir(base_path=str(flow_base_path or ""), split_dir=str(Path(flow_subdir) / split_dir) if flow_subdir else split_dir)
 
     if mode == "train":
         sampling_mode = str(train_cfg.get("train_sampling_mode", "random")).strip().lower()
@@ -99,6 +103,8 @@ def build_ft3d_provider(
         samples=sample_paths,
         crop_h=int(data_cfg.get("input_height", 480)),
         crop_w=int(data_cfg.get("input_width", 640)),
+        frames_root=source_dir,
+        flow_root=flow_dir,
         seed=int(runtime_cfg.get("seed", 42)) + int(seed_offset),
         source_dir=source_dir,
         sampling_mode=sampling_mode,

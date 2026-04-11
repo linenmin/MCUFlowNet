@@ -21,11 +21,13 @@ train:
 
 data:
   dataset: "FT3D"
-  base_path: "../Datasets/optical_flow"
+  base_path: "../Datasets"
+  ft3d_frames_base_path: "../Datasets/frames_cleanpass"
+  ft3d_flow_base_path: "../Datasets/optical_flow"
   train_dir: "TRAIN"
   val_dir: "TEST"
-  ft3d_frames_subdir: "frames_cleanpass"
-  ft3d_flow_subdir: "optical_flow"
+  ft3d_frames_subdir: ""
+  ft3d_flow_subdir: ""
   ft3d_flow_divisor: 12.5
   input_height: 480
   input_width: 640

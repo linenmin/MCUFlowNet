@@ -22,8 +22,19 @@ class TestRunRetrainV2Wrappers(unittest.TestCase):
 
     def test_ft3d_parser_accepts_fc2_init_dir(self) -> None:
         parser = build_ft3d_parser()
-        args = parser.parse_args(["--fc2_experiment_dir", "outputs/retrain_v2_fc2/demo"])
+        args = parser.parse_args(
+            [
+                "--fc2_experiment_dir",
+                "outputs/retrain_v2_fc2/demo",
+                "--frames_base_path",
+                "../Datasets/frames_cleanpass",
+                "--flow_base_path",
+                "../Datasets/optical_flow",
+            ]
+        )
         self.assertEqual(args.fc2_experiment_dir, "outputs/retrain_v2_fc2/demo")
+        self.assertEqual(args.frames_base_path, "../Datasets/frames_cleanpass")
+        self.assertEqual(args.flow_base_path, "../Datasets/optical_flow")
 
     def test_sintel_parser_accepts_experiment_dir_and_best_mode(self) -> None:
         parser = build_sintel_parser()

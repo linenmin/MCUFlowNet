@@ -48,35 +48,38 @@ def _read_flow(path_like: str) -> np.ndarray:
     raise ValueError(f"unsupported FT3D flow format: {path_like}")
 
 
-def _build_ft3d_triplet(img0_path: str, flow_root_marker: str = "optical_flow") -> Tuple[str, str, str]:
+def _build_ft3d_triplet(img0_path: str, frames_root: Optional[str] = None, flow_root: Optional[str] = None) -> Tuple[str, str, str]:
     img0 = Path(img0_path)
     next_name = f"{int(img0.stem) + 1:04d}.png"
     img1 = str(img0.with_name(next_name))
-    flow_path = str(img0).replace("frames_cleanpass", flow_root_marker)
-    flow_path = flow_path.replace("\\left\\", "\\into_future\\left\\").replace("/left/", "/into_future/left/")
-    flow_path = flow_path.replace(img0.name, f"OpticalFlowIntoFuture_{img0.stem}_L.pfm")
-    return str(img0), img1, flow_path
+    if frames_root and flow_root:
+        relative = img0.relative_to(Path(frames_root))
+        if len(relative.parts) < 3 or relative.parts[-2] != "left":
+            raise ValueError(f"unexpected FT3D frame layout: {img0}")
+        flow_relative = Path(*relative.parts[:-2]) / "into_future" / "left" / f"OpticalFlowIntoFuture_{img0.stem}_L.pfm"
+        flow_path = str(Path(flow_root) / flow_relative)
+        return str(img0), img1, flow_path
+    raise ValueError("frames_root and flow_root are required")
 
 
 def resolve_ft3d_samples_from_folder(
-    base_path: Optional[str],
+    frames_base_path: Optional[str],
+    flow_base_path: Optional[str],
     split_dir: str,
-    frames_subdir: str = "frames_cleanpass",
-    flow_subdir: str = "optical_flow",
+    frames_subdir: str = "",
+    flow_subdir: str = "",
 ) -> List[str]:
-    split_root = _resolve_path(base_path=base_path, raw_path=split_dir)
-    candidates = [
-        split_root if split_root.name == frames_subdir else split_root / frames_subdir,
-        _resolve_path(base_path=base_path, raw_path=str(Path(frames_subdir) / split_dir)),
-    ]
-    frames_root = next((candidate for candidate in candidates if candidate.exists() and candidate.is_dir()), None)
-    if frames_root is None:
+    frames_split_root = _resolve_path(base_path=frames_base_path, raw_path=str(Path(frames_subdir) / split_dir) if frames_subdir else split_dir)
+    flow_split_root = _resolve_path(base_path=flow_base_path, raw_path=str(Path(flow_subdir) / split_dir) if flow_subdir else split_dir)
+    if not frames_split_root.exists() or not frames_split_root.is_dir():
+        return []
+    if not flow_split_root.exists() or not flow_split_root.is_dir():
         return []
 
     samples: List[str] = []
-    for img0_path in sorted(frames_root.rglob("left/*.png")):
+    for img0_path in sorted(frames_split_root.rglob("left/*.png")):
         try:
-            img0, img1, flow = _build_ft3d_triplet(str(img0_path), flow_root_marker=flow_subdir)
+            img0, img1, flow = _build_ft3d_triplet(str(img0_path), frames_root=str(frames_split_root), flow_root=str(flow_split_root))
         except Exception:
             continue
         if Path(img1).exists() and Path(flow).exists():
@@ -118,6 +121,8 @@ class FT3DBatchProvider:
         samples: List[str],
         crop_h: int,
         crop_w: int,
+        frames_root: str,
+        flow_root: str,
         seed: int = 42,
         source_dir: str = "",
         sampling_mode: str = "random",
@@ -127,6 +132,8 @@ class FT3DBatchProvider:
         self.samples = list(samples)
         self.crop_h = int(crop_h)
         self.crop_w = int(crop_w)
+        self.frames_root = str(frames_root)
+        self.flow_root = str(flow_root)
         self.source_dir = str(source_dir)
         self.flow_divisor = float(flow_divisor)
         self.rng = random.Random(int(seed))
@@ -183,7 +190,11 @@ class FT3DBatchProvider:
         retry_limit = max(64, len(self.samples))
         for _ in range(retry_limit):
             img0_path = self._next_sample_path()
-            img0_path, img1_path, flow_path = _build_ft3d_triplet(img0_path=img0_path)
+            img0_path, img1_path, flow_path = _build_ft3d_triplet(
+                img0_path=img0_path,
+                frames_root=self.frames_root,
+                flow_root=self.flow_root,
+            )
             if not os.path.exists(img0_path) or not os.path.exists(img1_path) or not os.path.exists(flow_path):
                 continue
             img0 = cv2.imread(img0_path, cv2.IMREAD_COLOR)
