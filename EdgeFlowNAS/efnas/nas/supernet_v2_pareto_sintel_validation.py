@@ -197,8 +197,9 @@ def _build_summary_markdown(summary: Dict[str, Any], selected_rows: Sequence[Dic
     records_map = {str(row["arch_code"]): row for row in records}
     for arch in summary["sintel_front_arches"]:
         row = records_map[arch]
+        fc2_epe = row.get("fc2_epe", row.get("epe"))
         lines.append(
-            f"- `{arch}` | type={row['selection_type']} fc2_epe={float(row['fc2_epe']):.6f} "
+            f"- `{arch}` | type={row['selection_type']} fc2_epe={float(fc2_epe):.6f} "
             f"sintel_epe={float(row['sintel_epe']):.6f} fps={float(row['fps']):.6f}"
         )
     return "\n".join(lines) + "\n"
@@ -306,6 +307,7 @@ def run_pareto_sintel_validation(
                 max_samples=_option_or_default(options, "max_sintel_samples", None),
             )
             record = dict(row)
+            record["fc2_epe"] = float(row.get("fc2_epe", row.get("epe")))
             record["sintel_epe"] = float(sintel_epe)
             records.append(record)
             progress.set_postfix(type=row["selection_type"], sintel=f"{sintel_epe:.4f}")

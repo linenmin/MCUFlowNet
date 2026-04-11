@@ -5,6 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from efnas.nas.supernet_v2_pareto_sintel_validation import (
+    _build_summary_markdown,
     build_argparser,
     compute_sintel_retention_summary,
     run_pareto_sintel_validation,
@@ -53,6 +54,28 @@ class TestParetoSintelValidationHelpers(unittest.TestCase):
         self.assertEqual(summary["near_pareto_promoted_count"], 1)
         self.assertEqual(summary["retained_original_pareto_arches"], ["a"])
         self.assertEqual(summary["promoted_near_pareto_arches"], ["c"])
+
+    def test_build_summary_markdown_accepts_records_with_epe_alias(self) -> None:
+        records = [
+            {"arch_code": "a", "selection_type": "pareto", "epe": 4.0, "fps": 5.0, "sintel_epe": 5.0},
+            {"arch_code": "c", "selection_type": "near_pareto", "epe": 4.25, "fps": 5.9, "sintel_epe": 5.1},
+        ]
+        summary = {
+            "num_selected": 2,
+            "num_original_pareto": 1,
+            "num_near_pareto": 1,
+            "num_sintel_front": 2,
+            "original_pareto_retained_count": 1,
+            "original_pareto_retention_ratio": 1.0,
+            "near_pareto_promoted_count": 1,
+            "retained_original_pareto_arches": ["a"],
+            "promoted_near_pareto_arches": ["c"],
+            "sintel_front_arches": ["a", "c"],
+        }
+
+        md = _build_summary_markdown(summary, selected_rows=records, records=records)
+        self.assertIn("fc2_epe=4.000000", md)
+        self.assertIn("fc2_epe=4.250000", md)
 
     def test_dry_run_selects_candidates_and_uses_generated_output_dir(self) -> None:
         with TemporaryDirectory() as tmpdir:
