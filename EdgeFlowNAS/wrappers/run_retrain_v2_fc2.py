@@ -1,0 +1,84 @@
+"""CLI wrapper for retrain_v2 FC2 stage."""
+
+import argparse
+import os
+import sys
+
+
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, os.pardir))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+
+def _load_yaml(path: str) -> dict:
+    import yaml
+
+    with open(path, "r", encoding="utf-8") as handle:
+        return yaml.safe_load(handle) or {}
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Retrain V2 fixed candidates on FC2")
+    parser.add_argument("--config", default="configs/retrain_v2_fc2.yaml", help="YAML config path")
+    parser.add_argument("--arch_codes", default=None, help="11D arch codes joined by '+'")
+    parser.add_argument("--model_names", default=None, help="Model names joined by '+'")
+    parser.add_argument("--experiment_name", default=None, help="Experiment name")
+    parser.add_argument("--supernet_checkpoint", default=None, help="V2 supernet checkpoint prefix for warm-start")
+    parser.add_argument("--base_path", default=None, help="Dataset base path")
+    parser.add_argument("--train_dir", default=None, help="FC2 train split path")
+    parser.add_argument("--val_dir", default=None, help="FC2 val split path")
+    parser.add_argument("--gpu_device", type=int, default=None, help="GPU index, -1=CPU")
+    parser.add_argument("--num_epochs", type=int, default=None, help="Epoch count")
+    parser.add_argument("--batch_size", type=int, default=None, help="Batch size")
+    parser.add_argument("--lr", type=float, default=None, help="Initial LR")
+    parser.add_argument("--lr_min", type=float, default=None, help="Minimum cosine LR")
+    parser.add_argument("--resume", action="store_true", help="Resume current experiment")
+    parser.add_argument("--resume_experiment_name", default=None, help="Resume experiment name")
+    parser.add_argument("--seed", type=int, default=None, help="Random seed")
+    return parser
+
+
+def main() -> int:
+    args = _build_parser().parse_args()
+    config_path = args.config if os.path.isabs(args.config) else os.path.join(_PROJECT_ROOT, args.config)
+    config = _load_yaml(config_path)
+    if args.arch_codes is not None:
+        config["arch_codes"] = args.arch_codes
+    if args.model_names is not None:
+        config["model_names"] = args.model_names
+    if args.experiment_name is not None:
+        config.setdefault("runtime", {})["experiment_name"] = args.experiment_name
+    if args.seed is not None:
+        config.setdefault("runtime", {})["seed"] = args.seed
+    if args.supernet_checkpoint is not None:
+        config.setdefault("checkpoint", {})["init_mode"] = "supernet"
+        config.setdefault("checkpoint", {})["init_checkpoint_path"] = args.supernet_checkpoint
+    if args.base_path is not None:
+        config.setdefault("data", {})["base_path"] = args.base_path
+    if args.train_dir is not None:
+        config.setdefault("data", {})["train_dir"] = args.train_dir
+    if args.val_dir is not None:
+        config.setdefault("data", {})["val_dir"] = args.val_dir
+    if args.gpu_device is not None:
+        config.setdefault("train", {})["gpu_device"] = args.gpu_device
+    if args.num_epochs is not None:
+        config.setdefault("train", {})["num_epochs"] = args.num_epochs
+    if args.batch_size is not None:
+        config.setdefault("train", {})["batch_size"] = args.batch_size
+    if args.lr is not None:
+        config.setdefault("train", {})["lr"] = args.lr
+    if args.lr_min is not None:
+        config.setdefault("train", {})["lr_min"] = args.lr_min
+    if args.resume:
+        config.setdefault("checkpoint", {})["load_checkpoint"] = True
+    if args.resume_experiment_name is not None:
+        config.setdefault("checkpoint", {})["resume_experiment_name"] = args.resume_experiment_name
+
+    from efnas.engine.retrain_v2_trainer import train_retrain_v2
+
+    return train_retrain_v2(config)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,43 @@
+runtime:
+  experiment_name: "retrain_v2_ft3d"
+  output_root: "outputs/retrain_v2_ft3d"
+  seed: 42
+
+arch_codes: "2,1,0,1,2,1,0,0,0,0,1+2,1,0,0,0,0,0,0,0,0,0"
+model_names: "knee+fast"
+
+train:
+  gpu_device: 0
+  num_epochs: 50
+  batch_size: 32
+  lr: 1.0e-5
+  lr_min: 1.0e-6
+  weight_decay: 0.0
+  grad_clip_global_norm: 0.0
+  train_sampling_mode: "shuffle_no_replacement"
+  train_crop_mode: "random"
+  early_stop_patience: 10
+  early_stop_min_delta: 1.0e-4
+
+data:
+  dataset: "FT3D"
+  base_path: "../Datasets/optical_flow"
+  train_dir: "TRAIN"
+  val_dir: "TEST"
+  ft3d_frames_subdir: "frames_cleanpass"
+  ft3d_flow_subdir: "optical_flow"
+  ft3d_flow_divisor: 12.5
+  input_height: 480
+  input_width: 640
+  flow_channels: 2
+
+eval:
+  eval_every_epoch: 2
+  eval_batches: 0
+
+checkpoint:
+  load_checkpoint: false
+  resume_experiment_name: ""
+  init_mode: "experiment_dir"
+  init_experiment_dir: ""
+  init_ckpt_name: "best"

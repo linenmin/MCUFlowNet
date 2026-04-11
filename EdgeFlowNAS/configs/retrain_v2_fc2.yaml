@@ -1,0 +1,39 @@
+runtime:
+  experiment_name: "retrain_v2_fc2"
+  output_root: "outputs/retrain_v2_fc2"
+  seed: 42
+
+arch_codes: "2,1,0,1,2,1,0,0,0,0,1+2,1,0,0,0,0,0,0,0,0,0"
+model_names: "knee+fast"
+
+train:
+  gpu_device: 0
+  num_epochs: 400
+  batch_size: 32
+  lr: 5.0e-5
+  lr_min: 1.0e-6
+  weight_decay: 0.0
+  grad_clip_global_norm: 0.0
+  train_sampling_mode: "shuffle_no_replacement"
+  train_crop_mode: "random"
+  early_stop_patience: 20
+  early_stop_min_delta: 1.0e-4
+
+data:
+  dataset: "FC2"
+  base_path: "../"
+  train_dir: "Datasets/FlyingChairs2/train"
+  val_dir: "Datasets/FlyingChairs2/val"
+  input_height: 352
+  input_width: 480
+  flow_channels: 2
+
+eval:
+  eval_every_epoch: 5
+  eval_batches: 0
+
+checkpoint:
+  load_checkpoint: false
+  resume_experiment_name: ""
+  init_mode: "supernet"
+  init_checkpoint_path: ""
