@@ -72,7 +72,7 @@ def _compute_pareto_front(rows: Sequence[Dict[str, Any]], epe_key: str = "epe") 
 def select_pareto_and_near_candidates(
     history_rows: Sequence[Dict[str, Any]],
     near_rel_gap: float = 0.05,
-    max_near: int = 20,
+    max_near: int = 70,
 ) -> List[Dict[str, Any]]:
     """Select all current Pareto rows plus near-Pareto dominated rows."""
     pareto_rows = _compute_pareto_front(history_rows, epe_key="epe")
@@ -223,7 +223,7 @@ def run_pareto_sintel_validation(
     selected_rows = select_pareto_and_near_candidates(
         history_rows,
         near_rel_gap=float(_option_or_default(options, "near_rel_gap", 0.05)),
-        max_near=int(_option_or_default(options, "max_near", 20)),
+        max_near=int(_option_or_default(options, "max_near", 70)),
     )
 
     output_dir_raw = options.get("output_dir", "")
@@ -322,7 +322,7 @@ def run_pareto_sintel_validation(
         "sintel_list": sintel_list_path,
         "sintel_patch_size": sintel_patch_size,
         "near_rel_gap": float(_option_or_default(options, "near_rel_gap", 0.05)),
-        "max_near": int(_option_or_default(options, "max_near", 20)),
+        "max_near": int(_option_or_default(options, "max_near", 70)),
         "bn_recal_batches": int(_option_or_default(options, "bn_recal_batches", 16)),
         "summary": summary,
     }
@@ -357,7 +357,7 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--bn_recal_batch_size", type=int, default=None)
     parser.add_argument("--gpu_device", type=int, default=None)
     parser.add_argument("--near_rel_gap", type=float, default=0.05)
-    parser.add_argument("--max_near", type=int, default=20)
+    parser.add_argument("--max_near", type=int, default=70)
     parser.add_argument("--dry_run", action="store_true")
     return parser
 

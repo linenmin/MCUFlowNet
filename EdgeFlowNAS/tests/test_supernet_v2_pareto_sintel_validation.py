@@ -5,6 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from efnas.nas.supernet_v2_pareto_sintel_validation import (
+    build_argparser,
     compute_sintel_retention_summary,
     run_pareto_sintel_validation,
     select_pareto_and_near_candidates,
@@ -12,6 +13,11 @@ from efnas.nas.supernet_v2_pareto_sintel_validation import (
 
 
 class TestParetoSintelValidationHelpers(unittest.TestCase):
+    def test_cli_defaults_use_larger_near_pareto_budget(self) -> None:
+        parser = build_argparser()
+        args = parser.parse_args(["--history_csv", "dummy.csv"])
+        self.assertEqual(args.max_near, 70)
+
     def test_select_pareto_and_near_candidates_marks_categories_and_limits_near(self) -> None:
         rows = [
             {"arch_code": "a", "epe": 4.0, "fps": 5.0},

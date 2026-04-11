@@ -28,7 +28,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--bn_recal_batch_size", type=int, default=None)
     parser.add_argument("--gpu_device", type=int, default=None)
     parser.add_argument("--near_rel_gap", type=float, default=0.05)
-    parser.add_argument("--max_near", type=int, default=20)
+    parser.add_argument("--max_near", type=int, default=70)
     parser.add_argument("--dry_run", action="store_true")
     return parser
 
