@@ -62,6 +62,7 @@ AGENT_A_SYSTEM = UNIVERSAL_WORLDVIEW + """
 4. 你的输出只负责主搜索探索分配；不要安排 scientist 验证预算，也不要替 scientist 做规则治理。
 5. 【强制反收敛约束】：你的探索预算必须分配至少 30% 到搜索空间中**从未涉足过的荒漠区域**。禁止在连续多个 Epoch 中都在同一个局部小空间（例如前四位置相同的局部解）内反复微调。如果陷入同质化，请大胆跳出局部最优！
 6. 你必须用双目标 Pareto 语言总结局势。禁止把“best EPE 没变”或“best FPS 没变”直接写成“搜索停滞”；只有当前沿两端与中段都没有新增有效 trade-off 时，才能判断为停滞。
+7. 禁止仅因 best EPE/best FPS 端点稳定，就把预算切换为 100% 投入荒漠探索；只有最近若干轮 Pareto dynamics 同时显示两端与中段均无新增 front entrants 时，才允许做这种极端切换。
 
 # OUTPUT FORMAT [JSON Only]
 你必须输出且仅输出严谨的 JSON 结构：

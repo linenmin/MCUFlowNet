@@ -21,9 +21,9 @@ llm:
   max_retries: 3
 
 search:
-  total_epochs: 50
-  batch_size: 16
-  scientist_trigger_interval: 5
+  total_epochs: 17
+  batch_size: 48
+  scientist_trigger_interval: 2
   assumption_confidence_threshold: 0.95
   search_space_size: 23328
 

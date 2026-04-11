@@ -45,6 +45,7 @@ def invoke_agent_a(
     history_summary = _summarize_history(history_df)
     epoch_metrics_df = file_io.read_epoch_metrics(exp_dir)
     pareto_section = _summarize_current_pareto(history_df)
+    pareto_dynamics_section = _summarize_pareto_dynamics(history_df, epoch_metrics_df)
     metrics_section = _summarize_epoch_metrics(epoch_metrics_df)
     coverage_section = _build_coverage_hint(exp_dir)
 
@@ -60,8 +61,10 @@ def invoke_agent_a(
         f"# 本轮预算: {batch_size} 个子网\n\n"
         f"## 历史评估事实摘要 (共 {len(history_df)} 条):\n"
         f"```\n{history_summary}\n```\n\n"
-        f"## 当前 Pareto 前沿成员摘要:\n"
+        f"## 当前 Pareto 前沿完整列表 ({len(history_df)} 条历史样本中当前 front):\n"
         f"```\n{pareto_section}\n```\n\n"
+        f"## 最近 Pareto 动态变化:\n"
+        f"```\n{pareto_dynamics_section}\n```\n\n"
         f"## 搜索空间覆盖率结构:\n"
         f"```\n{coverage_section}\n```\n\n"
         f"## 最近搜索健康度:\n"
@@ -521,43 +524,69 @@ def _summarize_history(df) -> str:
 
 
 def _summarize_current_pareto(df, limit: int = 20) -> str:
-    """生成当前 Pareto 成员列表摘要，显式展示 EPE 端与 FPS 端。"""
+    """生成当前完整 Pareto 成员列表。"""
     if df.empty or "epe" not in df.columns or "fps" not in df.columns:
         return "(尚无 Pareto 点)"
 
-    try:
-        work = df.copy()
-        work["epe"] = work["epe"].astype(float)
-        work["fps"] = work["fps"].astype(float)
-    except (ValueError, TypeError):
-        return "(Pareto 数据解析失败)"
-
-    values = work[["epe", "fps"]].to_numpy()
-    pareto_idx: List[int] = []
-    for i in range(len(values)):
-        dominated = False
-        for j in range(len(values)):
-            if i == j:
-                continue
-            if (
-                values[j, 0] <= values[i, 0]
-                and values[j, 1] >= values[i, 1]
-                and (values[j, 0] < values[i, 0] or values[j, 1] > values[i, 1])
-            ):
-                dominated = True
-                break
-        if not dominated:
-            pareto_idx.append(i)
-
-    if not pareto_idx:
+    pareto_df = _compute_pareto_front_df(df)
+    if pareto_df.empty:
         return "(尚无 Pareto 点)"
 
-    cols = [c for c in ["arch_code", "epe", "fps", "epoch"] if c in work.columns]
-    pareto_df = work.iloc[pareto_idx][cols]
-    half = max(1, limit // 2)
-    low_epe = pareto_df.sort_values(by=["epe", "fps"], ascending=[True, False]).head(half).to_string(index=False)
-    high_fps = pareto_df.sort_values(by=["fps", "epe"], ascending=[False, True]).head(half).to_string(index=False)
-    return f"Lowest-EPE end:\n{low_epe}\n\nHighest-FPS end:\n{high_fps}"
+    cols = [c for c in ["epoch", "arch_code", "epe", "fps"] if c in pareto_df.columns]
+    pareto_df = pareto_df[cols].sort_values(by=["fps", "epe"], ascending=[True, True]).reset_index(drop=True)
+    return pareto_df.to_string(index=False)
+
+
+def _summarize_pareto_dynamics(df, epoch_metrics_df, recent_epochs: int = 6) -> str:
+    """生成最近几个 epoch 的 Pareto 动态变化摘要。"""
+    if df.empty or "epoch" not in df.columns or "epe" not in df.columns or "fps" not in df.columns:
+        return "(尚无 Pareto dynamics)"
+
+    try:
+        work = df.copy()
+        work["epoch"] = work["epoch"].astype(int)
+    except (ValueError, TypeError):
+        return "(Pareto dynamics 数据解析失败)"
+
+    if epoch_metrics_df is not None and not getattr(epoch_metrics_df, "empty", True) and "epoch" in epoch_metrics_df.columns:
+        try:
+            recent_epoch_ids = epoch_metrics_df["epoch"].astype(int).tail(recent_epochs).tolist()
+        except (ValueError, TypeError):
+            recent_epoch_ids = sorted(work["epoch"].unique().tolist())[-recent_epochs:]
+    else:
+        recent_epoch_ids = sorted(work["epoch"].unique().tolist())[-recent_epochs:]
+
+    if not recent_epoch_ids:
+        return "(尚无 Pareto dynamics)"
+
+    lines: List[str] = []
+    previous_front_codes: set[str] = set()
+    previous_epoch = None
+    for epoch in recent_epoch_ids:
+        current_rows = work[work["epoch"] <= epoch]
+        current_front = _compute_pareto_front_df(current_rows)
+        current_codes = set(current_front["arch_code"].astype(str).tolist()) if "arch_code" in current_front.columns else set()
+        entered = sorted(current_codes - previous_front_codes)
+        removed = sorted(previous_front_codes - current_codes)
+        lines.append(
+            f"epoch={epoch} | compared_to={previous_epoch if previous_epoch is not None else 'none'} | "
+            f"pareto_count_before={len(previous_front_codes)} | pareto_count_after={len(current_codes)} | "
+            f"entered_count={len(entered)} | removed_count={len(removed)}"
+        )
+        if entered and "arch_code" in current_front.columns:
+            entrant_df = current_front[current_front["arch_code"].astype(str).isin(entered)].copy()
+            cols = [c for c in ["epoch", "arch_code", "epe", "fps"] if c in entrant_df.columns]
+            entrant_df = entrant_df[cols].sort_values(by=["fps", "epe"], ascending=[False, True])
+            lines.append("  entered_points:")
+            for _, row in entrant_df.iterrows():
+                epoch_val = row["epoch"] if "epoch" in row else epoch
+                lines.append(
+                    f"    - epoch={epoch_val}, arch_code={row['arch_code']}, epe={float(row['epe']):.6f}, fps={float(row['fps']):.6f}"
+                )
+        previous_front_codes = current_codes
+        previous_epoch = epoch
+
+    return "\n".join(lines)
 
 
 def _summarize_epoch_metrics(df) -> str:
@@ -612,3 +641,34 @@ def _count_pareto_2d(obj1, obj2, minimize_first: bool = True) -> int:
                 is_pareto[i] = False
                 break
     return int(is_pareto.sum())
+
+
+def _compute_pareto_front_df(df):
+    """返回 2D Pareto front DataFrame (EPE minimize, FPS maximize)."""
+    if df.empty or "epe" not in df.columns or "fps" not in df.columns:
+        return df.iloc[0:0].copy()
+
+    try:
+        work = df.copy()
+        work["epe"] = work["epe"].astype(float)
+        work["fps"] = work["fps"].astype(float)
+    except (ValueError, TypeError):
+        return df.iloc[0:0].copy()
+
+    values = work[["epe", "fps"]].to_numpy()
+    pareto_idx: List[int] = []
+    for i in range(len(values)):
+        dominated = False
+        for j in range(len(values)):
+            if i == j:
+                continue
+            if (
+                values[j, 0] <= values[i, 0]
+                and values[j, 1] >= values[i, 1]
+                and (values[j, 0] < values[i, 0] or values[j, 1] > values[i, 1])
+            ):
+                dominated = True
+                break
+        if not dominated:
+            pareto_idx.append(i)
+    return work.iloc[pareto_idx].copy() if pareto_idx else work.iloc[0:0].copy()

@@ -1,4 +1,5 @@
 import os
+import json
 import shutil
 import sys
 import tempfile
@@ -95,11 +96,62 @@ class TestAgentControlLoopRefactor(unittest.TestCase):
         self.assertNotIn("绝对真理碑", user_msg)
         self.assertIn("搜索空间覆盖率结构", user_msg)
         self.assertIn("dim[0] 分布", user_msg)
-        self.assertIn("Lowest-EPE end", user_msg)
-        self.assertIn("Highest-FPS end", user_msg)
+        self.assertIn("当前 Pareto 前沿完整列表", user_msg)
+        self.assertIn("最近 Pareto 动态变化", user_msg)
         self.assertNotIn("Top-5 最低 EPE", user_msg)
         self.assertNotIn("近3轮是否有改进", user_msg)
         self.assertNotIn("insight-a", user_msg)
+
+    def test_agent_a_receives_full_pareto_and_recent_front_dynamics(self) -> None:
+        llm = _CaptureLLM(
+            {
+                "strategic_reflection": "use full front and recent turnover",
+                "allocation": {
+                    "free_exploration": {
+                        "count": 48,
+                        "direction_describe": "probe middle-front gaps",
+                    }
+                },
+            }
+        )
+        history_rows = []
+        for i in range(24):
+            history_rows.append(
+                {
+                    "arch_code": f"{i % 3},{(i + 1) % 3},0,0,{i % 3},{(i + 2) % 3},0,0,{i % 2},0,{(i + 1) % 2}",
+                    "epe": 4.8 - i * 0.03,
+                    "fps": 5.0 + i * 0.12,
+                    "epoch": i // 2,
+                }
+            )
+        history_df = pd.DataFrame(history_rows)
+        metrics_df = pd.DataFrame(
+            {
+                "epoch": list(range(6)),
+                "new_evaluated": [48, 48, 47, 48, 46, 48],
+                "duplicates": [0, 0, 1, 0, 2, 0],
+                "rule_rejected": [0, 0, 0, 0, 0, 0],
+                "pareto_count": [10, 12, 13, 13, 14, 15],
+                "best_epe": [4.2, 4.15, 4.10, 4.05, 4.02, 3.99],
+                "best_fps": [8.2, 8.4, 8.6, 8.8, 8.9, 9.0],
+            }
+        )
+
+        with patch("efnas.search.agents.file_io.read_history", return_value=history_df), patch(
+            "efnas.search.agents.file_io.read_epoch_metrics",
+            create=True,
+            return_value=metrics_df,
+        ), patch("efnas.search.agents.file_io.append_strategy_log"):
+            agents.invoke_agent_a(llm, exp_dir="dummy_exp", epoch=6, batch_size=48)
+
+        user_msg = llm.calls[0]["user_message"]
+        self.assertIn("## 当前 Pareto 前沿完整列表", user_msg)
+        self.assertIn("## 最近 Pareto 动态变化", user_msg)
+        self.assertIn("entered_count", user_msg)
+        self.assertIn("removed_count", user_msg)
+        self.assertIn("24 条", user_msg)
+        self.assertNotIn("Lowest-EPE end", user_msg)
+        self.assertNotIn("Highest-FPS end", user_msg)
 
     def test_agent_b_uses_generator_hints_instead_of_raw_findings_markdown(self) -> None:
         llm = _CaptureLLM({"generated_candidates": ["0,0,0,0,0,0,0,0,0,0,0"]})
@@ -193,6 +245,27 @@ class TestAgentD3FindingRegistry(unittest.TestCase):
         self.assertEqual(findings[0]["id"], "A01")
         self.assertEqual(findings[0]["title"], "Test rule")
         self.assertEqual(assumptions, [])
+
+
+class TestSearchV2Config(unittest.TestCase):
+    def test_search_v2_uses_48_batch_17_epochs_and_interval_2(self) -> None:
+        config_path = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            "configs",
+            "search_v2.yaml",
+        )
+        with open(config_path, "r", encoding="utf-8") as f:
+            text = f.read()
+
+        self.assertIn("total_epochs: 17", text)
+        self.assertIn("batch_size: 48", text)
+        self.assertIn("scientist_trigger_interval: 2", text)
+
+    def test_agent_a_prompt_forbids_100_percent_desert_only_from_endpoint_stability(self) -> None:
+        from efnas.search import prompts
+
+        self.assertIn("禁止仅因 best EPE/best FPS 端点稳定", prompts.AGENT_A_SYSTEM)
+        self.assertIn("100% 投入荒漠探索", prompts.AGENT_A_SYSTEM)
 
 
 if __name__ == "__main__":
