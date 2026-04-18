@@ -71,3 +71,70 @@
   - FT3D TRAIN/TEST folder scanning
   - wrapper default configs and parser contracts
 - `py_compile` passed for all newly added retrain_v2 files.
+
+## 2026-04-18
+
+### HPC Execution Feedback Integrated
+
+- First real `FC2` HPC launch failed during warm-start restore.
+- Error was not a path issue in the graph itself; it was a restore-contract issue:
+  - retrain warm-start attempted to restore Adam slot tensors from the source supernet checkpoint
+  - the supernet checkpoint does not contain those tensors
+
+### Fix Applied
+
+- Updated `efnas/engine/retrain_v2_trainer.py` so `warmstart_saver` excludes optimizer-slot variables.
+- Added regression coverage in:
+  - `tests/test_fixed_arch_models_v2.py`
+- Verified locally:
+  - `python -m unittest tests.test_fixed_arch_models_v2`
+  - `py_compile` for the modified retrain trainer and test
+- Fix committed and pushed:
+  - `856493e`
+
+### HPC Data Contract Clarified
+
+- Confirmed that `../Datasets` on HPC is a symlink, which explained why earlier `find` commands returned no results without `-L`.
+- Confirmed FT3D flow data exists under:
+  - `FlyingThings3D/optical_flow`
+- Confirmed RGB frames were initially absent on HPC.
+- User then downloaded and merged the required frame data under:
+  - `FlyingThings3D/frames_cleanpass`
+
+### Current Runnable Commands
+
+- FC2 stage:
+  - `python wrappers/run_retrain_v2_fc2.py --config configs/retrain_v2_fc2.yaml --experiment_name retrain_v2_fc2_run1 --supernet_checkpoint outputs/supernet/edgeflownas_supernet_v2_fc2_172x224_run1_balance/checkpoints/supernet_best.ckpt --gpu_device 0`
+- FT3D stage:
+  - `python wrappers/run_retrain_v2_ft3d.py --config configs/retrain_v2_ft3d.yaml --experiment_name retrain_v2_ft3d_run1 --fc2_experiment_dir outputs/retrain_v2_fc2/retrain_v2_fc2_run1 --frames_base_path FlyingThings3D/frames_cleanpass --flow_base_path FlyingThings3D/optical_flow --gpu_device 0`
+- Sintel test:
+  - `python wrappers/run_retrain_v2_sintel_test.py --experiment_dir outputs/retrain_v2_ft3d/retrain_v2_ft3d_run1 --dataset_root /lustre1/scratch/379/vsc37996/dataset/Sintel --sintel_list EdgeFlowNet/code/dataset_paths/MPI_Sintel_Final_train_list.txt --patch_size 416,1024 --ckpt_name best --gpu_device 0`
+
+### Remaining Verification Work
+
+1. Run FC2 end-to-end long enough to confirm:
+   - warm-start really succeeds on HPC
+   - checkpoint save path is valid
+2. Run FT3D continuation once FC2 produces a `best.ckpt`.
+3. Interrupt and resume at least one stage to validate resume semantics.
+4. Check whether early stopping writes the expected trainer state JSON and exits cleanly.
+
+### Fixed-Subnet Retrain Refactor
+
+- Switched `retrain_v2` training graph from constant-arch `MultiScaleResNetSupernetV2` to true `FixedArchModelV2`.
+- Switched `retrain_v2` evaluator graph to the same fixed-subnet model so training/eval/deployment contracts match.
+- Added normalized supernet-name mapping in:
+  - `efnas/engine/retrain_v2_trainer.py`
+  so fixed-subnet variables can warm-start directly from the V2 supernet checkpoint.
+- Added parser coverage for a new optional Vela comparison wrapper:
+  - `wrappers/run_retrain_v2_vela_compare.py`
+- Verified locally:
+  - `python -m unittest tests.test_fixed_arch_models_v2 tests.test_run_retrain_v2_wrappers tests.test_ft3d_dataset`
+  - `py_compile` for trainer / evaluator / Vela wrapper
+  - a real restore from local `supernet_best.ckpt` into the fixed-subnet graph
+
+### Validation Boundary
+
+- Local checkpoint-restore validation now succeeds for the fixed-subnet graph.
+- Local Vela comparison is still blocked by missing `vela` executable in the Windows environment.
+- HPC commands for `FC2`, `FT3D`, and `Sintel test` remain CLI-compatible; only the internal graph and warm-start path changed.

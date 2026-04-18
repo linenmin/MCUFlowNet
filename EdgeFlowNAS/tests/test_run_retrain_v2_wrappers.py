@@ -5,6 +5,7 @@ import unittest
 from wrappers.run_retrain_v2_fc2 import _build_parser as build_fc2_parser
 from wrappers.run_retrain_v2_ft3d import _build_parser as build_ft3d_parser
 from wrappers.run_retrain_v2_sintel_test import _build_parser as build_sintel_parser
+from wrappers.run_retrain_v2_vela_compare import _build_parser as build_vela_compare_parser
 
 
 class TestRunRetrainV2Wrappers(unittest.TestCase):
@@ -50,6 +51,19 @@ class TestRunRetrainV2Wrappers(unittest.TestCase):
         )
         self.assertEqual(args.experiment_dir, "outputs/retrain_v2_ft3d/demo")
         self.assertEqual(args.ckpt_name, "best")
+
+    def test_vela_compare_parser_accepts_checkpoint_and_arch(self) -> None:
+        parser = build_vela_compare_parser()
+        args = parser.parse_args(
+            [
+                "--checkpoint_prefix",
+                "outputs/supernet/demo/checkpoints/supernet_best.ckpt",
+                "--arch_code",
+                "2,1,0,1,2,1,0,0,0,0,1",
+            ]
+        )
+        self.assertEqual(args.checkpoint_prefix, "outputs/supernet/demo/checkpoints/supernet_best.ckpt")
+        self.assertEqual(args.arch_code, "2,1,0,1,2,1,0,0,0,0,1")
 
 
 if __name__ == "__main__":

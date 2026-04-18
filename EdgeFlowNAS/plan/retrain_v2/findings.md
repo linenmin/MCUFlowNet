@@ -115,21 +115,23 @@ The retrain pipeline will follow the original EdgeFlowNet crop recipe instead of
 
 This keeps training aligned with the intended 4:3 deployment setting while still moving beyond the smaller supernet-search resolution.
 
-### Warm-Start Must Use Constant-Arch Supernet Graphs
+### Fixed-Subnet Retraining Needs Explicit Name Normalization
 
-The first implementation attempt with a branch-pruned fixed-only V2 model exposed a real naming problem:
+The constant-arch supernet fallback was useful to prove the warm-start path, but it is not the right long-run training graph because it still materializes all candidate branches and only selects them late.
+
+The real issue behind fixed-subnet warm-start was narrower:
 
 - `BaseLayers` uses counting-based internal scopes
-- pruning branches changes scope-number order
-- therefore fixed-only graph variable names do not stably match supernet checkpoint names
+- pruning branches changes some raw TensorFlow variable names
+- therefore fixed-subnet graph names do not raw-match supernet checkpoint names
 
-The stable solution is:
+The workable solution is now confirmed:
 
-- build retrain/eval graphs with `MultiScaleResNetSupernetV2`
-- feed a constant 11D arch code per model
-- restrict the graph behavior through the fixed code, not through branch deletion
+- build retrain/eval graphs with `FixedArchModelV2`
+- normalize fixed-subnet variable names back to the supernet naming scheme
+- restore from the supernet checkpoint through an explicit source-name map
 
-This preserves checkpoint-compatible variable names and makes supernet warm-start auditable.
+This keeps the training/eval graph as a true subnet while preserving auditable supernet warm-start.
 
 ### FT3D Loader Should Scan Folders Directly
 
@@ -141,6 +143,59 @@ The new retrain path should therefore scan:
 - `optical_flow/{TRAIN,TEST}`
 
 and derive valid future-frame pairs by file existence.
+
+### HPC FlyingThings3D Layout Is Now Confirmed
+
+The actual HPC data layout for stage-2 retraining is now known.
+
+Confirmed flow path example:
+
+- `FlyingThings3D/optical_flow/TRAIN/A/0000/into_future/left/OpticalFlowIntoFuture_0006_L.pfm`
+
+Confirmed frame path example:
+
+- `FlyingThings3D/frames_cleanpass/TRAIN/A/0000/left/0006.png`
+
+Implications:
+
+- stage-2 retraining only needs `frames_cleanpass` plus `optical_flow`
+- `finalpass` is not required for the current retrain pipeline
+- PNG frames are the correct asset type; WebP would not match the current code path
+
+### First HPC FC2 Run Exposed A Real Warm-Start Saver Bug
+
+The first live FC2 launch failed during checkpoint restore because the retrain graph tried to restore optimizer slot tensors from the supernet checkpoint.
+
+Observed failure shape:
+
+- `.../bn2/beta/Adam not found in checkpoint`
+
+Root cause:
+
+- `warmstart_saver` was built from all scope global variables
+- this accidentally included Adam slot variables created by the retrain optimizer
+- the source supernet checkpoint does not contain those slot tensors
+
+Resolution:
+
+- warm-start restore now filters out optimizer-slot variables such as `/Adam`
+- save/resume for the retrain experiment still keeps full scope variables
+- only the one-time import path was narrowed
+
+This is the correct contract split:
+
+- warm-start import: model weights + BN state only
+- retrain checkpoint save/resume: full scope variables including optimizer state
+
+### Current HPC Commands Are Structurally Ready
+
+The pipeline now has concrete command-level contracts for:
+
+- FC2 warm-start from supernet checkpoint
+- FT3D continuation from FC2 best checkpoint
+- standalone Sintel testing from latest retrain experiment directory
+
+The remaining uncertainty is execution validation, not command definition.
 
 ## Preliminary Design Judgement
 
@@ -158,4 +213,4 @@ This is likely lower risk than trying to rescue the older `standalone_trainer.py
 
 1. FT3D `TEST` as validation is operationally simple but may not be the final protocol you want for reporting.
 2. Early stopping must not silently fight cosine scheduling or stage transition logic.
-3. The new retrain graph now depends on constant-arch supernet masking; this is correct for warm-start, but first HPC run should still confirm only selected paths receive effective gradient updates.
+3. Fixed-subnet warm-start now depends on normalized variable-name mapping; this is structurally cleaner than constant-arch masking, but final HPC validation should still confirm deployment export and training metrics stay aligned.

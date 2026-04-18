@@ -7,7 +7,7 @@ from typing import Any, Dict, Tuple
 import tensorflow as tf
 
 from efnas.engine.eval_step import accumulate_predictions
-from efnas.network.MultiScaleResNet_supernet_v2 import MultiScaleResNetSupernetV2
+from efnas.network.fixed_arch_models_v2 import FixedArchModelV2
 
 
 def _load_checkpoint_meta(model_dir: Path, ckpt_name: str = "best") -> Dict[str, Any]:
@@ -35,11 +35,10 @@ def setup_retrain_v2_eval_model(
     is_training_ph = tf.compat.v1.placeholder_with_default(tf.constant(False, dtype=tf.bool), shape=[], name="is_training_ph")
 
     with tf.compat.v1.variable_scope(scope_name):
-        arch_code_ph = tf.constant(arch_list, dtype=tf.int32, name="FixedArchCode")
-        model = MultiScaleResNetSupernetV2(
+        model = FixedArchModelV2(
             input_ph=input_ph,
-            arch_code_ph=arch_code_ph,
             is_training_ph=is_training_ph,
+            arch_code=arch_list,
             num_out=4,
             init_neurons=32,
             expansion_factor=2.0,

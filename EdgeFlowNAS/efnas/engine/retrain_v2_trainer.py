@@ -1,6 +1,7 @@
 """Stage trainer for V2 fixed-architecture retraining."""
 
 import math
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -24,6 +25,7 @@ from efnas.engine.standalone_trainer import (
 )
 from efnas.engine.train_step import add_weight_decay, build_multiscale_uncertainty_loss
 from efnas.nas.arch_codec_v2 import parse_arch_code_text
+from efnas.network.fixed_arch_models_v2 import FixedArchModelV2
 from efnas.network.MultiScaleResNet_supernet_v2 import MultiScaleResNetSupernetV2
 from efnas.utils.json_io import read_json, write_json
 from efnas.utils.logger import build_logger
@@ -57,13 +59,59 @@ def _build_provider(config: Dict[str, Any], split: str, seed_offset: int, provid
     raise ValueError(f"unsupported dataset for retrain_v2: {dataset}")
 
 
-def _build_warmstart_var_map(scope_name: str, scope_global_vars: List[tf.Variable]) -> Dict[str, tf.Variable]:
+def _normalize_supernet_var_name(var_name: str) -> str:
+    parts = []
+    for part in str(var_name).split("/"):
+        part = re.sub(r"^(conv_bn_relu)\d+$", r"\1", part)
+        part = re.sub(r"^(resize_conv)\d+$", r"\1", part)
+        part = re.sub(r"^(conv)\d+$", r"\1", part)
+        part = re.sub(r"^(bn)\d+$", r"\1", part)
+        parts.append(part)
+    return "/".join(parts)
+
+
+def _build_supernet_source_name_map(pred_channels: int) -> Dict[str, str]:
+    with tf.Graph().as_default():
+        tf.compat.v1.disable_eager_execution()
+        input_ph = tf.compat.v1.placeholder(tf.float32, shape=[1, 64, 64, 6], name="warm_input_ph")
+        arch_code_ph = tf.compat.v1.placeholder(tf.int32, shape=[11], name="warm_arch_code_ph")
+        is_training_ph = tf.compat.v1.placeholder_with_default(tf.constant(False, dtype=tf.bool), shape=[], name="warm_is_training_ph")
+        model = MultiScaleResNetSupernetV2(
+            input_ph=input_ph,
+            arch_code_ph=arch_code_ph,
+            is_training_ph=is_training_ph,
+            num_out=pred_channels,
+            init_neurons=32,
+            expansion_factor=2.0,
+        )
+        model.build()
+        source_vars = tf.compat.v1.global_variables()
+        source_map: Dict[str, str] = {}
+        for var in source_vars:
+            normalized = _normalize_supernet_var_name(var.op.name)
+            source_map[normalized] = var.op.name
+        return source_map
+
+
+def _build_warmstart_var_map(
+    scope_name: str,
+    scope_global_vars: List[tf.Variable],
+    source_name_map: Optional[Dict[str, str]] = None,
+) -> Dict[str, tf.Variable]:
     warmstart_map: Dict[str, tf.Variable] = {}
     for var in scope_global_vars:
         var_name = var.op.name
         if "/Adam" in var_name:
             continue
+        if var_name in (f"{scope_name}/beta1_power", f"{scope_name}/beta2_power"):
+            continue
         warm_name = var_name[len(scope_name) + 1 :]
+        if source_name_map is not None:
+            normalized = _normalize_supernet_var_name(warm_name)
+            source_name = source_name_map.get(normalized)
+            if source_name is None:
+                raise KeyError(f"missing source mapping for retrain var '{warm_name}'")
+            warm_name = source_name
         warmstart_map[warm_name] = var
     return warmstart_map
 
@@ -79,13 +127,13 @@ def _build_single_model_graph(
     pred_channels: int,
     weight_decay: float,
     grad_clip_global_norm: float,
+    supernet_source_name_map: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     with tf.compat.v1.variable_scope(scope_name):
-        arch_code_ph = tf.constant(arch_code, dtype=tf.int32, name="FixedArchCode")
-        model = MultiScaleResNetSupernetV2(
+        model = FixedArchModelV2(
             input_ph=input_ph,
-            arch_code_ph=arch_code_ph,
             is_training_ph=is_training_ph,
+            arch_code=arch_code,
             num_out=pred_channels,
             init_neurons=32,
             expansion_factor=2.0,
@@ -123,7 +171,11 @@ def _build_single_model_graph(
         epe_tensor = build_epe_metric(pred_tensor=pred_accum, label_ph=label_ph, num_out=flow_channels)
         scope_global_vars = [v for v in tf.compat.v1.global_variables() if v.name.startswith(f"{scope_name}/")]
         saver = tf.compat.v1.train.Saver(var_list=scope_global_vars, max_to_keep=3)
-        warmstart_map = _build_warmstart_var_map(scope_name=scope_name, scope_global_vars=scope_global_vars)
+        warmstart_map = _build_warmstart_var_map(
+            scope_name=scope_name,
+            scope_global_vars=scope_global_vars,
+            source_name_map=supernet_source_name_map,
+        )
         warmstart_saver = tf.compat.v1.train.Saver(var_list=warmstart_map)
 
     return {
@@ -211,6 +263,7 @@ def train_retrain_v2(config: Dict[str, Any]) -> int:
     input_w = int(data_cfg.get("input_width", 480))
     flow_channels = int(data_cfg.get("flow_channels", 2))
     pred_channels = flow_channels * 2
+    supernet_source_name_map = _build_supernet_source_name_map(pred_channels=pred_channels)
 
     train_provider = _build_provider(config=config, split="train", seed_offset=0, provider_mode="train")
     val_provider = _build_provider(config=config, split="val", seed_offset=999, provider_mode="eval")
@@ -241,6 +294,7 @@ def train_retrain_v2(config: Dict[str, Any]) -> int:
             pred_channels=pred_channels,
             weight_decay=weight_decay,
             grad_clip_global_norm=grad_clip,
+            supernet_source_name_map=supernet_source_name_map,
         )
 
     model_dirs: Dict[str, Path] = {}

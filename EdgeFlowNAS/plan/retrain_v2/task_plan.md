@@ -77,9 +77,10 @@ Phase 4
 
 - [x] Smoke test config parsing and graph construction
 - [x] Verify checkpoint import from V2 supernet
+- [x] Produce exact HPC commands for the full retrain run
+- [x] Replace constant-arch supernet retrain graph with pure fixed-subnet graph
 - [ ] Verify stage transition `FC2 -> FT3D`
 - [ ] Verify resume / early stopping state
-- [ ] Produce exact HPC commands for the full retrain run
 
 ## Open Technical Questions
 
@@ -92,6 +93,29 @@ Phase 4
    - stage 2 FT3D val EPE patience
    - or checkpoint on external Sintel proxy only
 3. Whether FT3D validation should remain `TEST`-root based or move to a custom held-out subset once the first run is stable.
+
+## Current Execution Status
+
+- `FC2` retrain command is now runnable on HPC with the confirmed supernet checkpoint path:
+  - `outputs/supernet/edgeflownas_supernet_v2_fc2_172x224_run1_balance/checkpoints/supernet_best.ckpt`
+- A real warm-start restore bug was found during first HPC launch:
+  - TensorFlow tried to restore Adam slot tensors from the supernet checkpoint
+  - fix committed by excluding optimizer-slot variables from `warmstart_saver`
+- `FT3D` flow root was confirmed on HPC under:
+  - `FlyingThings3D/optical_flow`
+- `FT3D` RGB frames were initially missing on HPC; after download they were confirmed under:
+  - `FlyingThings3D/frames_cleanpass`
+- The retrain pipeline therefore now has a concrete stage-2 data contract:
+  - frames root: `FlyingThings3D/frames_cleanpass`
+  - flow root: `FlyingThings3D/optical_flow`
+- The retrain graph has now been cleaned up from constant-arch supernet execution to true fixed-subnet execution:
+  - train graph: `FixedArchModelV2`
+  - eval graph: `FixedArchModelV2`
+  - warm-start: explicit normalized variable-name mapping from fixed subnet to supernet checkpoint
+- What remains unverified is not configuration anymore, but runtime behavior:
+  - actual `FC2 -> FT3D` handoff
+  - actual `resume`
+  - actual early stopping behavior on HPC
 
 ## Non-Goals
 
