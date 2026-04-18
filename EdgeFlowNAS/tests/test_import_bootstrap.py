@@ -42,6 +42,16 @@ class TestImportBootstrap(unittest.TestCase):
         finally:
             sys.path[:] = before
 
+    def test_resolve_project_paths_from_wrapper_anchor_stays_at_mcu_root(self) -> None:
+        """Wrapper anchors under EdgeFlowNAS should resolve MCUFlowNet as the shared root."""
+        from efnas.utils.import_bootstrap import resolve_project_paths
+
+        anchor = Path("/tmp/test/MCUFlowNet/EdgeFlowNAS/wrappers/run_retrain_v2_sintel_test.py")
+        paths = resolve_project_paths(anchor_file=anchor)
+        self.assertEqual(paths["mcu_root"].parts[-2:], ("test", "MCUFlowNet"))
+        self.assertEqual(paths["edgeflownet_root"].parts[-3:], ("test", "MCUFlowNet", "EdgeFlowNet"))
+        self.assertEqual(paths["edgeflownas_root"].parts[-3:], ("test", "MCUFlowNet", "EdgeFlowNAS"))
+
 
 if __name__ == "__main__":
     unittest.main()

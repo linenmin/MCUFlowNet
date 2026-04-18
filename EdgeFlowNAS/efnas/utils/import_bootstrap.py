@@ -9,8 +9,18 @@ def resolve_project_paths(anchor_file: Optional[Union[str, Path]] = None) -> Dic
     """Resolve common project paths from an anchor file inside EdgeFlowNAS."""
     anchor = Path(anchor_file) if anchor_file is not None else Path(__file__)
     anchor = anchor.resolve()
-
-    mcu_root = anchor.parents[3]
+    search_nodes = [anchor] + list(anchor.parents)
+    edgeflownas_root = None
+    for node in search_nodes:
+        if node.name == "EdgeFlowNAS":
+            edgeflownas_root = node
+            break
+    if edgeflownas_root is None:
+        # Fallback for unexpected layouts; preserve the previous parent-count behavior.
+        mcu_root = anchor.parents[3]
+        edgeflownas_root = mcu_root / "EdgeFlowNAS"
+    else:
+        mcu_root = edgeflownas_root.parent
     edgeflownas_root = mcu_root / "EdgeFlowNAS"
     edgeflownet_root = mcu_root / "EdgeFlowNet"
     return {
