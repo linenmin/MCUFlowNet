@@ -10,6 +10,11 @@ from efnas.engine.eval_step import accumulate_predictions
 from efnas.network.fixed_arch_models_v2 import FixedArchModelV2
 
 
+def _ensure_graph_mode() -> None:
+    if tf.executing_eagerly():
+        tf.compat.v1.disable_eager_execution()
+
+
 def _load_checkpoint_meta(model_dir: Path, ckpt_name: str = "best") -> Dict[str, Any]:
     meta_path = model_dir / "checkpoints" / f"{ckpt_name}.ckpt.meta.json"
     if not meta_path.exists() and ckpt_name == "best":
@@ -25,6 +30,7 @@ def setup_retrain_v2_eval_model(
     patch_size: Tuple[int, int],
     ckpt_name: str = "best",
 ):
+    _ensure_graph_mode()
     meta_data = _load_checkpoint_meta(checkpoint_dir, ckpt_name)
     arch_code = meta_data["arch_code"]
     arch_list = [int(x) for x in arch_code] if not isinstance(arch_code, str) else [int(x) for x in arch_code.split(",") if str(x).strip()]
