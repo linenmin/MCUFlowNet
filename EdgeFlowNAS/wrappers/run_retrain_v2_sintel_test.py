@@ -51,6 +51,16 @@ def _strip_sintel_prefix(path_str: str) -> str:
     return path_str[len(prefix) :] if path_str.startswith(prefix) else path_str
 
 
+def _extract_processor_mean_epe(processor) -> float | None:
+    mean_epe = getattr(processor, "MeanEPE", None)
+    if mean_epe is not None:
+        return float(mean_epe)
+    error_epes = getattr(processor, "errorEPEs", None)
+    if not error_epes:
+        return None
+    return float(np.concatenate(error_epes).mean())
+
+
 def main() -> int:
     from EdgeFlowNet.code.misc.processor import FlowPostProcessor
     from EdgeFlowNet.code.misc.utils import get_sintel_batch, read_sintel_list
@@ -97,7 +107,7 @@ def main() -> int:
                 "arch_code": ",".join(str(v) for v in meta_data["arch_code"]),
                 "checkpoint_path": meta_data["checkpoint_path"],
                 "fc2_or_stage_metric": meta_data.get("metric", ""),
-                "sintel_epe": getattr(processor, "MeanEPE", None),
+                "sintel_epe": _extract_processor_mean_epe(processor),
             }
         )
 
