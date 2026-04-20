@@ -17,6 +17,11 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from efnas.engine.retrain_v2_evaluator import preprocess_eval_batch, setup_retrain_v2_eval_model
+from efnas.engine.retrain_v2_eval_scaling import (
+    _extract_processor_mean_epe,
+    _resolve_prediction_flow_scale,
+    _scale_prediction_for_sintel_eval,
+)
 from efnas.utils.import_bootstrap import bootstrap_project_paths, resolve_project_paths
 
 bootstrap_project_paths(anchor_file=__file__)
@@ -51,16 +56,6 @@ def _strip_sintel_prefix(path_str: str) -> str:
     return path_str[len(prefix) :] if path_str.startswith(prefix) else path_str
 
 
-def _extract_processor_mean_epe(processor) -> float | None:
-    mean_epe = getattr(processor, "MeanEPE", None)
-    if mean_epe is not None:
-        return float(mean_epe)
-    error_epes = getattr(processor, "errorEPEs", None)
-    if not error_epes:
-        return None
-    return float(np.concatenate(error_epes).mean())
-
-
 def main() -> int:
     from EdgeFlowNet.code.misc.processor import FlowPostProcessor
     from EdgeFlowNet.code.misc.utils import get_sintel_batch, read_sintel_list
@@ -92,6 +87,7 @@ def main() -> int:
     rows = []
     for model_dir in model_dirs:
         sess, input_ph, preds_tensor, meta_data = setup_retrain_v2_eval_model(model_dir, tuple(patch_size), ckpt_name=args.ckpt_name)
+        prediction_flow_scale = _resolve_prediction_flow_scale(model_dir, meta_data)
         processor = FlowPostProcessor("full", is_multiscale=True)
         for idx in tqdm(range(len(img1_list)), desc=f"Evaluating {model_dir.name}", unit="sample"):
             input_comb, gt_flow = get_sintel_batch(img1_list[idx], img2_list[idx], flo_list[idx], patch_size)
@@ -99,7 +95,8 @@ def main() -> int:
                 continue
             input_batch = preprocess_eval_batch(np.expand_dims(input_comb, axis=0))
             preds_results = sess.run(preds_tensor, feed_dict={input_ph: input_batch})
-            processor.update(label=gt_flow, prediction=preds_results[:, :, :, :2], Args=args)
+            flow_prediction = _scale_prediction_for_sintel_eval(preds_results[:, :, :, :2], prediction_flow_scale)
+            processor.update(label=gt_flow, prediction=flow_prediction, Args=args)
         sess.close()
         rows.append(
             {

@@ -79,6 +79,7 @@ Phase 4
 - [x] Verify checkpoint import from V2 supernet
 - [x] Produce exact HPC commands for the full retrain run
 - [x] Replace constant-arch supernet retrain graph with pure fixed-subnet graph
+- [x] Correct external `FT3D -> Sintel` evaluation scale
 - [ ] Verify stage transition `FC2 -> FT3D`
 - [ ] Verify resume / early stopping state
 
@@ -112,6 +113,9 @@ Phase 4
   - train graph: `FixedArchModelV2`
   - eval graph: `FixedArchModelV2`
   - warm-start: explicit normalized variable-name mapping from fixed subnet to supernet checkpoint
+- The external Sintel evaluation path has now been corrected for `FT3D` checkpoints:
+  - `FT3D` predictions are multiplied back by the configured flow scale before Sintel EPE is computed
+  - `FC2` predictions remain unchanged
 - What remains unverified is not configuration anymore, but runtime behavior:
   - actual `FC2 -> FT3D` handoff
   - actual `resume`

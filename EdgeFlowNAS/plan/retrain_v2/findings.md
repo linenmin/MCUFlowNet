@@ -197,6 +197,37 @@ The pipeline now has concrete command-level contracts for:
 
 The remaining uncertainty is execution validation, not command definition.
 
+### FT3D External Sintel Evaluation Needs Inverse Flow Scaling
+
+The retrain pipeline currently uses different target scales between `FC2` and `FT3D`:
+
+- `FC2`: raw flow is clipped directly
+- `FT3D`: flow is divided by `12.5` before clipping and supervision
+
+This `12.5` factor is not a new invention in the retrain code; it is inherited from the original `EdgeFlowNet` FT3D batching path.
+
+Implications:
+
+- internal `FT3D` stage metrics are still self-consistent because train/val share the same scaled label space
+- external Sintel evaluation is *not* self-consistent unless predictions are multiplied back by `12.5` before EPE is measured against raw Sintel ground truth
+
+This explains the earlier confusing pattern:
+
+- stage metric improved
+- external Sintel EPE appeared to jump to about `10.6`
+
+That number should not be over-interpreted as real model collapse unless the prediction scale has first been restored.
+
+Resolution now applied:
+
+- `wrappers/run_retrain_v2_sintel_test.py` rescales predictions back to raw-flow units for `FT3D` checkpoints before computing Sintel EPE
+- `FC2` checkpoints remain on identity scale
+
+Therefore:
+
+- old pre-fix `FT3D` Sintel CSVs are not reliable for scientific comparison
+- post-fix Sintel CSVs are the ones that should be used to judge whether `FT3D` continuation is helping or hurting cross-dataset generalization
+
 ## Preliminary Design Judgement
 
 The most plausible low-risk route is:

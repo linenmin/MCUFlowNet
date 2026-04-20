@@ -138,3 +138,32 @@
 - Local checkpoint-restore validation now succeeds for the fixed-subnet graph.
 - Local Vela comparison is still blocked by missing `vela` executable in the Windows environment.
 - HPC commands for `FC2`, `FT3D`, and `Sintel test` remain CLI-compatible; only the internal graph and warm-start path changed.
+
+## 2026-04-20
+
+### FT3D To Sintel Evaluation Contract Fixed
+
+- Investigated why early `FT3D` Sintel evaluations jumped to roughly `10.6` EPE while stage metrics were improving.
+- Confirmed this was not immediately interpretable as real generalization collapse.
+- Root cause:
+  - `FT3D` training labels are divided by `12.5` in the retrain data loader
+  - the external Sintel test wrapper was comparing predictions against raw Sintel flow without multiplying predictions back to the original flow scale
+- Added a dedicated evaluation-scaling helper:
+  - `efnas/engine/retrain_v2_eval_scaling.py`
+- Updated:
+  - `wrappers/run_retrain_v2_sintel_test.py`
+  so `FT3D` checkpoints automatically restore prediction scale before Sintel EPE is computed
+- `FC2` evaluation behavior remains unchanged
+
+### Verification Completed
+
+- Added regression coverage in:
+  - `tests/test_retrain_v2_sintel_test.py`
+- Verified locally:
+  - `python -m unittest tests.test_retrain_v2_sintel_test`
+  - `python -m py_compile efnas/engine/retrain_v2_eval_scaling.py wrappers/run_retrain_v2_sintel_test.py`
+
+### Practical Implication
+
+- Previously observed `FT3D`-stage Sintel CSV values before this fix should not be treated as trustworthy cross-stage comparison points.
+- Re-running the same Sintel test command on HPC is sufficient; no CLI change is required because the correction is internal to the wrapper.
