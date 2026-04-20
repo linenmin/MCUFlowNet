@@ -1,11 +1,12 @@
 """Unit tests for FT3D dataset scanning/provider behavior."""
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
 
 from efnas.data.dataloader_builder import build_ft3d_provider
-from efnas.data.ft3d_dataset import resolve_ft3d_samples_from_folder
+from efnas.data.ft3d_dataset import _build_ft3d_triplet, resolve_ft3d_samples_from_folder
 
 
 class TestFT3DDataset(unittest.TestCase):
@@ -85,6 +86,39 @@ class TestFT3DDataset(unittest.TestCase):
             provider = build_ft3d_provider(config=config, split="train", seed_offset=0, provider_mode="train")
             self.assertEqual(len(provider), 1)
             self.assertIn("TRAIN", provider.source_dir)
+
+    def test_build_ft3d_triplet_accepts_relative_sample_with_absolute_roots(self) -> None:
+        """Runtime provider paths may be relative while cached roots are absolute."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            work_root = root / "EdgeFlowNAS"
+            frames_root = root / "Datasets" / "FlyingThings3D" / "frames_cleanpass" / "TRAIN"
+            flow_root = root / "Datasets" / "FlyingThings3D" / "optical_flow" / "TRAIN"
+            self._touch(frames_root / "A" / "0001" / "left" / "0006.png")
+            self._touch(frames_root / "A" / "0001" / "left" / "0007.png")
+            self._touch(
+                flow_root
+                / "A"
+                / "0001"
+                / "into_future"
+                / "left"
+                / "OpticalFlowIntoFuture_0006_L.pfm"
+            )
+            work_root.mkdir(parents=True, exist_ok=True)
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(work_root)
+                img0, img1, flow = _build_ft3d_triplet(
+                    img0_path="../Datasets/FlyingThings3D/frames_cleanpass/TRAIN/A/0001/left/0006.png",
+                    frames_root=str(frames_root),
+                    flow_root=str(flow_root),
+                )
+            finally:
+                os.chdir(old_cwd)
+
+            self.assertTrue(img0.endswith("0006.png"))
+            self.assertTrue(img1.endswith("0007.png"))
+            self.assertTrue(flow.endswith("OpticalFlowIntoFuture_0006_L.pfm"))
 
 
 if __name__ == "__main__":

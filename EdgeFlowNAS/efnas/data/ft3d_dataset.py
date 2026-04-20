@@ -49,15 +49,17 @@ def _read_flow(path_like: str) -> np.ndarray:
 
 
 def _build_ft3d_triplet(img0_path: str, frames_root: Optional[str] = None, flow_root: Optional[str] = None) -> Tuple[str, str, str]:
-    img0 = Path(img0_path)
+    img0 = Path(img0_path).resolve()
     next_name = f"{int(img0.stem) + 1:04d}.png"
-    img1 = str(img0.with_name(next_name))
+    img1 = str(img0.with_name(next_name).resolve())
     if frames_root and flow_root:
-        relative = img0.relative_to(Path(frames_root))
+        frames_root_path = Path(frames_root).resolve()
+        flow_root_path = Path(flow_root).resolve()
+        relative = img0.relative_to(frames_root_path)
         if len(relative.parts) < 3 or relative.parts[-2] != "left":
             raise ValueError(f"unexpected FT3D frame layout: {img0}")
         flow_relative = Path(*relative.parts[:-2]) / "into_future" / "left" / f"OpticalFlowIntoFuture_{img0.stem}_L.pfm"
-        flow_path = str(Path(flow_root) / flow_relative)
+        flow_path = str((flow_root_path / flow_relative).resolve())
         return str(img0), img1, flow_path
     raise ValueError("frames_root and flow_root are required")
 
