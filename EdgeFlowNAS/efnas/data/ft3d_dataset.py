@@ -1,10 +1,9 @@
 """FT3D dataset loading and batch sampling with folder scanning."""
 
 import os
-import random
 import re
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 try:
     import cv2
@@ -12,6 +11,9 @@ except Exception:
     cv2 = None
 
 import numpy as np
+
+
+FT3DSample = Tuple[str, str, str]
 
 
 def _resolve_path(base_path: Optional[str], raw_path: str) -> Path:
@@ -48,20 +50,170 @@ def _read_flow(path_like: str) -> np.ndarray:
     raise ValueError(f"unsupported FT3D flow format: {path_like}")
 
 
-def _build_ft3d_triplet(img0_path: str, frames_root: Optional[str] = None, flow_root: Optional[str] = None) -> Tuple[str, str, str]:
+def _build_ft3d_triplet(
+    img0_path: str,
+    frames_root: Optional[str] = None,
+    flow_root: Optional[str] = None,
+    direction: str = "into_future",
+) -> FT3DSample:
     img0 = Path(img0_path).resolve()
-    next_name = f"{int(img0.stem) + 1:04d}.png"
-    img1 = str(img0.with_name(next_name).resolve())
+    direction_text = str(direction).strip().lower()
+    if direction_text not in ("into_future", "into_past"):
+        raise ValueError(f"unsupported FT3D direction: {direction}")
     if frames_root and flow_root:
         frames_root_path = Path(frames_root).resolve()
         flow_root_path = Path(flow_root).resolve()
         relative = img0.relative_to(frames_root_path)
         if len(relative.parts) < 3 or relative.parts[-2] != "left":
             raise ValueError(f"unexpected FT3D frame layout: {img0}")
-        flow_relative = Path(*relative.parts[:-2]) / "into_future" / "left" / f"OpticalFlowIntoFuture_{img0.stem}_L.pfm"
+        frame_index = int(img0.stem)
+        if direction_text == "into_future":
+            img1_name = f"{frame_index + 1:04d}.png"
+            flow_name = f"OpticalFlowIntoFuture_{img0.stem}_L.pfm"
+        else:
+            img1_name = f"{frame_index - 1:04d}.png"
+            flow_name = f"OpticalFlowIntoPast_{img0.stem}_L.pfm"
+        img1 = str(img0.with_name(img1_name).resolve())
+        flow_relative = Path(*relative.parts[:-2]) / direction_text / "left" / flow_name
         flow_path = str((flow_root_path / flow_relative).resolve())
         return str(img0), img1, flow_path
     raise ValueError("frames_root and flow_root are required")
+
+
+def _rand_uniform(rng: Any, low: float, high: float) -> float:
+    if hasattr(rng, "uniform"):
+        return float(rng.uniform(low, high))
+    return float(np.random.uniform(low, high))
+
+
+def _rand_int(rng: Any, low: int, high: int) -> int:
+    if high < low:
+        raise ValueError(f"invalid randint bounds: low={low} high={high}")
+    if hasattr(rng, "randint"):
+        try:
+            return int(rng.randint(low, high + 1))
+        except TypeError:
+            return int(rng.randint(low, high))
+    return int(np.random.randint(low, high + 1))
+
+
+def _maybe_resize_triplet(img0, img1, flow, scale_x: float, scale_y: float):
+    if cv2 is None:
+        raise RuntimeError("OpenCV not available")
+    img0 = cv2.resize(img0, None, fx=scale_x, fy=scale_y, interpolation=cv2.INTER_LINEAR)
+    img1 = cv2.resize(img1, None, fx=scale_x, fy=scale_y, interpolation=cv2.INTER_LINEAR)
+    flow = cv2.resize(flow, None, fx=scale_x, fy=scale_y, interpolation=cv2.INTER_LINEAR)
+    flow = flow * np.asarray([scale_x, scale_y], dtype=np.float32)
+    return img0, img1, flow
+
+
+def _apply_photometric_augment(img0, img1, rng: Any, aug_cfg: Optional[Dict[str, Any]]):
+    cfg = aug_cfg or {}
+    if not bool(cfg.get("enabled", False)):
+        return img0, img1
+
+    brightness = float(cfg.get("brightness", 0.4))
+    contrast = float(cfg.get("contrast", 0.4))
+    saturation = float(cfg.get("saturation", 0.4))
+    asym_prob = float(cfg.get("asymmetric_color_aug_prob", 0.2))
+    apply_prob = float(cfg.get("photometric_aug_prob", 1.0))
+    if _rand_uniform(rng, 0.0, 1.0) >= apply_prob:
+        return img0, img1
+
+    def _augment_one(image: np.ndarray) -> np.ndarray:
+        out = image.astype(np.float32).copy()
+        if brightness > 0:
+            out *= _rand_uniform(rng, 1.0 - brightness, 1.0 + brightness)
+        if contrast > 0:
+            mean = np.mean(out, axis=(0, 1), keepdims=True)
+            out = (out - mean) * _rand_uniform(rng, 1.0 - contrast, 1.0 + contrast) + mean
+        if saturation > 0:
+            gray = np.mean(out, axis=2, keepdims=True)
+            out = gray + (out - gray) * _rand_uniform(rng, 1.0 - saturation, 1.0 + saturation)
+        return np.clip(out, 0.0, 255.0).astype(np.float32)
+
+    if _rand_uniform(rng, 0.0, 1.0) < asym_prob:
+        return _augment_one(img0), _augment_one(img1)
+
+    bright = _rand_uniform(rng, 1.0 - brightness, 1.0 + brightness) if brightness > 0 else 1.0
+    cont = _rand_uniform(rng, 1.0 - contrast, 1.0 + contrast) if contrast > 0 else 1.0
+    sat = _rand_uniform(rng, 1.0 - saturation, 1.0 + saturation) if saturation > 0 else 1.0
+
+    def _apply_shared(image: np.ndarray) -> np.ndarray:
+        out = image.astype(np.float32).copy() * bright
+        mean = np.mean(out, axis=(0, 1), keepdims=True)
+        out = (out - mean) * cont + mean
+        gray = np.mean(out, axis=2, keepdims=True)
+        out = gray + (out - gray) * sat
+        return np.clip(out, 0.0, 255.0).astype(np.float32)
+
+    return _apply_shared(img0), _apply_shared(img1)
+
+
+def _apply_eraser_augment(img0, img1, rng: Any, aug_cfg: Optional[Dict[str, Any]]):
+    cfg = aug_cfg or {}
+    if not bool(cfg.get("enabled", False)):
+        return img0, img1
+    eraser_prob = float(cfg.get("eraser_aug_prob", 0.5))
+    if _rand_uniform(rng, 0.0, 1.0) >= eraser_prob:
+        return img0, img1
+
+    min_size = int(cfg.get("eraser_min_size", 50))
+    max_size = int(cfg.get("eraser_max_size", 100))
+    h, w = img1.shape[:2]
+    mean_color = np.mean(img1.reshape(-1, 3), axis=0)
+    count = _rand_int(rng, 1, 2)
+    out = img1.copy()
+    for _ in range(count):
+        x0 = _rand_int(rng, 0, max(0, w - 1))
+        y0 = _rand_int(rng, 0, max(0, h - 1))
+        dx = _rand_int(rng, min_size, max_size)
+        dy = _rand_int(rng, min_size, max_size)
+        out[y0 : min(h, y0 + dy), x0 : min(w, x0 + dx), :] = mean_color
+    return img0, out.astype(np.float32)
+
+
+def _apply_spatial_augment(
+    img0,
+    img1,
+    flow,
+    crop_h: int,
+    crop_w: int,
+    rng: Any,
+    aug_cfg: Optional[Dict[str, Any]],
+):
+    cfg = aug_cfg or {}
+    if not bool(cfg.get("enabled", False)):
+        return _random_crop_triplet(img0, img1, flow, crop_h, crop_w, rng)
+
+    h, w = img0.shape[:2]
+    min_scale = max((crop_h + 8) / float(h), (crop_w + 8) / float(w))
+    scale = 2 ** _rand_uniform(rng, float(cfg.get("min_scale", -0.4)), float(cfg.get("max_scale", 0.8)))
+    scale_x = scale
+    scale_y = scale
+    stretch_prob = float(cfg.get("stretch_prob", 0.8))
+    max_stretch = float(cfg.get("max_stretch", 0.2))
+    if _rand_uniform(rng, 0.0, 1.0) < stretch_prob:
+        scale_x *= 2 ** _rand_uniform(rng, -max_stretch, max_stretch)
+        scale_y *= 2 ** _rand_uniform(rng, -max_stretch, max_stretch)
+
+    scale_x = max(scale_x, min_scale)
+    scale_y = max(scale_y, min_scale)
+    spatial_aug_prob = float(cfg.get("spatial_aug_prob", 0.8))
+    if _rand_uniform(rng, 0.0, 1.0) < spatial_aug_prob:
+        img0, img1, flow = _maybe_resize_triplet(img0, img1, flow, scale_x=scale_x, scale_y=scale_y)
+
+    if bool(cfg.get("do_flip", True)):
+        if _rand_uniform(rng, 0.0, 1.0) < float(cfg.get("h_flip_prob", 0.5)):
+            img0 = img0[:, ::-1]
+            img1 = img1[:, ::-1]
+            flow = flow[:, ::-1] * np.asarray([-1.0, 1.0], dtype=np.float32)
+        if _rand_uniform(rng, 0.0, 1.0) < float(cfg.get("v_flip_prob", 0.1)):
+            img0 = img0[::-1, :]
+            img1 = img1[::-1, :]
+            flow = flow[::-1, :] * np.asarray([1.0, -1.0], dtype=np.float32)
+
+    return _random_crop_triplet(img0, img1, flow, crop_h, crop_w, rng)
 
 
 def resolve_ft3d_samples_from_folder(
@@ -70,7 +222,8 @@ def resolve_ft3d_samples_from_folder(
     split_dir: str,
     frames_subdir: str = "",
     flow_subdir: str = "",
-) -> List[str]:
+    include_directions: Sequence[str] = ("into_future",),
+) -> List[FT3DSample]:
     frames_split_root = _resolve_path(base_path=frames_base_path, raw_path=str(Path(frames_subdir) / split_dir) if frames_subdir else split_dir)
     flow_split_root = _resolve_path(base_path=flow_base_path, raw_path=str(Path(flow_subdir) / split_dir) if flow_subdir else split_dir)
     if not frames_split_root.exists() or not frames_split_root.is_dir():
@@ -78,23 +231,33 @@ def resolve_ft3d_samples_from_folder(
     if not flow_split_root.exists() or not flow_split_root.is_dir():
         return []
 
-    samples: List[str] = []
+    directions = [str(item).strip().lower() for item in include_directions if str(item).strip()]
+    if not directions:
+        directions = ["into_future"]
+
+    samples: List[FT3DSample] = []
     for img0_path in sorted(frames_split_root.rglob("left/*.png")):
-        try:
-            img0, img1, flow = _build_ft3d_triplet(str(img0_path), frames_root=str(frames_split_root), flow_root=str(flow_split_root))
-        except Exception:
-            continue
-        if Path(img1).exists() and Path(flow).exists():
-            samples.append(img0)
+        for direction in directions:
+            try:
+                img0, img1, flow = _build_ft3d_triplet(
+                    str(img0_path),
+                    frames_root=str(frames_split_root),
+                    flow_root=str(flow_split_root),
+                    direction=direction,
+                )
+            except Exception:
+                continue
+            if Path(img1).exists() and Path(flow).exists():
+                samples.append((img0, img1, flow))
     return samples
 
 
-def _random_crop_triplet(img0, img1, flow, crop_h: int, crop_w: int, rng: random.Random):
+def _random_crop_triplet(img0, img1, flow, crop_h: int, crop_w: int, rng: Any):
     h, w = img0.shape[0], img0.shape[1]
     if h < crop_h or w < crop_w:
         raise ValueError(f"input too small for crop: {h}x{w} vs {crop_h}x{crop_w}")
-    top = rng.randint(0, h - crop_h)
-    left = rng.randint(0, w - crop_w)
+    top = _rand_int(rng, 0, h - crop_h)
+    left = _rand_int(rng, 0, w - crop_w)
     return (
         img0[top : top + crop_h, left : left + crop_w, :],
         img1[top : top + crop_h, left : left + crop_w, :],
@@ -120,27 +283,25 @@ class FT3DBatchProvider:
 
     def __init__(
         self,
-        samples: List[str],
+        samples: List[FT3DSample],
         crop_h: int,
         crop_w: int,
-        frames_root: str,
-        flow_root: str,
         seed: int = 42,
         source_dir: str = "",
         sampling_mode: str = "random",
         crop_mode: str = "random",
         flow_divisor: float = 12.5,
+        augment_cfg: Optional[Dict[str, Any]] = None,
     ):
         self.samples = list(samples)
         self.crop_h = int(crop_h)
         self.crop_w = int(crop_w)
-        self.frames_root = str(frames_root)
-        self.flow_root = str(flow_root)
         self.source_dir = str(source_dir)
         self.flow_divisor = float(flow_divisor)
-        self.rng = random.Random(int(seed))
+        self.rng = np.random.RandomState(int(seed))
         self.sampling_mode = str(sampling_mode).strip().lower()
         self.crop_mode = str(crop_mode).strip().lower()
+        self.augment_cfg = dict(augment_cfg or {})
         if self.sampling_mode not in ("random", "sequential", "shuffle_no_replacement"):
             raise ValueError(f"unsupported sampling_mode: {sampling_mode}")
         if self.crop_mode not in ("random", "center"):
@@ -167,9 +328,9 @@ class FT3DBatchProvider:
             self.rng.shuffle(self._order)
         self._cursor = 0
 
-    def _next_sample_path(self) -> str:
+    def _next_sample_path(self) -> FT3DSample:
         if self.sampling_mode == "random":
-            return self.samples[self.rng.randint(0, len(self.samples) - 1)]
+            return self.samples[_rand_int(self.rng, 0, len(self.samples) - 1)]
         if self.sampling_mode == "shuffle_no_replacement":
             if self._cursor >= len(self._order):
                 self._cursor = 0
@@ -191,12 +352,7 @@ class FT3DBatchProvider:
 
         retry_limit = max(64, len(self.samples))
         for _ in range(retry_limit):
-            img0_path = self._next_sample_path()
-            img0_path, img1_path, flow_path = _build_ft3d_triplet(
-                img0_path=img0_path,
-                frames_root=self.frames_root,
-                flow_root=self.flow_root,
-            )
+            img0_path, img1_path, flow_path = self._next_sample_path()
             if not os.path.exists(img0_path) or not os.path.exists(img1_path) or not os.path.exists(flow_path):
                 continue
             img0 = cv2.imread(img0_path, cv2.IMREAD_COLOR)
@@ -212,7 +368,17 @@ class FT3DBatchProvider:
             flow = np.clip(flow / self.flow_divisor, a_min=-50.0, a_max=50.0).astype(np.float32)
             try:
                 if self.crop_mode == "random":
-                    return _random_crop_triplet(img0, img1, flow, self.crop_h, self.crop_w, self.rng)
+                    img0, img1 = _apply_photometric_augment(img0, img1, self.rng, self.augment_cfg)
+                    img0, img1 = _apply_eraser_augment(img0, img1, self.rng, self.augment_cfg)
+                    return _apply_spatial_augment(
+                        img0=img0,
+                        img1=img1,
+                        flow=flow,
+                        crop_h=self.crop_h,
+                        crop_w=self.crop_w,
+                        rng=self.rng,
+                        aug_cfg=self.augment_cfg,
+                    )
                 return _center_crop_triplet(img0, img1, flow, self.crop_h, self.crop_w)
             except Exception:
                 continue

@@ -22,13 +22,34 @@ train:
 data:
   dataset: "FT3D"
   base_path: "../Datasets"
-  ft3d_frames_base_path: "../Datasets/frames_cleanpass"
+  ft3d_frames_base_paths:
+    - "../Datasets/FlyingThings3D/frames_cleanpass"
+    - "../Datasets/FlyingThings3D/frames_finalpass"
   ft3d_flow_base_path: "../Datasets/optical_flow"
   train_dir: "TRAIN"
   val_dir: "TEST"
   ft3d_frames_subdir: ""
   ft3d_flow_subdir: ""
+  ft3d_directions: ["into_future", "into_past"]
   ft3d_flow_divisor: 12.5
+  ft3d_train_augment:
+    enabled: true
+    min_scale: -0.4
+    max_scale: 0.8
+    spatial_aug_prob: 0.8
+    stretch_prob: 0.8
+    max_stretch: 0.2
+    do_flip: true
+    h_flip_prob: 0.5
+    v_flip_prob: 0.1
+    photometric_aug_prob: 1.0
+    brightness: 0.4
+    contrast: 0.4
+    saturation: 0.4
+    asymmetric_color_aug_prob: 0.2
+    eraser_aug_prob: 0.5
+    eraser_min_size: 50
+    eraser_max_size: 100
   input_height: 480
   input_width: 640
   flow_channels: 2

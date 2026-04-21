@@ -60,6 +60,7 @@ def main() -> int:
         config.setdefault("data", {})["base_path"] = args.base_path
     if args.frames_base_path is not None:
         config.setdefault("data", {})["ft3d_frames_base_path"] = args.frames_base_path
+        config.setdefault("data", {})["ft3d_frames_base_paths"] = [args.frames_base_path]
     if args.flow_base_path is not None:
         config.setdefault("data", {})["ft3d_flow_base_path"] = args.flow_base_path
     if args.train_dir is not None:
