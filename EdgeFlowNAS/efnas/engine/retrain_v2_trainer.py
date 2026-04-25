@@ -15,7 +15,8 @@ from efnas.engine.eval_step import accumulate_predictions, build_epe_metric
 from efnas.engine.retrain_v2_sintel_runtime import (
     _append_sintel_metrics,
     _resolve_sintel_eval_config,
-    evaluate_model_graph_on_sintel,
+    _restore_retrain_histories,
+    evaluate_checkpoint_dir_on_sintel,
 )
 from efnas.engine.standalone_trainer import (
     _apply_gpu_device_setting,
@@ -272,7 +273,6 @@ def train_retrain_v2(config: Dict[str, Any]) -> int:
     supernet_source_name_map = _build_supernet_source_name_map(pred_channels=pred_channels)
     sintel_eval_cfg = _resolve_sintel_eval_config(config)
     sintel_ckpt_name = str(sintel_eval_cfg.get("ckpt_name", "sintel_best")).strip() if sintel_eval_cfg is not None else "sintel_best"
-    prediction_flow_scale = float(data_cfg.get("ft3d_flow_divisor", 1.0)) if str(data_cfg.get("dataset", "")).strip().upper() == "FT3D" else 1.0
 
     train_provider = _build_provider(config=config, split="train", seed_offset=0, provider_mode="train")
     val_provider = _build_provider(config=config, split="val", seed_offset=999, provider_mode="eval")
@@ -356,6 +356,7 @@ def train_retrain_v2(config: Dict[str, Any]) -> int:
                     meta = read_json(str(meta_path))
                     best_epe[name] = float(meta.get("best_metric", float("inf")))
                 best_sintel_epe[name] = float(best_sintel_payload.get(name, float("inf")))
+            eval_histories, comparison_rows = _restore_retrain_histories(base_dir=resume_dir, model_names=model_names)
         else:
             init_mode = str(checkpoint_cfg.get("init_mode", "")).strip().lower()
             if init_mode and init_mode != "none":
@@ -407,20 +408,6 @@ def train_retrain_v2(config: Dict[str, Any]) -> int:
                         batch_size=batch_size,
                         eval_batches=eval_batches,
                     )
-                if sintel_eval_cfg is not None:
-                    for name, mg in model_graphs.items():
-                        sintel_epes[name] = evaluate_model_graph_on_sintel(
-                            sess=sess,
-                            input_ph=input_ph,
-                            is_training_ph=is_training_ph,
-                            pred_tensor=mg["pred_accum"],
-                            flow_scale=prediction_flow_scale,
-                            dataset_root=str(sintel_eval_cfg["dataset_root"]),
-                            sintel_list=str(sintel_eval_cfg["sintel_list"]),
-                            patch_size=tuple(sintel_eval_cfg["patch_size"]),
-                            max_samples=sintel_eval_cfg.get("max_samples", None),
-                            progress_desc=f"Sintel {name} e{epoch_idx}",
-                        )
 
             for name, mg in model_graphs.items():
                 metric_val = epoch_epes.get(name, float("inf"))
@@ -446,18 +433,33 @@ def train_retrain_v2(config: Dict[str, Any]) -> int:
                         best_metric=best_epe[name],
                         arch_code=mg["arch_code"],
                     )
-                if do_eval and name in sintel_epes and sintel_epes[name] < best_sintel_epe[name]:
-                    best_sintel_epe[name] = float(sintel_epes[name])
-                    _save_standalone_checkpoint(
-                        sess=sess,
-                        saver=mg["saver"],
-                        path_prefix=model_ckpt_paths[name]["root"] / f"{sintel_ckpt_name}.ckpt",
-                        epoch=epoch_idx,
-                        global_step=global_step,
-                        metric=sintel_epes[name],
-                        best_metric=best_sintel_epe[name],
-                        arch_code=mg["arch_code"],
+
+            if do_eval and sintel_eval_cfg is not None:
+                for name in model_names:
+                    sintel_result = evaluate_checkpoint_dir_on_sintel(
+                        model_dir=model_dirs[name],
+                        dataset_root=str(sintel_eval_cfg["dataset_root"]),
+                        sintel_list=str(sintel_eval_cfg["sintel_list"]),
+                        patch_size=tuple(sintel_eval_cfg["patch_size"]),
+                        ckpt_name="last",
+                        max_samples=sintel_eval_cfg.get("max_samples", None),
+                        progress_desc=f"Sintel {name} e{epoch_idx}",
                     )
+                    sintel_epes[name] = float(sintel_result["sintel_epe"])
+
+                for name, mg in model_graphs.items():
+                    if sintel_epes[name] < best_sintel_epe[name]:
+                        best_sintel_epe[name] = float(sintel_epes[name])
+                        _save_standalone_checkpoint(
+                            sess=sess,
+                            saver=mg["saver"],
+                            path_prefix=model_ckpt_paths[name]["root"] / f"{sintel_ckpt_name}.ckpt",
+                            epoch=epoch_idx,
+                            global_step=global_step,
+                            metric=sintel_epes[name],
+                            best_metric=best_sintel_epe[name],
+                            arch_code=mg["arch_code"],
+                        )
 
             if do_eval:
                 mean_epe = float(np.mean(list(epoch_epes.values())))

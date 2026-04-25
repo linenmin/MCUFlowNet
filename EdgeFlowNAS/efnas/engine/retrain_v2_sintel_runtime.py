@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 from argparse import Namespace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -9,7 +10,11 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 from tqdm import tqdm
 
-from efnas.engine.retrain_v2_eval_scaling import _extract_processor_mean_epe, _scale_prediction_for_sintel_eval
+from efnas.engine.retrain_v2_eval_scaling import (
+    _extract_processor_mean_epe,
+    _resolve_prediction_flow_scale,
+    _scale_prediction_for_sintel_eval,
+)
 from efnas.utils.import_bootstrap import bootstrap_project_paths, resolve_project_paths
 
 bootstrap_project_paths(anchor_file=__file__)
@@ -62,6 +67,43 @@ def _append_sintel_metrics(row: Dict[str, Any], sintel_epes: Dict[str, float], m
     return updated
 
 
+def _maybe_parse_csv_scalar(value: str) -> Any:
+    text = str(value)
+    if text == "":
+        return ""
+    lowered = text.lower()
+    if lowered == "inf":
+        return float("inf")
+    if lowered == "-inf":
+        return float("-inf")
+    try:
+        if any(ch in text for ch in (".", "e", "E")):
+            return float(text)
+        return int(text)
+    except Exception:
+        return text
+
+
+def _read_eval_history_rows(csv_path: Path) -> List[Dict[str, Any]]:
+    if not csv_path.exists():
+        return []
+    with csv_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        rows: List[Dict[str, Any]] = []
+        for row in reader:
+            rows.append({key: _maybe_parse_csv_scalar(value) for key, value in row.items()})
+        return rows
+
+
+def _restore_retrain_histories(base_dir: Path, model_names: Sequence[str]) -> Tuple[Dict[str, List[Dict[str, Any]]], List[Dict[str, Any]]]:
+    eval_histories = {
+        str(name): _read_eval_history_rows(base_dir / f"model_{name}" / "eval_history.csv")
+        for name in model_names
+    }
+    comparison_rows = _read_eval_history_rows(base_dir / "comparison.csv")
+    return eval_histories, comparison_rows
+
+
 def _prepare_sintel_lists(dataset_root: Path, sintel_list_text: str) -> Tuple[List[str], List[str], List[str]]:
     from EdgeFlowNet.code.misc.utils import read_sintel_list
 
@@ -83,32 +125,8 @@ def preprocess_eval_batch(input_batch: np.ndarray) -> np.ndarray:
     return (input_batch / 255.0) * 2.0 - 1.0
 
 
-def evaluate_model_graph_on_sintel(
-    sess,
-    input_ph,
-    is_training_ph,
-    pred_tensor,
-    flow_scale: float,
-    dataset_root: str,
-    sintel_list: str,
-    patch_size: Tuple[int, int],
-    max_samples: Optional[int] = None,
-    progress_desc: Optional[str] = None,
-) -> float:
-    from EdgeFlowNet.code.misc.processor import FlowPostProcessor
-    from EdgeFlowNet.code.misc.utils import get_sintel_batch
-
-    dataset_root_path = Path(dataset_root)
-    if not dataset_root_path.exists():
-        raise FileNotFoundError(f"Sintel dataset_root does not exist: {dataset_root_path}")
-
-    img1_list, img2_list, flo_list = _prepare_sintel_lists(dataset_root=dataset_root_path, sintel_list_text=sintel_list)
-    total_samples = len(img1_list)
-    if max_samples is not None:
-        total_samples = min(total_samples, int(max_samples))
-
-    processor = FlowPostProcessor("full", is_multiscale=True)
-    args = Namespace(
+def _build_processor_args() -> Namespace:
+    return Namespace(
         Display=False,
         ShiftedFlow=False,
         ResizeToHalf=False,
@@ -120,20 +138,59 @@ def evaluate_model_graph_on_sintel(
         PatchDelta=0,
         uncertainity=False,
     )
+
+
+def evaluate_checkpoint_dir_on_sintel(
+    model_dir: Path,
+    dataset_root: str,
+    sintel_list: str,
+    patch_size: Tuple[int, int],
+    ckpt_name: str = "best",
+    max_samples: Optional[int] = None,
+    progress_desc: Optional[str] = None,
+) -> Dict[str, Any]:
+    from EdgeFlowNet.code.misc.processor import FlowPostProcessor
+    from EdgeFlowNet.code.misc.utils import get_sintel_batch
+    from efnas.engine.retrain_v2_evaluator import setup_retrain_v2_eval_model
+
+    dataset_root_path = Path(dataset_root)
+    if not dataset_root_path.exists():
+        raise FileNotFoundError(f"Sintel dataset_root does not exist: {dataset_root_path}")
+
+    sess, input_ph, pred_tensor, meta_data = setup_retrain_v2_eval_model(
+        checkpoint_dir=Path(model_dir),
+        patch_size=tuple(patch_size),
+        ckpt_name=str(ckpt_name),
+    )
+    flow_scale = _resolve_prediction_flow_scale(Path(model_dir), meta_data)
+    img1_list, img2_list, flo_list = _prepare_sintel_lists(dataset_root=dataset_root_path, sintel_list_text=sintel_list)
+    total_samples = len(img1_list)
+    if max_samples is not None:
+        total_samples = min(total_samples, int(max_samples))
+
+    processor = FlowPostProcessor("full", is_multiscale=True)
+    args = _build_processor_args()
     iterator = range(total_samples)
     if progress_desc:
         iterator = tqdm(iterator, desc=progress_desc, leave=False, unit="sample")
 
-    for idx in iterator:
-        input_comb, gt_flow = get_sintel_batch(img1_list[idx], img2_list[idx], flo_list[idx], list(patch_size))
-        if input_comb is None or gt_flow is None:
-            continue
-        input_batch = preprocess_eval_batch(np.expand_dims(input_comb, axis=0))
-        preds_results = sess.run(pred_tensor, feed_dict={input_ph: input_batch, is_training_ph: False})
-        flow_prediction = _scale_prediction_for_sintel_eval(preds_results[:, :, :, :2], flow_scale)
-        processor.update(label=gt_flow, prediction=flow_prediction, Args=args)
+    try:
+        for idx in iterator:
+            input_comb, gt_flow = get_sintel_batch(img1_list[idx], img2_list[idx], flo_list[idx], list(patch_size))
+            if input_comb is None or gt_flow is None:
+                continue
+            input_batch = preprocess_eval_batch(np.expand_dims(input_comb, axis=0))
+            preds_results = sess.run(pred_tensor, feed_dict={input_ph: input_batch})
+            flow_prediction = _scale_prediction_for_sintel_eval(preds_results[:, :, :, :2], flow_scale)
+            processor.update(label=gt_flow, prediction=flow_prediction, Args=args)
+    finally:
+        sess.close()
 
     mean_epe = _extract_processor_mean_epe(processor)
-    if mean_epe is None:
-        return float("inf")
-    return float(mean_epe)
+    return {
+        "model_name": meta_data["scope_name"],
+        "arch_code": ",".join(str(v) for v in meta_data["arch_code"]),
+        "checkpoint_path": meta_data["checkpoint_path"],
+        "fc2_or_stage_metric": meta_data.get("metric", ""),
+        "sintel_epe": float(mean_epe) if mean_epe is not None else float("inf"),
+    }

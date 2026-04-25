@@ -1,9 +1,13 @@
 """Unit tests for retrain_v2 in-training Sintel evaluation helpers."""
 
+import csv
+import tempfile
 import unittest
+from pathlib import Path
 
 from efnas.engine.retrain_v2_sintel_runtime import (
     _append_sintel_metrics,
+    _restore_retrain_histories,
     _resolve_sintel_eval_config,
 )
 
@@ -41,6 +45,42 @@ class TestRetrainV2SintelRuntime(unittest.TestCase):
         self.assertEqual(updated["sintel_epe_knee"], 6.1)
         self.assertEqual(updated["sintel_epe_fast"], 6.4)
         self.assertAlmostEqual(updated["mean_sintel_epe"], 6.25, places=6)
+
+    def test_restore_retrain_histories_reads_existing_csv_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir)
+            for name, epe, sintel in (("knee", "2.3", "5.9"), ("fast", "2.5", "6.2")):
+                model_dir = base_dir / f"model_{name}"
+                model_dir.mkdir(parents=True, exist_ok=True)
+                with (model_dir / "eval_history.csv").open("w", encoding="utf-8", newline="") as handle:
+                    writer = csv.DictWriter(handle, fieldnames=["epoch", "loss", "epe", "best_epe", "sintel_epe"])
+                    writer.writeheader()
+                    writer.writerow({"epoch": "2", "loss": "1.1", "epe": epe, "best_epe": epe, "sintel_epe": sintel})
+
+            with (base_dir / "comparison.csv").open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=["epoch", "mean_epe", "epe_knee", "epe_fast", "sintel_epe_knee", "sintel_epe_fast", "mean_sintel_epe"],
+                )
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "epoch": "2",
+                        "mean_epe": "2.4",
+                        "epe_knee": "2.3",
+                        "epe_fast": "2.5",
+                        "sintel_epe_knee": "5.9",
+                        "sintel_epe_fast": "6.2",
+                        "mean_sintel_epe": "6.05",
+                    }
+                )
+
+            eval_histories, comparison_rows = _restore_retrain_histories(base_dir=base_dir, model_names=["knee", "fast"])
+            self.assertEqual(len(eval_histories["knee"]), 1)
+            self.assertEqual(eval_histories["knee"][0]["epoch"], 2)
+            self.assertAlmostEqual(eval_histories["knee"][0]["sintel_epe"], 5.9, places=6)
+            self.assertEqual(len(comparison_rows), 1)
+            self.assertAlmostEqual(comparison_rows[0]["mean_sintel_epe"], 6.05, places=6)
 
 
 if __name__ == "__main__":
