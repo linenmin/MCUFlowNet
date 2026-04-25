@@ -46,11 +46,11 @@ class TestRunRetrainV2Wrappers(unittest.TestCase):
                 "--dataset_root",
                 "/tmp/Sintel",
                 "--ckpt_name",
-                "best",
+                "sintel_best",
             ]
         )
         self.assertEqual(args.experiment_dir, "outputs/retrain_v2_ft3d/demo")
-        self.assertEqual(args.ckpt_name, "best")
+        self.assertEqual(args.ckpt_name, "sintel_best")
 
     def test_vela_compare_parser_accepts_checkpoint_and_arch(self) -> None:
         parser = build_vela_compare_parser()

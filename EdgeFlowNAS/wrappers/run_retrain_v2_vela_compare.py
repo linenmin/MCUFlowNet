@@ -7,7 +7,6 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import tensorflow as tf
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -17,6 +16,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 
 def _accum_preds(pred_list):
+    import tensorflow as tf
+
     pred_accum = None
     for pred_i in pred_list:
         if pred_accum is None:
@@ -33,6 +34,8 @@ def _accum_preds(pred_list):
 
 
 def _convert_to_tflite(sess, input_ph, final_output, tflite_path: Path, rep_dataset_samples: int) -> None:
+    import tensorflow as tf
+
     converter = tf.compat.v1.lite.TFLiteConverter.from_session(sess, [input_ph], [final_output])
     converter.optimizations = [tf.lite.Optimize.DEFAULT]
     converter.target_spec.supported_ops = [
@@ -77,6 +80,8 @@ def _export_constant_arch_supernet(
     rep_dataset_samples: int,
     tflite_path: Path,
 ):
+    import tensorflow as tf
+
     from efnas.network.MultiScaleResNet_supernet_v2 import MultiScaleResNetSupernetV2
 
     tf.compat.v1.reset_default_graph()
@@ -109,6 +114,8 @@ def _export_fixed_subnet(
     rep_dataset_samples: int,
     tflite_path: Path,
 ):
+    import tensorflow as tf
+
     from efnas.engine.retrain_v2_trainer import _build_supernet_source_name_map, _build_warmstart_var_map
     from efnas.network.fixed_arch_models_v2 import FixedArchModelV2
 

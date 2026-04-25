@@ -57,6 +57,12 @@ data:
 eval:
   eval_every_epoch: 2
   eval_batches: 0
+  sintel:
+    dataset_root: "../Datasets/Sintel"
+    sintel_list: "EdgeFlowNet/code/dataset_paths/MPI_Sintel_Final_train_list.txt"
+    patch_size: "416,1024"
+    ckpt_name: "sintel_best"
+    max_samples: null
 
 checkpoint:
   load_checkpoint: false

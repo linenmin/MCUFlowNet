@@ -7,7 +7,6 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-import numpy as np
 from tqdm import tqdm
 
 
@@ -16,12 +15,12 @@ _PROJECT_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, os.pardir))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from efnas.engine.retrain_v2_evaluator import preprocess_eval_batch, setup_retrain_v2_eval_model
 from efnas.engine.retrain_v2_eval_scaling import (
     _extract_processor_mean_epe,
     _resolve_prediction_flow_scale,
     _scale_prediction_for_sintel_eval,
 )
+from efnas.engine.retrain_v2_sintel_runtime import preprocess_eval_batch
 from efnas.utils.import_bootstrap import bootstrap_project_paths, resolve_project_paths
 
 bootstrap_project_paths(anchor_file=__file__)
@@ -32,7 +31,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Evaluate retrain_v2 experiment on Sintel")
     parser.add_argument("--experiment_dir", required=True, help="Retrain experiment directory containing model_* folders")
     parser.add_argument("--model_name", default=None, help="Optional single model name")
-    parser.add_argument("--ckpt_name", default="best", choices=["best", "last"], help="Checkpoint selection")
+    parser.add_argument("--ckpt_name", default="best", choices=["best", "last", "sintel_best"], help="Checkpoint selection")
     parser.add_argument("--dataset_root", required=True, help="Sintel dataset root")
     parser.add_argument("--sintel_list", default="EdgeFlowNet/code/dataset_paths/MPI_Sintel_Final_train_list.txt", help="Sintel split list")
     parser.add_argument("--patch_size", default="416,1024", help="Eval resolution H,W")
@@ -59,6 +58,8 @@ def _strip_sintel_prefix(path_str: str) -> str:
 def main() -> int:
     from EdgeFlowNet.code.misc.processor import FlowPostProcessor
     from EdgeFlowNet.code.misc.utils import get_sintel_batch, read_sintel_list
+    from efnas.engine.retrain_v2_evaluator import setup_retrain_v2_eval_model
+    import numpy as np
 
     args = _build_parser().parse_args()
     os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu_device)

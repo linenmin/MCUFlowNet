@@ -12,6 +12,11 @@ from tqdm import tqdm
 from efnas.data.dataloader_builder import build_fc2_provider, build_ft3d_provider
 from efnas.data.transforms_180x240 import standardize_image_tensor
 from efnas.engine.eval_step import accumulate_predictions, build_epe_metric
+from efnas.engine.retrain_v2_sintel_runtime import (
+    _append_sintel_metrics,
+    _resolve_sintel_eval_config,
+    evaluate_model_graph_on_sintel,
+)
 from efnas.engine.standalone_trainer import (
     _apply_gpu_device_setting,
     _build_standalone_checkpoint_paths,
@@ -188,6 +193,7 @@ def _build_single_model_graph(
         "train_op": train_op,
         "grad_norm": grad_norm,
         "epe": epe_tensor,
+        "pred_accum": pred_accum,
         "saver": saver,
         "warmstart_saver": warmstart_saver,
         "trainable_vars": trainable_vars,
@@ -264,6 +270,9 @@ def train_retrain_v2(config: Dict[str, Any]) -> int:
     flow_channels = int(data_cfg.get("flow_channels", 2))
     pred_channels = flow_channels * 2
     supernet_source_name_map = _build_supernet_source_name_map(pred_channels=pred_channels)
+    sintel_eval_cfg = _resolve_sintel_eval_config(config)
+    sintel_ckpt_name = str(sintel_eval_cfg.get("ckpt_name", "sintel_best")).strip() if sintel_eval_cfg is not None else "sintel_best"
+    prediction_flow_scale = float(data_cfg.get("ft3d_flow_divisor", 1.0)) if str(data_cfg.get("dataset", "")).strip().upper() == "FT3D" else 1.0
 
     train_provider = _build_provider(config=config, split="train", seed_offset=0, provider_mode="train")
     val_provider = _build_provider(config=config, split="val", seed_offset=999, provider_mode="eval")
@@ -317,6 +326,7 @@ def train_retrain_v2(config: Dict[str, Any]) -> int:
     )
 
     best_epe: Dict[str, float] = {name: float("inf") for name in model_names}
+    best_sintel_epe: Dict[str, float] = {name: float("inf") for name in model_names}
     eval_histories: Dict[str, List[Dict[str, Any]]] = {name: [] for name in model_names}
     comparison_rows: List[Dict[str, Any]] = []
 
@@ -335,6 +345,7 @@ def train_retrain_v2(config: Dict[str, Any]) -> int:
             global_step = int(trainer_state.get("global_step", 0)) if trainer_state else 0
             best_mean_epe = float(trainer_state.get("best_mean_epe", float("inf"))) if trainer_state else float("inf")
             no_improve_evals = int(trainer_state.get("no_improve_evals", 0)) if trainer_state else 0
+            best_sintel_payload = trainer_state.get("best_sintel_epe", {}) if trainer_state else {}
             for name, mg in model_graphs.items():
                 resume_ckpt = resume_dir / f"model_{name}" / "checkpoints" / "last.ckpt"
                 if not Path(str(resume_ckpt) + ".index").exists():
@@ -344,6 +355,7 @@ def train_retrain_v2(config: Dict[str, Any]) -> int:
                 if meta_path.exists():
                     meta = read_json(str(meta_path))
                     best_epe[name] = float(meta.get("best_metric", float("inf")))
+                best_sintel_epe[name] = float(best_sintel_payload.get(name, float("inf")))
         else:
             init_mode = str(checkpoint_cfg.get("init_mode", "")).strip().lower()
             if init_mode and init_mode != "none":
@@ -382,6 +394,7 @@ def train_retrain_v2(config: Dict[str, Any]) -> int:
             avg_losses = {name: epoch_losses[name] / max(1, step_count) for name in model_names}
             do_eval = (epoch_idx % eval_every_epoch == 0) or (epoch_idx == num_epochs)
             epoch_epes: Dict[str, float] = {}
+            sintel_epes: Dict[str, float] = {}
             if do_eval:
                 for name, mg in model_graphs.items():
                     epoch_epes[name] = _evaluate_model(
@@ -394,6 +407,20 @@ def train_retrain_v2(config: Dict[str, Any]) -> int:
                         batch_size=batch_size,
                         eval_batches=eval_batches,
                     )
+                if sintel_eval_cfg is not None:
+                    for name, mg in model_graphs.items():
+                        sintel_epes[name] = evaluate_model_graph_on_sintel(
+                            sess=sess,
+                            input_ph=input_ph,
+                            is_training_ph=is_training_ph,
+                            pred_tensor=mg["pred_accum"],
+                            flow_scale=prediction_flow_scale,
+                            dataset_root=str(sintel_eval_cfg["dataset_root"]),
+                            sintel_list=str(sintel_eval_cfg["sintel_list"]),
+                            patch_size=tuple(sintel_eval_cfg["patch_size"]),
+                            max_samples=sintel_eval_cfg.get("max_samples", None),
+                            progress_desc=f"Sintel {name} e{epoch_idx}",
+                        )
 
             for name, mg in model_graphs.items():
                 metric_val = epoch_epes.get(name, float("inf"))
@@ -419,6 +446,18 @@ def train_retrain_v2(config: Dict[str, Any]) -> int:
                         best_metric=best_epe[name],
                         arch_code=mg["arch_code"],
                     )
+                if do_eval and name in sintel_epes and sintel_epes[name] < best_sintel_epe[name]:
+                    best_sintel_epe[name] = float(sintel_epes[name])
+                    _save_standalone_checkpoint(
+                        sess=sess,
+                        saver=mg["saver"],
+                        path_prefix=model_ckpt_paths[name]["root"] / f"{sintel_ckpt_name}.ckpt",
+                        epoch=epoch_idx,
+                        global_step=global_step,
+                        metric=sintel_epes[name],
+                        best_metric=best_sintel_epe[name],
+                        arch_code=mg["arch_code"],
+                    )
 
             if do_eval:
                 mean_epe = float(np.mean(list(epoch_epes.values())))
@@ -429,11 +468,16 @@ def train_retrain_v2(config: Dict[str, Any]) -> int:
                     no_improve_evals += 1
 
                 for name in model_names:
-                    eval_histories[name].append(
-                        {"epoch": epoch_idx, "loss": avg_losses[name], "epe": epoch_epes[name], "best_epe": best_epe[name]}
-                    )
+                    history_row = {"epoch": epoch_idx, "loss": avg_losses[name], "epe": epoch_epes[name], "best_epe": best_epe[name]}
+                    if name in sintel_epes:
+                        history_row["sintel_epe"] = float(sintel_epes[name])
+                        history_row["best_sintel_epe"] = float(best_sintel_epe[name])
+                    eval_histories[name].append(history_row)
                     _write_eval_history(model_dirs[name] / "eval_history.csv", eval_histories[name])
-                comparison_rows.append({"epoch": epoch_idx, "mean_epe": mean_epe, **{f"epe_{n}": epoch_epes[n] for n in model_names}})
+                comparison_row = {"epoch": epoch_idx, "mean_epe": mean_epe, **{f"epe_{n}": epoch_epes[n] for n in model_names}}
+                if sintel_epes:
+                    comparison_row = _append_sintel_metrics(comparison_row, sintel_epes=sintel_epes, model_names=model_names)
+                comparison_rows.append(comparison_row)
                 _write_eval_history(experiment_dir / "comparison.csv", comparison_rows)
 
             write_json(
@@ -442,6 +486,7 @@ def train_retrain_v2(config: Dict[str, Any]) -> int:
                     "epoch": epoch_idx,
                     "global_step": global_step,
                     "best_epe": best_epe,
+                    "best_sintel_epe": best_sintel_epe,
                     "best_mean_epe": best_mean_epe,
                     "no_improve_evals": no_improve_evals,
                     "dataset": data_cfg.get("dataset", "FC2"),
