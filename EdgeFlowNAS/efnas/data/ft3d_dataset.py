@@ -1,7 +1,9 @@
 """FT3D dataset loading and batch sampling with folder scanning."""
 
+from concurrent.futures import ThreadPoolExecutor
 import os
 import re
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -292,6 +294,7 @@ class FT3DBatchProvider:
         crop_mode: str = "random",
         flow_divisor: float = 12.5,
         augment_cfg: Optional[Dict[str, Any]] = None,
+        num_workers: int = 1,
     ):
         self.samples = list(samples)
         self.crop_h = int(crop_h)
@@ -302,12 +305,15 @@ class FT3DBatchProvider:
         self.sampling_mode = str(sampling_mode).strip().lower()
         self.crop_mode = str(crop_mode).strip().lower()
         self.augment_cfg = dict(augment_cfg or {})
+        self.num_workers = max(1, int(num_workers))
         if self.sampling_mode not in ("random", "sequential", "shuffle_no_replacement"):
             raise ValueError(f"unsupported sampling_mode: {sampling_mode}")
         if self.crop_mode not in ("random", "center"):
             raise ValueError(f"unsupported crop_mode: {crop_mode}")
         self._cursor = 0
         self._order = list(range(len(self.samples)))
+        self._sample_lock = threading.Lock()
+        self._executor: Optional[ThreadPoolExecutor] = None
         if self.sampling_mode == "shuffle_no_replacement":
             self.start_epoch(shuffle=True)
 
@@ -323,10 +329,11 @@ class FT3DBatchProvider:
     def start_epoch(self, shuffle: bool = True) -> None:
         if self.sampling_mode != "shuffle_no_replacement":
             return
-        self._order = list(range(len(self.samples)))
-        if shuffle:
-            self.rng.shuffle(self._order)
-        self._cursor = 0
+        with self._sample_lock:
+            self._order = list(range(len(self.samples)))
+            if shuffle:
+                self.rng.shuffle(self._order)
+            self._cursor = 0
 
     def _next_sample_path(self) -> FT3DSample:
         if self.sampling_mode == "random":
@@ -341,7 +348,15 @@ class FT3DBatchProvider:
         self._cursor = (self._cursor + 1) % len(self.samples)
         return sample_path
 
-    def _load_one(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def _claim_sample_path(self) -> FT3DSample:
+        with self._sample_lock:
+            return self._next_sample_path()
+
+    def _next_sample_seed(self) -> int:
+        with self._sample_lock:
+            return int(self.rng.randint(0, 2**31 - 1))
+
+    def _load_one_from_sample(self, initial_sample_path: FT3DSample, rng: Any) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         if not self.samples:
             raise RuntimeError(
                 f"FT3D sample list is empty. source_dir={self.source_dir}. "
@@ -351,17 +366,21 @@ class FT3DBatchProvider:
             raise RuntimeError("OpenCV not available")
 
         retry_limit = max(64, len(self.samples))
-        for _ in range(retry_limit):
-            img0_path, img1_path, flow_path = self._next_sample_path()
+        sample_path = initial_sample_path
+        for attempt in range(retry_limit):
+            img0_path, img1_path, flow_path = sample_path
             if not os.path.exists(img0_path) or not os.path.exists(img1_path) or not os.path.exists(flow_path):
+                sample_path = self._claim_sample_path()
                 continue
             img0 = cv2.imread(img0_path, cv2.IMREAD_COLOR)
             img1 = cv2.imread(img1_path, cv2.IMREAD_COLOR)
             if img0 is None or img1 is None:
+                sample_path = self._claim_sample_path()
                 continue
             try:
                 flow = _read_flow(flow_path)
             except Exception:
+                sample_path = self._claim_sample_path()
                 continue
             img0 = img0.astype(np.float32)
             img1 = img1.astype(np.float32)
@@ -381,16 +400,37 @@ class FT3DBatchProvider:
                     )
                 return _center_crop_triplet(img0, img1, flow, self.crop_h, self.crop_w)
             except Exception:
+                if attempt + 1 < retry_limit:
+                    sample_path = self._claim_sample_path()
                 continue
 
         raise RuntimeError("failed to load valid FT3D sample after retries")
 
+    def _load_one(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        sample_path = self._claim_sample_path()
+        rng = np.random.RandomState(self._next_sample_seed())
+        return self._load_one_from_sample(sample_path, rng)
+
+    def _executor_instance(self) -> ThreadPoolExecutor:
+        if self._executor is None:
+            self._executor = ThreadPoolExecutor(max_workers=self.num_workers, thread_name_prefix="ft3d_loader")
+        return self._executor
+
+    def _load_job(self, job: Tuple[FT3DSample, int]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        sample_path, seed = job
+        rng = np.random.RandomState(int(seed))
+        return self._load_one_from_sample(sample_path, rng)
+
     def next_batch(self, batch_size: int):
+        jobs = [(self._claim_sample_path(), self._next_sample_seed()) for _ in range(int(batch_size))]
+        if self.num_workers > 1:
+            loaded = list(self._executor_instance().map(self._load_job, jobs))
+        else:
+            loaded = [self._load_job(job) for job in jobs]
         p1_batch = []
         p2_batch = []
         flow_batch = []
-        for _ in range(int(batch_size)):
-            img0, img1, flow = self._load_one()
+        for img0, img1, flow in loaded:
             p1_batch.append(img0)
             p2_batch.append(img1)
             flow_batch.append(flow)
@@ -399,3 +439,8 @@ class FT3DBatchProvider:
         label = np.asarray(flow_batch, dtype=np.float32)
         input_pair = np.concatenate([p1, p2], axis=3).astype(np.float32)
         return input_pair, p1, p2, label
+
+    def close(self) -> None:
+        if self._executor is not None:
+            self._executor.shutdown(wait=False)
+            self._executor = None

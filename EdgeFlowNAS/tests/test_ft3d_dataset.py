@@ -3,6 +3,7 @@
 import os
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import numpy as np
@@ -11,6 +12,7 @@ from efnas.data.dataloader_builder import build_ft3d_provider
 from efnas.data.ft3d_dataset import (
     _apply_spatial_augment,
     _build_ft3d_triplet,
+    FT3DBatchProvider,
     resolve_ft3d_samples_from_folder,
 )
 
@@ -117,6 +119,81 @@ class TestFT3DDataset(unittest.TestCase):
             provider = build_ft3d_provider(config=config, split="train", seed_offset=0, provider_mode="train")
             self.assertEqual(len(provider), 2)
             self.assertIn("TRAIN", provider.source_dir)
+            self.assertEqual(provider.num_workers, 1)
+
+    def test_build_ft3d_provider_forwards_num_workers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            frames_root = root / "frames_cleanpass"
+            flow_root = root / "optical_flow"
+            self._touch(frames_root / "TRAIN" / "A" / "0001" / "left" / "0006.png")
+            self._touch(frames_root / "TRAIN" / "A" / "0001" / "left" / "0007.png")
+            self._touch(
+                flow_root
+                / "TRAIN"
+                / "A"
+                / "0001"
+                / "into_future"
+                / "left"
+                / "OpticalFlowIntoFuture_0006_L.pfm"
+            )
+            config = {
+                "runtime": {"seed": 42},
+                "train": {"train_sampling_mode": "shuffle_no_replacement", "train_crop_mode": "random"},
+                "data": {
+                    "ft3d_frames_base_path": str(frames_root),
+                    "ft3d_flow_base_path": str(flow_root),
+                    "train_dir": "TRAIN",
+                    "val_dir": "TRAIN",
+                    "input_height": 480,
+                    "input_width": 640,
+                    "dataset": "FT3D",
+                    "ft3d_num_workers": 6,
+                },
+            }
+            provider = build_ft3d_provider(config=config, split="train", seed_offset=0, provider_mode="train")
+            self.assertEqual(provider.num_workers, 6)
+
+    def test_ft3d_provider_uses_parallel_loader_when_num_workers_gt_one(self) -> None:
+        provider = FT3DBatchProvider(
+            samples=[("a.png", "b.png", "c.pfm")],
+            crop_h=4,
+            crop_w=4,
+            seed=42,
+            sampling_mode="random",
+            crop_mode="random",
+            flow_divisor=12.5,
+            augment_cfg={"enabled": False},
+            num_workers=3,
+        )
+
+        class _FakeExecutor:
+            def __init__(self, *args, **kwargs):
+                self.map_called = False
+
+            def map(self, fn, jobs):
+                self.map_called = True
+                return [fn(job) for job in jobs]
+
+            def shutdown(self, wait=True):
+                return None
+
+        fake_executor = _FakeExecutor()
+        with mock.patch("efnas.data.ft3d_dataset.ThreadPoolExecutor", return_value=fake_executor):
+            with mock.patch.object(
+                provider,
+                "_load_one_from_sample",
+                side_effect=lambda sample_path, rng: (
+                    np.zeros((4, 4, 3), dtype=np.float32),
+                    np.zeros((4, 4, 3), dtype=np.float32),
+                    np.zeros((4, 4, 2), dtype=np.float32),
+                ),
+            ):
+                batch = provider.next_batch(batch_size=2)
+
+        self.assertTrue(fake_executor.map_called)
+        self.assertEqual(batch[0].shape, (2, 4, 4, 6))
+        self.assertEqual(batch[3].shape, (2, 4, 4, 2))
 
     def test_build_ft3d_triplet_accepts_relative_sample_with_absolute_roots(self) -> None:
         """Runtime provider paths may be relative while cached roots are absolute."""

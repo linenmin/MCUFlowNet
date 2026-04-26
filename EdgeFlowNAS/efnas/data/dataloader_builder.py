@@ -164,5 +164,6 @@ def build_ft3d_provider(
         crop_mode=crop_mode,
         flow_divisor=float(data_cfg.get("ft3d_flow_divisor", 12.5)),
         augment_cfg=augment_cfg,
+        num_workers=int(data_cfg.get("ft3d_num_workers", 1)) if mode == "train" else 1,
     )
     return provider

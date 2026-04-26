@@ -36,30 +36,32 @@ def setup_retrain_v2_eval_model(
     arch_list = [int(x) for x in arch_code] if not isinstance(arch_code, str) else [int(x) for x in arch_code.split(",") if str(x).strip()]
     scope_name = checkpoint_dir.name[len("model_") :] if checkpoint_dir.name.startswith("model_") else checkpoint_dir.name
 
-    tf.compat.v1.reset_default_graph()
-    input_ph = tf.compat.v1.placeholder(tf.float32, shape=[1, patch_size[0], patch_size[1], 6], name="input_ph")
-    is_training_ph = tf.compat.v1.placeholder_with_default(tf.constant(False, dtype=tf.bool), shape=[], name="is_training_ph")
+    eval_graph = tf.Graph()
+    with eval_graph.as_default():
+        input_ph = tf.compat.v1.placeholder(tf.float32, shape=[1, patch_size[0], patch_size[1], 6], name="input_ph")
+        is_training_ph = tf.compat.v1.placeholder_with_default(tf.constant(False, dtype=tf.bool), shape=[], name="is_training_ph")
 
-    with tf.compat.v1.variable_scope(scope_name):
-        model = FixedArchModelV2(
-            input_ph=input_ph,
-            is_training_ph=is_training_ph,
-            arch_code=arch_list,
-            num_out=4,
-            init_neurons=32,
-            expansion_factor=2.0,
-        )
-        preds = model.build()
+        with tf.compat.v1.variable_scope(scope_name):
+            model = FixedArchModelV2(
+                input_ph=input_ph,
+                is_training_ph=is_training_ph,
+                arch_code=arch_list,
+                num_out=4,
+                init_neurons=32,
+                expansion_factor=2.0,
+            )
+            preds = model.build()
 
-    preds_accumulated = accumulate_predictions(preds)
+        preds_accumulated = accumulate_predictions(preds)
+        scope_global_vars = [v for v in tf.compat.v1.global_variables() if v.name.startswith(f"{scope_name}/")]
+        saver = tf.compat.v1.train.Saver(var_list=scope_global_vars)
+
     config = tf.compat.v1.ConfigProto()
     config.gpu_options.allow_growth = True
-    sess = tf.compat.v1.Session(config=config)
-
-    scope_global_vars = [v for v in tf.compat.v1.global_variables() if v.name.startswith(f"{scope_name}/")]
-    saver = tf.compat.v1.train.Saver(var_list=scope_global_vars)
+    sess = tf.compat.v1.Session(graph=eval_graph, config=config)
     ckpt_path = meta_data.get("checkpoint_path") or str(checkpoint_dir / "checkpoints" / f"{ckpt_name}.ckpt")
-    saver.restore(sess, ckpt_path)
+    with eval_graph.as_default():
+        saver.restore(sess, ckpt_path)
 
     meta = dict(meta_data)
     meta["scope_name"] = scope_name

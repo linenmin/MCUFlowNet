@@ -28,6 +28,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base_path", default=None, help="Dataset base path")
     parser.add_argument("--frames_base_path", default=None, help="FT3D frames root")
     parser.add_argument("--flow_base_path", default=None, help="FT3D flow root")
+    parser.add_argument("--ft3d_num_workers", type=int, default=None, help="FT3D batch loader worker count")
     parser.add_argument("--train_dir", default=None, help="FT3D train split path")
     parser.add_argument("--val_dir", default=None, help="FT3D val split path")
     parser.add_argument("--gpu_device", type=int, default=None, help="GPU index, -1=CPU")
@@ -63,6 +64,8 @@ def main() -> int:
         config.setdefault("data", {})["ft3d_frames_base_paths"] = [args.frames_base_path]
     if args.flow_base_path is not None:
         config.setdefault("data", {})["ft3d_flow_base_path"] = args.flow_base_path
+    if args.ft3d_num_workers is not None:
+        config.setdefault("data", {})["ft3d_num_workers"] = args.ft3d_num_workers
     if args.train_dir is not None:
         config.setdefault("data", {})["train_dir"] = args.train_dir
     if args.val_dir is not None:

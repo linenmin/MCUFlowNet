@@ -32,6 +32,7 @@ data:
   ft3d_flow_subdir: ""
   ft3d_directions: ["into_future", "into_past"]
   ft3d_flow_divisor: 12.5
+  ft3d_num_workers: 8
   ft3d_train_augment:
     enabled: true
     min_scale: -0.4
