@@ -325,7 +325,13 @@ def _write_eval_history(csv_path: Path, rows: List[Dict[str, Any]]) -> None:
     """写入评估历史 CSV。"""
     if not rows:
         return
-    headers = list(rows[0].keys())
+    headers: List[str] = []
+    seen = set()
+    for row in rows:
+        for key in row.keys():
+            if key not in seen:
+                seen.add(key)
+                headers.append(key)
     with csv_path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=headers)
         writer.writeheader()

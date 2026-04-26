@@ -336,6 +336,11 @@ class FT3DBatchProvider:
             self._cursor = 0
 
     def _next_sample_path(self) -> FT3DSample:
+        if not self.samples:
+            raise RuntimeError(
+                f"FT3D sample list is empty. source_dir={self.source_dir}. "
+                "Please check TRAIN/TEST roots and dataset extraction."
+            )
         if self.sampling_mode == "random":
             return self.samples[_rand_int(self.rng, 0, len(self.samples) - 1)]
         if self.sampling_mode == "shuffle_no_replacement":

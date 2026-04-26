@@ -195,6 +195,21 @@ class TestFT3DDataset(unittest.TestCase):
         self.assertEqual(batch[0].shape, (2, 4, 4, 6))
         self.assertEqual(batch[3].shape, (2, 4, 4, 2))
 
+    def test_ft3d_provider_empty_samples_raises_runtime_error(self) -> None:
+        provider = FT3DBatchProvider(
+            samples=[],
+            crop_h=4,
+            crop_w=4,
+            seed=42,
+            sampling_mode="random",
+            crop_mode="random",
+            flow_divisor=12.5,
+            augment_cfg={"enabled": False},
+            num_workers=2,
+        )
+        with self.assertRaisesRegex(RuntimeError, "sample list is empty"):
+            provider.next_batch(batch_size=2)
+
     def test_build_ft3d_triplet_accepts_relative_sample_with_absolute_roots(self) -> None:
         """Runtime provider paths may be relative while cached roots are absolute."""
         with tempfile.TemporaryDirectory() as tmp_dir:
