@@ -154,6 +154,39 @@ class TestFT3DDataset(unittest.TestCase):
             provider = build_ft3d_provider(config=config, split="train", seed_offset=0, provider_mode="train")
             self.assertEqual(provider.num_workers, 6)
 
+    def test_build_ft3d_eval_provider_defaults_to_train_worker_count(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            frames_root = root / "frames_cleanpass"
+            flow_root = root / "optical_flow"
+            self._touch(frames_root / "TEST" / "A" / "0001" / "left" / "0006.png")
+            self._touch(frames_root / "TEST" / "A" / "0001" / "left" / "0007.png")
+            self._touch(
+                flow_root
+                / "TEST"
+                / "A"
+                / "0001"
+                / "into_future"
+                / "left"
+                / "OpticalFlowIntoFuture_0006_L.pfm"
+            )
+            config = {
+                "runtime": {"seed": 42},
+                "train": {"train_sampling_mode": "shuffle_no_replacement", "train_crop_mode": "random"},
+                "data": {
+                    "ft3d_frames_base_path": str(frames_root),
+                    "ft3d_flow_base_path": str(flow_root),
+                    "train_dir": "TEST",
+                    "val_dir": "TEST",
+                    "input_height": 480,
+                    "input_width": 640,
+                    "dataset": "FT3D",
+                    "ft3d_num_workers": 6,
+                },
+            }
+            provider = build_ft3d_provider(config=config, split="val", seed_offset=0, provider_mode="eval")
+            self.assertEqual(provider.num_workers, 6)
+
     def test_ft3d_provider_uses_parallel_loader_when_num_workers_gt_one(self) -> None:
         provider = FT3DBatchProvider(
             samples=[("a.png", "b.png", "c.pfm")],

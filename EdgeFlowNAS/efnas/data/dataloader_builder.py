@@ -154,6 +154,9 @@ def build_ft3d_provider(
         crop_mode = "center"
         augment_cfg = {"enabled": False}
 
+    train_num_workers = int(data_cfg.get("ft3d_num_workers", 1))
+    eval_num_workers = int(data_cfg.get("ft3d_eval_num_workers", train_num_workers))
+
     provider = FT3DBatchProvider(
         samples=sample_paths,
         crop_h=int(data_cfg.get("input_height", 480)),
@@ -164,6 +167,6 @@ def build_ft3d_provider(
         crop_mode=crop_mode,
         flow_divisor=float(data_cfg.get("ft3d_flow_divisor", 12.5)),
         augment_cfg=augment_cfg,
-        num_workers=int(data_cfg.get("ft3d_num_workers", 1)) if mode == "train" else 1,
+        num_workers=train_num_workers if mode == "train" else eval_num_workers,
     )
     return provider
