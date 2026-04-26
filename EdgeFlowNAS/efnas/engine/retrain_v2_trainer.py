@@ -235,6 +235,23 @@ def _load_trainer_state(path: Path) -> Dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _reconcile_resume_progress(
+    trainer_state: Optional[Dict[str, Any]],
+    checkpoint_metas: List[Dict[str, Any]],
+) -> tuple[int, int]:
+    state = trainer_state or {}
+    start_epoch = int(state.get("epoch", 0)) + 1 if state else 1
+    global_step = int(state.get("global_step", 0)) if state else 0
+    for meta in checkpoint_metas:
+        meta_epoch = int(meta.get("epoch", 0))
+        meta_global_step = int(meta.get("global_step", 0))
+        if meta_epoch + 1 > start_epoch:
+            start_epoch = meta_epoch + 1
+        if meta_global_step > global_step:
+            global_step = meta_global_step
+    return start_epoch, global_step
+
+
 def train_retrain_v2(config: Dict[str, Any]) -> int:
     tf.compat.v1.disable_eager_execution()
     tf.compat.v1.reset_default_graph()
@@ -341,11 +358,10 @@ def train_retrain_v2(config: Dict[str, Any]) -> int:
         if bool(checkpoint_cfg.get("load_checkpoint", False)):
             resume_dir = _resolve_resume_dir(config=config, experiment_dir=experiment_dir)
             trainer_state = _load_trainer_state(resume_dir / "trainer_state.json")
-            start_epoch = int(trainer_state.get("epoch", 0)) + 1 if trainer_state else 1
-            global_step = int(trainer_state.get("global_step", 0)) if trainer_state else 0
             best_mean_epe = float(trainer_state.get("best_mean_epe", float("inf"))) if trainer_state else float("inf")
             no_improve_evals = int(trainer_state.get("no_improve_evals", 0)) if trainer_state else 0
             best_sintel_payload = trainer_state.get("best_sintel_epe", {}) if trainer_state else {}
+            checkpoint_metas: List[Dict[str, Any]] = []
             for name, mg in model_graphs.items():
                 resume_ckpt = resume_dir / f"model_{name}" / "checkpoints" / "last.ckpt"
                 if not Path(str(resume_ckpt) + ".index").exists():
@@ -355,7 +371,9 @@ def train_retrain_v2(config: Dict[str, Any]) -> int:
                 if meta_path.exists():
                     meta = read_json(str(meta_path))
                     best_epe[name] = float(meta.get("best_metric", float("inf")))
+                    checkpoint_metas.append(meta if isinstance(meta, dict) else {})
                 best_sintel_epe[name] = float(best_sintel_payload.get(name, float("inf")))
+            start_epoch, global_step = _reconcile_resume_progress(trainer_state, checkpoint_metas)
             eval_histories, comparison_rows = _restore_retrain_histories(base_dir=resume_dir, model_names=model_names)
         else:
             init_mode = str(checkpoint_cfg.get("init_mode", "")).strip().lower()
