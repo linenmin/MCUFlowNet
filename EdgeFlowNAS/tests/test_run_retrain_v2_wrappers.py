@@ -40,6 +40,19 @@ class TestRunRetrainV2Wrappers(unittest.TestCase):
         self.assertEqual(args.flow_base_path, "../Datasets/optical_flow")
         self.assertEqual(args.ft3d_num_workers, 8)
 
+    def test_ft3d_parser_accepts_generic_init_experiment_dir(self) -> None:
+        parser = build_ft3d_parser()
+        args = parser.parse_args(
+            [
+                "--init_experiment_dir",
+                "outputs/retrain_v2_ft3d/retrain_v2_ft3d_run2",
+                "--init_ckpt_name",
+                "best",
+            ]
+        )
+        self.assertEqual(args.init_experiment_dir, "outputs/retrain_v2_ft3d/retrain_v2_ft3d_run2")
+        self.assertEqual(args.init_ckpt_name, "best")
+
     def test_sintel_parser_accepts_experiment_dir_and_best_mode(self) -> None:
         parser = build_sintel_parser()
         args = parser.parse_args(

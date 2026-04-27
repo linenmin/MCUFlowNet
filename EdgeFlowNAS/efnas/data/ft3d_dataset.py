@@ -18,6 +18,38 @@ import numpy as np
 FT3DSample = Tuple[str, str, str]
 
 
+def _flow_match_keys(path_like: str) -> set:
+    text_values = {str(path_like).replace("\\", "/")}
+    try:
+        text_values.add(str(Path(path_like).resolve()).replace("\\", "/"))
+    except Exception:
+        pass
+    keys = set()
+    for text in text_values:
+        normalized = text.strip()
+        while normalized.startswith("./"):
+            normalized = normalized[2:]
+        keys.add(normalized)
+        marker = "/optical_flow/"
+        if marker in normalized:
+            keys.add(normalized.split(marker, 1)[1])
+    return keys
+
+
+def _build_excluded_flow_keys(excluded_flow_paths: Optional[Sequence[str]]) -> set:
+    keys = set()
+    for path_like in excluded_flow_paths or []:
+        if str(path_like).strip():
+            keys.update(_flow_match_keys(str(path_like).strip()))
+    return keys
+
+
+def _is_excluded_flow_path(flow_path: str, excluded_flow_keys: set) -> bool:
+    if not excluded_flow_keys:
+        return False
+    return bool(_flow_match_keys(flow_path) & excluded_flow_keys)
+
+
 def _resolve_path(base_path: Optional[str], raw_path: str) -> Path:
     candidate = Path(raw_path)
     if candidate.is_absolute():
@@ -225,6 +257,7 @@ def resolve_ft3d_samples_from_folder(
     frames_subdir: str = "",
     flow_subdir: str = "",
     include_directions: Sequence[str] = ("into_future",),
+    excluded_flow_paths: Optional[Sequence[str]] = None,
 ) -> List[FT3DSample]:
     frames_split_root = _resolve_path(base_path=frames_base_path, raw_path=str(Path(frames_subdir) / split_dir) if frames_subdir else split_dir)
     flow_split_root = _resolve_path(base_path=flow_base_path, raw_path=str(Path(flow_subdir) / split_dir) if flow_subdir else split_dir)
@@ -236,6 +269,7 @@ def resolve_ft3d_samples_from_folder(
     directions = [str(item).strip().lower() for item in include_directions if str(item).strip()]
     if not directions:
         directions = ["into_future"]
+    excluded_flow_keys = _build_excluded_flow_keys(excluded_flow_paths)
 
     samples: List[FT3DSample] = []
     for img0_path in sorted(frames_split_root.rglob("left/*.png")):
@@ -248,6 +282,8 @@ def resolve_ft3d_samples_from_folder(
                     direction=direction,
                 )
             except Exception:
+                continue
+            if _is_excluded_flow_path(flow, excluded_flow_keys):
                 continue
             if Path(img1).exists() and Path(flow).exists():
                 samples.append((img0, img1, flow))
@@ -387,20 +423,26 @@ class FT3DBatchProvider:
             except Exception:
                 sample_path = self._claim_sample_path()
                 continue
+            if not np.all(np.isfinite(flow)):
+                sample_path = self._claim_sample_path()
+                continue
             img0 = img0.astype(np.float32)
             img1 = img1.astype(np.float32)
             flow = np.clip(flow / self.flow_divisor, a_min=-50.0, a_max=50.0).astype(np.float32)
+            if not np.all(np.isfinite(flow)):
+                sample_path = self._claim_sample_path()
+                continue
             try:
                 if self.crop_mode == "random":
-                    img0, img1 = _apply_photometric_augment(img0, img1, self.rng, self.augment_cfg)
-                    img0, img1 = _apply_eraser_augment(img0, img1, self.rng, self.augment_cfg)
+                    img0, img1 = _apply_photometric_augment(img0, img1, rng, self.augment_cfg)
+                    img0, img1 = _apply_eraser_augment(img0, img1, rng, self.augment_cfg)
                     return _apply_spatial_augment(
                         img0=img0,
                         img1=img1,
                         flow=flow,
                         crop_h=self.crop_h,
                         crop_w=self.crop_w,
-                        rng=self.rng,
+                        rng=rng,
                         aug_cfg=self.augment_cfg,
                     )
                 return _center_crop_triplet(img0, img1, flow, self.crop_h, self.crop_w)

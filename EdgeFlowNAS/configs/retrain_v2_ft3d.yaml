@@ -33,6 +33,21 @@ data:
   ft3d_directions: ["into_future", "into_past"]
   ft3d_flow_divisor: 12.5
   ft3d_num_workers: 8
+  ft3d_excluded_flow_paths:
+    - "../Datasets/FlyingThings3D/optical_flow/TEST/A/0085/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0012/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0096/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0186/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0441/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0456/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0483/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0728/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/B/0459/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/C/0031/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/C/0080/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/C/0140/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/C/0260/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/C/0323/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
   ft3d_train_augment:
     enabled: true
     min_scale: -0.4

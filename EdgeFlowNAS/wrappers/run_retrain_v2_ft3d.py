@@ -25,6 +25,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model_names", default=None, help="Model names joined by '+'")
     parser.add_argument("--experiment_name", default=None, help="Experiment name")
     parser.add_argument("--fc2_experiment_dir", default=None, help="FC2 stage experiment directory for warm-start")
+    parser.add_argument("--init_experiment_dir", default=None, help="Experiment directory used to initialize model checkpoints")
+    parser.add_argument("--init_ckpt_name", default=None, help="Checkpoint name inside each model checkpoint directory")
     parser.add_argument("--base_path", default=None, help="Dataset base path")
     parser.add_argument("--frames_base_path", default=None, help="FT3D frames root")
     parser.add_argument("--flow_base_path", default=None, help="FT3D flow root")
@@ -57,6 +59,11 @@ def main() -> int:
     if args.fc2_experiment_dir is not None:
         config.setdefault("checkpoint", {})["init_mode"] = "experiment_dir"
         config.setdefault("checkpoint", {})["init_experiment_dir"] = args.fc2_experiment_dir
+    if args.init_experiment_dir is not None:
+        config.setdefault("checkpoint", {})["init_mode"] = "experiment_dir"
+        config.setdefault("checkpoint", {})["init_experiment_dir"] = args.init_experiment_dir
+    if args.init_ckpt_name is not None:
+        config.setdefault("checkpoint", {})["init_ckpt_name"] = args.init_ckpt_name
     if args.base_path is not None:
         config.setdefault("data", {})["base_path"] = args.base_path
     if args.frames_base_path is not None:

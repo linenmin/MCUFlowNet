@@ -33,7 +33,7 @@ One reproducible retraining entrypoint that can:
 
 ## Current Phase
 
-Phase 4
+Phase 4 - FT3D runtime NaN investigation
 
 ## Phases
 
@@ -82,6 +82,12 @@ Phase 4
 - [x] Correct external `FT3D -> Sintel` evaluation scale
 - [ ] Verify stage transition `FC2 -> FT3D`
 - [ ] Verify resume / early stopping state
+- [ ] Diagnose FT3D epoch-34 NaN source before continuing from `last.ckpt`
+  - [x] Check whether FT3D PFM files contain NaN/Inf or extreme values
+  - [x] Exclude known non-finite FT3D flow files from sample resolution
+  - [x] Add runtime loader guard so non-finite flow is skipped instead of entering TensorFlow
+  - [x] Resume only from epoch-32 `best.ckpt` or a clean pre-NaN checkpoint, not epoch-36 `last.ckpt`
+  - [ ] Verify clean restart on HPC for at least one evaluation interval
 
 ## Open Technical Questions
 
@@ -120,6 +126,40 @@ Phase 4
   - actual `FC2 -> FT3D` handoff
   - actual `resume`
   - actual early stopping behavior on HPC
+- FT3D `retrain_v2_ft3d_run2` reached a new best at epoch 32, then both candidate models reported `nan` for train loss, FT3D validation EPE, and external Sintel EPE at epochs 34 and 36.
+- The epoch-34 NaN is present in each model's `eval_history.csv`, not just in top-level `comparison.csv`; this points upstream of CSV aggregation.
+- The last checkpoints at epoch 36 have `metric: NaN`; epoch-32 `best.ckpt` remains the latest clean model checkpoint for both `knee` and `fast`.
+- A direct full scan of `../Datasets/FlyingThings3D/optical_flow` found 14 non-finite `.pfm` files out of 107040 files, including 13 in `TRAIN` and 1 in `TEST`. This is now confirmed as a real data-quality fault capable of producing the observed NaNs.
+- There are two inconsistent history locations in the copied run output:
+  - outer `outputs/retrain_v2_ft3d/retrain_v2_ft3d_run2/comparison.csv` stops at epoch 18
+  - nested `outputs/retrain_v2_ft3d/retrain_v2_ft3d_run2/retrain_v2_ft3d_run2/comparison.csv` contains epochs 22-36 and the NaNs
+  This should be treated as a resume/output-layout warning until the exact HPC command and copy path are confirmed.
+
+## Active NaN Triage Plan
+
+1. Preserve current artifacts before running more training:
+   - keep epoch-32 `best.ckpt`
+   - keep epoch-36 `last.ckpt` only as a failed-state artifact
+   - do not use `last.ckpt` as the source for final evaluation or continuation
+2. Run the read-only FT3D input scan on HPC:
+   - `python scripts/diagnose_retrain_v2_ft3d_nan.py --config configs/retrain_v2_ft3d.yaml --frames_base_path ../Datasets/FlyingThings3D/frames_cleanpass --flow_base_path ../Datasets/FlyingThings3D/optical_flow --split both --output_csv outputs/retrain_v2_ft3d/ft3d_pfm_scan.csv`
+3. If the full PFM scan is clean, replay provider batches for the number of epochs since the most recent resume, not necessarily absolute epoch 34:
+   - after resume from epoch 21, epoch 34 is roughly the 14th in-process provider epoch
+   - `python scripts/diagnose_retrain_v2_ft3d_nan.py --config configs/retrain_v2_ft3d.yaml --frames_base_path ../Datasets/FlyingThings3D/frames_cleanpass --flow_base_path ../Datasets/FlyingThings3D/optical_flow --skip_scan --probe_batches --probe_split train --epochs_to_probe 14 --batch_size 32`
+4. Interpret results:
+   - scan has found non-finite PFM files, so quarantine/exclude those samples first
+   - still run provider replay or add loader logging once to verify the bad paths are actually reachable by the configured `frames_cleanpass + optical_flow` sample resolver
+   - if NaNs persist after exclusion, then instrument TensorFlow-side loss, gradients, and variables before changing hyperparameters
+5. Only after root cause is known, continue from the epoch-32 best checkpoint into a fresh experiment name.
+
+## Implemented Data Guard
+
+- `configs/retrain_v2_ft3d.yaml` now lists the 14 known non-finite PFM files under `data.ft3d_excluded_flow_paths`.
+- `build_ft3d_provider` forwards that exclusion list to the FT3D resolver.
+- `FT3DBatchProvider` now checks `np.isfinite(flow)` after PFM read and after flow scaling/clipping; bad samples are skipped and replaced.
+- `wrappers/run_retrain_v2_ft3d.py` now accepts the clearer generic initialization arguments:
+  - `--init_experiment_dir`
+  - `--init_ckpt_name`
 
 ## Non-Goals
 

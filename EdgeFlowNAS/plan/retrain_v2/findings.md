@@ -2,6 +2,43 @@
 
 ## Confirmed Facts
 
+### 2026-04-27 FT3D Run2 NaN Evidence
+
+The current FT3D run has a clean metric trajectory through epoch 32 and then simultaneous NaNs for both selected architectures at epoch 34:
+
+| Epoch | mean_epe | epe_knee | epe_fast | sintel_epe_knee | sintel_epe_fast |
+|---:|---:|---:|---:|---:|---:|
+| 32 | 2.037560720208699 | 1.9421447476720421 | 2.132976692745356 | 5.472796440124512 | 5.75335693359375 |
+| 34 | nan | nan | nan | nan | nan |
+| 36 | nan | nan | nan | nan | nan |
+
+This is not just a `comparison.csv` aggregation problem:
+
+- `model_fast/eval_history.csv` has `loss=nan`, `epe=nan`, and `sintel_epe=nan` at epoch 34.
+- `model_knee/eval_history.csv` has the same transition at epoch 34.
+- `best_epe` and `best_sintel_epe` remain finite, so the best-checkpoint bookkeeping did not overwrite the clean epoch-32 checkpoints.
+- `last.ckpt.meta.json` at epoch 36 records `metric: NaN` for both models; `last.ckpt` should be considered contaminated until proven otherwise.
+
+The strongest current hypotheses are:
+
+1. A shared train batch contained non-finite or extreme labels/inputs and pushed both models into non-finite weights.
+2. The FT3D data is finite, but the shared training graph became numerically unstable after epoch 32 because `grad_clip_global_norm` is currently `0.0`.
+3. Resume/output bookkeeping is confusing analysis because copied artifacts contain inconsistent outer and nested histories, but this does not by itself explain NaN losses inside both model histories.
+
+Important nuance:
+
+- With `shuffle_no_replacement`, a static corrupt training PFM should usually be encountered in every full training epoch, so "bad file appears only at epoch 34" is not the most natural explanation unless the dataset changed during training, the run was resumed with a fresh provider RNG state, or the bad values are triggered by stochastic augmentation/batch composition.
+- Because `np.clip` preserves NaN values, the loader currently would not filter a NaN-containing PFM; a direct scan remains necessary.
+
+The direct PFM scan has now confirmed this data-quality fault:
+
+- total scanned: `107040`
+- bad files: `14`
+- bad mode: `non-finite`
+- distribution: `13` under `TRAIN`, `1` under `TEST`
+
+This makes "FT3D data contains corrupt labels" a confirmed contributor, not just a hypothesis. A corrupt `TRAIN` PFM can poison model weights through NaN loss/gradients; a corrupt `TEST` PFM can also make validation EPE NaN. The simultaneous NaNs in both candidate models are consistent with both models consuming the same corrupted shared batch.
+
 ### Selected Architectures
 
 The two candidate architectures to retrain are:

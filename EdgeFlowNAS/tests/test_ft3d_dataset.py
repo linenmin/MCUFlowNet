@@ -63,6 +63,37 @@ class TestFT3DDataset(unittest.TestCase):
                 ["OpticalFlowIntoFuture_0006_L.pfm", "OpticalFlowIntoPast_0007_L.pfm"],
             )
 
+    def test_resolve_ft3d_samples_from_folder_excludes_configured_flow_paths(self) -> None:
+        """Known corrupt PFM files should be removed before batch sampling."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            frames_root = root / "frames_cleanpass"
+            flow_root = root / "optical_flow"
+            self._touch(frames_root / "TRAIN" / "A" / "0012" / "left" / "0006.png")
+            self._touch(frames_root / "TRAIN" / "A" / "0012" / "left" / "0007.png")
+            bad_flow = (
+                flow_root
+                / "TRAIN"
+                / "A"
+                / "0012"
+                / "into_future"
+                / "left"
+                / "OpticalFlowIntoFuture_0006_L.pfm"
+            )
+            self._touch(bad_flow)
+
+            samples = resolve_ft3d_samples_from_folder(
+                frames_base_path=str(frames_root),
+                flow_base_path=str(flow_root),
+                split_dir="TRAIN",
+                include_directions=("into_future",),
+                excluded_flow_paths=[
+                    "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0012/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+                ],
+            )
+
+            self.assertEqual(samples, [])
+
     def test_build_ft3d_provider_merges_multiple_frame_roots(self) -> None:
         """Provider builder should merge cleanpass/finalpass roots into one train pool."""
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -154,6 +185,43 @@ class TestFT3DDataset(unittest.TestCase):
             provider = build_ft3d_provider(config=config, split="train", seed_offset=0, provider_mode="train")
             self.assertEqual(provider.num_workers, 6)
 
+    def test_build_ft3d_provider_honors_configured_flow_exclusions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            frames_root = root / "frames_cleanpass"
+            flow_root = root / "optical_flow"
+            self._touch(frames_root / "TRAIN" / "A" / "0012" / "left" / "0006.png")
+            self._touch(frames_root / "TRAIN" / "A" / "0012" / "left" / "0007.png")
+            self._touch(
+                flow_root
+                / "TRAIN"
+                / "A"
+                / "0012"
+                / "into_future"
+                / "left"
+                / "OpticalFlowIntoFuture_0006_L.pfm"
+            )
+            config = {
+                "runtime": {"seed": 42},
+                "train": {"train_sampling_mode": "shuffle_no_replacement", "train_crop_mode": "random"},
+                "data": {
+                    "ft3d_frames_base_path": str(frames_root),
+                    "ft3d_flow_base_path": str(flow_root),
+                    "train_dir": "TRAIN",
+                    "val_dir": "TRAIN",
+                    "input_height": 480,
+                    "input_width": 640,
+                    "dataset": "FT3D",
+                    "ft3d_excluded_flow_paths": [
+                        "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0012/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+                    ],
+                },
+            }
+
+            provider = build_ft3d_provider(config=config, split="train", seed_offset=0, provider_mode="train")
+
+            self.assertEqual(len(provider), 0)
+
     def test_build_ft3d_eval_provider_defaults_to_train_worker_count(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -242,6 +310,34 @@ class TestFT3DDataset(unittest.TestCase):
         )
         with self.assertRaisesRegex(RuntimeError, "sample list is empty"):
             provider.next_batch(batch_size=2)
+
+    def test_ft3d_provider_skips_nonfinite_flow(self) -> None:
+        provider = FT3DBatchProvider(
+            samples=[("bad0.png", "bad1.png", "bad.pfm"), ("good0.png", "good1.png", "good.pfm")],
+            crop_h=4,
+            crop_w=4,
+            seed=42,
+            sampling_mode="sequential",
+            crop_mode="center",
+            flow_divisor=1.0,
+            augment_cfg={"enabled": False},
+            num_workers=1,
+        )
+
+        def _fake_read_flow(path):
+            if str(path).endswith("bad.pfm"):
+                flow = np.zeros((4, 4, 2), dtype=np.float32)
+                flow[0, 0, 0] = np.nan
+                return flow
+            return np.ones((4, 4, 2), dtype=np.float32)
+
+        with mock.patch("efnas.data.ft3d_dataset.os.path.exists", return_value=True):
+            with mock.patch("efnas.data.ft3d_dataset.cv2.imread", return_value=np.zeros((4, 4, 3), dtype=np.float32)):
+                with mock.patch("efnas.data.ft3d_dataset._read_flow", side_effect=_fake_read_flow):
+                    batch = provider.next_batch(batch_size=1)
+
+        self.assertTrue(np.all(np.isfinite(batch[3])))
+        self.assertTrue(np.allclose(batch[3], 1.0))
 
     def test_build_ft3d_triplet_accepts_relative_sample_with_absolute_roots(self) -> None:
         """Runtime provider paths may be relative while cached roots are absolute."""

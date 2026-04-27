@@ -167,3 +167,92 @@
 
 - Previously observed `FT3D`-stage Sintel CSV values before this fix should not be treated as trustworthy cross-stage comparison points.
 - Re-running the same Sintel test command on HPC is sufficient; no CLI change is required because the correction is internal to the wrapper.
+
+## 2026-04-27
+
+### FT3D Run2 NaN Incident Logged
+
+- User reported that `comparison.csv` contains finite metrics through epoch 32 and `nan` for all metrics at epochs 34 and 36.
+- Inspected copied run artifacts under:
+  - `outputs/retrain_v2_ft3d/retrain_v2_ft3d_run2`
+  - `outputs/retrain_v2_ft3d/retrain_v2_ft3d_run2/retrain_v2_ft3d_run2`
+- Confirmed the NaN is present in both model histories:
+  - `model_fast/eval_history.csv`: `loss`, FT3D `epe`, and `sintel_epe` become `nan` at epoch 34
+  - `model_knee/eval_history.csv`: same pattern at epoch 34
+- Confirmed epoch-32 `best.ckpt` is still the latest clean checkpoint:
+  - `fast` best FT3D EPE: `2.132976692745356`
+  - `knee` best FT3D EPE: `1.9421447476720421`
+- Confirmed epoch-36 `last.ckpt` metadata contains `metric: NaN` for both models and should not be used as a continuation source.
+
+### Initial Debugging Interpretation
+
+- Because both models become NaN at the same evaluation boundary, the first suspect is shared state:
+  - shared FT3D batch/data path
+  - shared optimizer/training step instability
+  - shared resume/checkpoint state
+- A static bad validation PFM is less likely to be the only cause because validation runs had been finite before epoch 34.
+- A static bad training PFM is also not the cleanest explanation if `shuffle_no_replacement` truly traverses the whole training split every epoch; however, this still needs a direct PFM/batch scan because NaN values survive `np.clip`.
+
+### Diagnostic Tool Added
+
+- Added read-only diagnostic script:
+  - `scripts/diagnose_retrain_v2_ft3d_nan.py`
+- Purpose:
+  - scan FT3D PFM files for NaN/Inf/extreme values
+  - replay FT3D provider batches and check pre-TensorFlow input/label tensors
+- Full PFM scan command for HPC:
+  - `python scripts/diagnose_retrain_v2_ft3d_nan.py --config configs/retrain_v2_ft3d.yaml --frames_base_path ../Datasets/FlyingThings3D/frames_cleanpass --flow_base_path ../Datasets/FlyingThings3D/optical_flow --split both --output_csv outputs/retrain_v2_ft3d/ft3d_pfm_scan.csv`
+- Provider replay command for the resumed run window:
+  - `python scripts/diagnose_retrain_v2_ft3d_nan.py --config configs/retrain_v2_ft3d.yaml --frames_base_path ../Datasets/FlyingThings3D/frames_cleanpass --flow_base_path ../Datasets/FlyingThings3D/optical_flow --skip_scan --probe_batches --probe_split train --epochs_to_probe 14 --batch_size 32`
+
+### Next Actions
+
+1. Run the PFM scan on HPC.
+2. If clean, run provider replay for the resumed epoch window.
+3. If provider replay is clean, instrument training with TensorFlow numerics checks before changing LR or grad clipping.
+4. Continue only from epoch-32 `best.ckpt` into a fresh experiment name after the root cause is identified.
+
+### PFM Scan Result Integrated
+
+- Full optical-flow scan completed on HPC:
+  - total PFM files scanned: `107040`
+  - bad PFM files: `14`
+  - failure mode: `non-finite`
+- Bad files reported:
+  - `../Datasets/FlyingThings3D/optical_flow/TEST/A/0085/into_future/left/OpticalFlowIntoFuture_0006_L.pfm`
+  - `../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0012/into_future/left/OpticalFlowIntoFuture_0006_L.pfm`
+  - `../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0096/into_future/left/OpticalFlowIntoFuture_0006_L.pfm`
+  - `../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0186/into_future/left/OpticalFlowIntoFuture_0006_L.pfm`
+  - `../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0441/into_future/left/OpticalFlowIntoFuture_0006_L.pfm`
+  - `../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0456/into_future/left/OpticalFlowIntoFuture_0006_L.pfm`
+  - `../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0483/into_future/left/OpticalFlowIntoFuture_0006_L.pfm`
+  - `../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0728/into_future/left/OpticalFlowIntoFuture_0006_L.pfm`
+  - `../Datasets/FlyingThings3D/optical_flow/TRAIN/B/0459/into_future/left/OpticalFlowIntoFuture_0006_L.pfm`
+  - `../Datasets/FlyingThings3D/optical_flow/TRAIN/C/0031/into_future/left/OpticalFlowIntoFuture_0006_L.pfm`
+  - `../Datasets/FlyingThings3D/optical_flow/TRAIN/C/0080/into_future/left/OpticalFlowIntoFuture_0006_L.pfm`
+  - `../Datasets/FlyingThings3D/optical_flow/TRAIN/C/0140/into_future/left/OpticalFlowIntoFuture_0006_L.pfm`
+  - `../Datasets/FlyingThings3D/optical_flow/TRAIN/C/0260/into_future/left/OpticalFlowIntoFuture_0006_L.pfm`
+  - `../Datasets/FlyingThings3D/optical_flow/TRAIN/C/0323/into_future/left/OpticalFlowIntoFuture_0006_L.pfm`
+- Interpretation:
+  - This is sufficient evidence that the FT3D dataset contains corrupt/non-finite labels.
+  - Because the current loader performs `np.clip(flow / divisor, ...)`, NaN values would survive preprocessing and can turn loss, gradients, and weights into NaN.
+  - The next step is to exclude/quarantine these samples, then restart from epoch-32 `best.ckpt` in a fresh experiment directory.
+
+### Data Exclusion Fix Implemented
+
+- Added the 14 known non-finite PFM paths to:
+  - `configs/retrain_v2_ft3d.yaml`
+- Updated FT3D sample resolution and provider build path:
+  - `efnas/data/ft3d_dataset.py`
+  - `efnas/data/dataloader_builder.py`
+- Behavior:
+  - configured bad flow paths are excluded before sampling
+  - any remaining non-finite flow loaded at runtime is skipped and replaced
+  - multi-threaded augmentation now uses the per-job RNG instead of sharing the provider RNG across loader threads
+- Added clearer FT3D restart CLI args:
+  - `--init_experiment_dir`
+  - `--init_ckpt_name`
+- Tests added and passing:
+  - configured flow exclusions are honored by resolver and provider
+  - non-finite flow is skipped by provider
+  - generic FT3D init args parse correctly

@@ -30,6 +30,21 @@ def _normalize_path_list(raw_value, fallback=None) -> List[str]:
     return [str(fallback).strip()]
 
 
+def _read_optional_path_list_file(path_like: str) -> List[str]:
+    raw_path = str(path_like or "").strip()
+    if not raw_path:
+        return []
+    path = Path(raw_path)
+    if not path.exists():
+        return []
+    values = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        item = line.strip()
+        if item and not item.startswith("#"):
+            values.append(item)
+    return values
+
+
 def build_fc2_provider(config: Dict, split: str, seed_offset: int = 0, provider_mode: str = "train") -> FC2BatchProvider:
     """Build FC2 batch provider from folder split."""
     if split not in ("train", "val"):
@@ -95,6 +110,8 @@ def build_ft3d_provider(
     frames_subdir = str(data_cfg.get("ft3d_frames_subdir", "")).strip()
     flow_subdir = str(data_cfg.get("ft3d_flow_subdir", "")).strip()
     directions = data_cfg.get("ft3d_directions", ["into_future", "into_past"])
+    excluded_flow_paths = _normalize_path_list(data_cfg.get("ft3d_excluded_flow_paths", None))
+    excluded_flow_paths.extend(_read_optional_path_list_file(str(data_cfg.get("ft3d_excluded_flow_list", ""))))
 
     sample_paths = []
     resolved_source_dirs = []
@@ -107,6 +124,7 @@ def build_ft3d_provider(
                 frames_subdir=frames_subdir,
                 flow_subdir=flow_subdir,
                 include_directions=directions,
+                excluded_flow_paths=excluded_flow_paths,
             )
         )
         resolved_source_dirs.append(
