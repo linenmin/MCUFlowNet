@@ -40,6 +40,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lr_min", type=float, default=None, help="Minimum cosine LR")
     parser.add_argument("--resume", action="store_true", help="Resume current experiment")
     parser.add_argument("--resume_experiment_name", default=None, help="Resume experiment name")
+    parser.add_argument("--resume_ckpt_name", default=None, help="Checkpoint name to restore when resuming")
     parser.add_argument("--seed", type=int, default=None, help="Random seed")
     return parser
 
@@ -91,6 +92,8 @@ def main() -> int:
         config.setdefault("checkpoint", {})["load_checkpoint"] = True
     if args.resume_experiment_name is not None:
         config.setdefault("checkpoint", {})["resume_experiment_name"] = args.resume_experiment_name
+    if args.resume_ckpt_name is not None:
+        config.setdefault("checkpoint", {})["resume_ckpt_name"] = args.resume_ckpt_name
 
     from efnas.engine.retrain_v2_trainer import train_retrain_v2
 

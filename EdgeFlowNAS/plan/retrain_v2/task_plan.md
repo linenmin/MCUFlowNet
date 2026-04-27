@@ -160,6 +160,7 @@ Phase 4 - FT3D runtime NaN investigation
 - `wrappers/run_retrain_v2_ft3d.py` now accepts the clearer generic initialization arguments:
   - `--init_experiment_dir`
   - `--init_ckpt_name`
+- `wrappers/run_retrain_v2_ft3d.py` also accepts `--resume_ckpt_name`; using `--resume --resume_ckpt_name best` preserves the original checkpoint epoch/global_step for LR scheduling while avoiding a contaminated `last.ckpt`.
 
 ## Non-Goals
 

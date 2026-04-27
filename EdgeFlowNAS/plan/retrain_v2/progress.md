@@ -256,3 +256,11 @@
   - configured flow exclusions are honored by resolver and provider
   - non-finite flow is skipped by provider
   - generic FT3D init args parse correctly
+
+### Resume Scheduler Semantics Fixed
+
+- Added `--resume_ckpt_name` to the FT3D wrapper.
+- Default `--resume` behavior remains `last.ckpt`.
+- For clean recovery from a contaminated later run, use `--resume_ckpt_name best`; this restores model/optimizer variables from `best.ckpt` and restores `epoch/global_step` from `best.ckpt.meta.json`.
+- This means cosine LR continues from the checkpoint's original schedule position instead of restarting from epoch 1.
+- When resuming from a non-`last` checkpoint, restored histories are trimmed to the checkpoint epoch so later NaN rows are not copied into the new experiment.

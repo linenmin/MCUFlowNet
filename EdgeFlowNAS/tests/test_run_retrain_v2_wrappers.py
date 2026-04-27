@@ -53,6 +53,12 @@ class TestRunRetrainV2Wrappers(unittest.TestCase):
         self.assertEqual(args.init_experiment_dir, "outputs/retrain_v2_ft3d/retrain_v2_ft3d_run2")
         self.assertEqual(args.init_ckpt_name, "best")
 
+    def test_ft3d_parser_accepts_resume_checkpoint_name(self) -> None:
+        parser = build_ft3d_parser()
+        args = parser.parse_args(["--resume", "--resume_ckpt_name", "best"])
+        self.assertTrue(args.resume)
+        self.assertEqual(args.resume_ckpt_name, "best")
+
     def test_sintel_parser_accepts_experiment_dir_and_best_mode(self) -> None:
         parser = build_sintel_parser()
         args = parser.parse_args(
