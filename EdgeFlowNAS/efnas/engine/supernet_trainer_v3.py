@@ -70,12 +70,17 @@ def _build_resume_signature_v3(config: Dict[str, Any]) -> Dict[str, Any]:
     """Build V3 resume-critical signature."""
     train_cfg = config.get("train", {})
     data_cfg = config.get("data", {})
+    distill_cfg = train_cfg.get("distill", {})
     return {
         "dataset": data_cfg.get("dataset", ""),
         "input_shape": [int(data_cfg.get("input_height", 0)), int(data_cfg.get("input_width", 0))],
         "flow_channels": int(data_cfg.get("flow_channels", 2)),
         "supernet_mode": train_cfg.get("supernet_mode", "balanced_irregular_fairness"),
         "uncertainty_type": train_cfg.get("uncertainty_type", "LinearSoftplus"),
+        "distill_enabled": bool(distill_cfg.get("enabled", False)),
+        "distill_teacher_type": _resolve_distill_teacher_type(distill_cfg.get("teacher_type", "edgeflownet")),
+        "distill_lambda": float(distill_cfg.get("lambda", 1.0)),
+        "multi_gpu_mode": str(train_cfg.get("multi_gpu_mode", "single_gpu")).strip().lower(),
         "arch_semantics_version": get_arch_semantics_version(),
         "network": "MultiScaleResNet_supernet_v3",
         "backbone": "bilinear_bottleneck_eca_gate4x",
@@ -269,14 +274,58 @@ def _build_graph(config: Dict[str, Any]) -> Dict[str, object]:
     multi_gpu_mode = str(train_cfg.get("multi_gpu_mode", "single_gpu")).strip().lower()
     gpu_devices = _parse_gpu_devices(train_cfg)
     if multi_gpu_mode == "arch_parallel":
-        if distill_enabled:
-            raise RuntimeError("Supernet V3 arch_parallel does not support distillation in the first implementation")
         if len(gpu_devices) < 3:
             raise RuntimeError("multi_gpu_mode=arch_parallel requires at least 3 gpu_devices")
         arch_codes_ph = tf.compat.v1.placeholder(tf.int32, shape=[3, get_num_blocks()], name="ArchCodes")
         tower_losses = []
         tower_optical = []
         tower_uncertainty = []
+        tower_distill = []
+        teacher_arch_code_ph = None
+        teacher_vars: List[tf.Variable] = []
+        teacher_features = []
+
+        if distill_enabled:
+            with tf.compat.v1.variable_scope("teacher"):
+                if distill_teacher_type == "supernet":
+                    teacher_arch_code_ph = tf.compat.v1.placeholder(
+                        tf.int32,
+                        shape=[get_num_blocks()],
+                        name="TeacherArchCode",
+                    )
+                    teacher_model = MultiScaleResNetSupernetV3(
+                        input_ph=input_ph,
+                        arch_code_ph=teacher_arch_code_ph,
+                        is_training_ph=tf.constant(False, dtype=tf.bool),
+                        num_out=pred_channels,
+                        init_neurons=32,
+                        expansion_factor=2.0,
+                    )
+                    teacher_model.build()
+                    teacher_features = teacher_model.feature_pyramid()
+                else:
+                    edge_network_cls = _load_edgeflownet_network_class()
+                    teacher_model = edge_network_cls(
+                        InputPH=input_ph,
+                        NumOut=pred_channels,
+                        InitNeurons=32,
+                        ExpansionFactor=2.0,
+                        NumSubBlocks=2,
+                        NumBlocks=1,
+                        Suffix="",
+                        UncType=None,
+                    )
+                    teacher_model.Network()
+                    if hasattr(teacher_model, "FeaturePyramidOutputs"):
+                        teacher_features = teacher_model.FeaturePyramidOutputs()
+                    else:
+                        raise RuntimeError("EdgeFlowNet teacher model missing FeaturePyramidOutputs")
+            if distill_layer_weights and len(distill_layer_weights) != len(teacher_features):
+                raise RuntimeError("distill.layer_weights length must match feature pyramid length")
+            teacher_vars = [var for var in tf.compat.v1.global_variables() if var.name.startswith("teacher/")]
+            if not teacher_vars:
+                raise RuntimeError("distill enabled but teacher graph variables are empty")
+
         with tf.compat.v1.variable_scope("shared_supernet") as shared_scope:
             for tower_idx, gpu_id in enumerate(gpu_devices[:3]):
                 with tf.device(f"/GPU:{gpu_id}"):
@@ -297,7 +346,23 @@ def _build_graph(config: Dict[str, Any]) -> Dict[str, object]:
                         num_out=flow_channels,
                         return_terms=True,
                     )
-                    tower_losses.append(tower_terms["total"])
+                    tower_loss_core = tower_terms["total"]
+                    if distill_enabled:
+                        student_features = tower_model.feature_pyramid()
+                        if len(student_features) != len(teacher_features):
+                            raise RuntimeError("student and teacher feature pyramid lengths do not match")
+                        tower_loss_distill = build_channel_max_distill_loss(
+                            student_features=student_features,
+                            teacher_features=teacher_features,
+                            layer_weights=(distill_layer_weights or None),
+                        )
+                        tower_loss_core = tf.add(
+                            tower_loss_core,
+                            float(distill_lambda) * tower_loss_distill,
+                            name=f"tower{tower_idx}_loss_core_with_distill",
+                        )
+                        tower_distill.append(tower_loss_distill)
+                    tower_losses.append(tower_loss_core)
                     tower_optical.append(tower_terms["optical_total"])
                     tower_uncertainty.append(tower_terms["uncertainty_total"])
 
@@ -321,7 +386,10 @@ def _build_graph(config: Dict[str, Any]) -> Dict[str, object]:
         loss_tensor_for_log = tf.reduce_mean(tf.stack(tower_losses), name="arch_parallel_loss_mean")
         loss_optical = tf.reduce_mean(tf.stack(tower_optical), name="arch_parallel_optical_mean")
         loss_uncertainty = tf.reduce_mean(tf.stack(tower_uncertainty), name="arch_parallel_uncertainty_mean")
-        loss_distill = tf.constant(0.0, dtype=tf.float32, name="distill_loss_disabled")
+        if distill_enabled:
+            loss_distill = tf.reduce_mean(tf.stack(tower_distill), name="arch_parallel_distill_mean")
+        else:
+            loss_distill = tf.constant(0.0, dtype=tf.float32, name="distill_loss_disabled")
         student_trainable_vars = [var for var in tf.compat.v1.trainable_variables() if var.name.startswith("shared_supernet/")]
         if not student_trainable_vars:
             raise RuntimeError("student trainable variables are empty")
@@ -365,7 +433,7 @@ def _build_graph(config: Dict[str, Any]) -> Dict[str, object]:
             "label_ph": label_ph,
             "arch_code_ph": arch_code_ph,
             "arch_codes_ph": arch_codes_ph,
-            "teacher_arch_code_ph": None,
+            "teacher_arch_code_ph": teacher_arch_code_ph,
             "is_training_ph": is_training_ph,
             "lr_ph": lr_ph,
             "accum_divisor_ph": accum_divisor_ph,
@@ -382,12 +450,12 @@ def _build_graph(config: Dict[str, Any]) -> Dict[str, object]:
             "zero_ops": zero_ops,
             "accum_op": accum_op,
             "apply_op": apply_op,
-            "distill_enabled": False,
-            "distill_lambda": 0.0,
-            "distill_teacher_type": "none",
+            "distill_enabled": bool(distill_enabled),
+            "distill_lambda": float(distill_lambda),
+            "distill_teacher_type": distill_teacher_type,
             "teacher_arch_code": [int(item) for item in teacher_arch_code],
-            "teacher_ckpt": "",
-            "teacher_vars": [],
+            "teacher_ckpt": teacher_ckpt,
+            "teacher_vars": teacher_vars,
             "multi_gpu_mode": "arch_parallel",
             "gpu_devices": gpu_devices[:3],
             "saver": saver,
@@ -794,9 +862,17 @@ def train_supernet(config: Dict[str, Any]) -> int:
                             graph_obj["is_training_ph"]: True,
                             graph_obj["lr_ph"]: current_lr,
                         }
+                        if distill_enabled and distill_teacher_type == "supernet" and teacher_arch_code_ph is not None:
+                            feed[teacher_arch_code_ph] = teacher_arch_code
                         if micro_idx == len(micro_slices) - 1:
-                            loss_val, _ = sess.run([graph_obj["loss"], graph_obj["accum_op"]], feed_dict=feed)
-                            distill_val = 0.0
+                            if distill_enabled:
+                                loss_val, distill_val, _ = sess.run(
+                                    [graph_obj["loss"], graph_obj["loss_distill"], graph_obj["accum_op"]],
+                                    feed_dict=feed,
+                                )
+                            else:
+                                loss_val, _ = sess.run([graph_obj["loss"], graph_obj["accum_op"]], feed_dict=feed)
+                                distill_val = 0.0
                         else:
                             sess.run(graph_obj["accum_op"], feed_dict=feed)
                 else:

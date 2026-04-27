@@ -1,6 +1,7 @@
 """TensorFlow graph tests for Supernet V3 network."""
 
 import unittest
+from pathlib import Path
 
 try:
     import tensorflow as tf
@@ -71,6 +72,82 @@ class TestSupernetNetworkStructureV3(unittest.TestCase):
         self.assertEqual(graph["multi_gpu_mode"], "arch_parallel")
         self.assertEqual(graph["arch_codes_ph"].shape.as_list(), [3, 11])
         self.assertFalse(self._op_depends_on(graph["accum_op"], graph["arch_code_ph"].op))
+
+    def test_v3_arch_parallel_distill_builds_training_graph(self):
+        """Arch-parallel distillation should build without eval ArchCode leakage."""
+        from efnas.engine.supernet_trainer_v3 import _build_graph
+
+        graph = _build_graph(
+            {
+                "train": {
+                    "multi_gpu_mode": "arch_parallel",
+                    "gpu_devices": "0,1,2",
+                    "distill": {
+                        "enabled": True,
+                        "teacher_type": "supernet",
+                        "teacher_ckpt": "dummy.ckpt",
+                        "teacher_arch_code": "2 1 0 2 1 1 0 0 0 0 0",
+                    },
+                    "grad_clip_global_norm": 200.0,
+                },
+                "data": {"input_height": 64, "input_width": 64, "flow_channels": 2},
+            }
+        )
+        self.assertEqual(graph["multi_gpu_mode"], "arch_parallel")
+        self.assertTrue(graph["distill_enabled"])
+        self.assertIsNotNone(graph["teacher_arch_code_ph"])
+        self.assertEqual(graph["teacher_arch_code_ph"].shape.as_list(), [11])
+        self.assertFalse(self._op_depends_on(graph["accum_op"], graph["arch_code_ph"].op))
+
+    def test_v3_arch_parallel_edgeflownet_distill_builds_training_graph(self):
+        """Arch-parallel distillation should support the EdgeFlowNet teacher used by V2."""
+        if not (Path(__file__).resolve().parents[2] / "EdgeFlowNet" / "code").exists():
+            self.skipTest("EdgeFlowNet sibling checkout is required")
+        from efnas.engine.supernet_trainer_v3 import _build_graph
+
+        graph = _build_graph(
+            {
+                "train": {
+                    "multi_gpu_mode": "arch_parallel",
+                    "gpu_devices": "0,1,2",
+                    "distill": {
+                        "enabled": True,
+                        "teacher_type": "edgeflownet",
+                        "teacher_ckpt": "dummy.ckpt",
+                    },
+                    "grad_clip_global_norm": 200.0,
+                },
+                "data": {"input_height": 64, "input_width": 64, "flow_channels": 2},
+            }
+        )
+        self.assertEqual(graph["multi_gpu_mode"], "arch_parallel")
+        self.assertTrue(graph["distill_enabled"])
+        self.assertIsNone(graph["teacher_arch_code_ph"])
+        self.assertGreater(len(graph["teacher_vars"]), 0)
+        self.assertFalse(self._op_depends_on(graph["accum_op"], graph["arch_code_ph"].op))
+
+    def test_v3_resume_signature_tracks_distill_mode(self):
+        """Resume compatibility should distinguish distillation from non-distillation runs."""
+        from efnas.engine.supernet_trainer_v3 import _build_resume_signature_v3
+
+        base_config = {
+            "train": {
+                "multi_gpu_mode": "arch_parallel",
+                "supernet_mode": "balanced_irregular_fairness",
+                "distill": {"enabled": False},
+            },
+            "data": {"dataset": "FC2", "input_height": 64, "input_width": 64, "flow_channels": 2},
+        }
+        distill_config = {
+            "train": {
+                "multi_gpu_mode": "arch_parallel",
+                "supernet_mode": "balanced_irregular_fairness",
+                "distill": {"enabled": True, "teacher_type": "edgeflownet", "lambda": 1.0},
+            },
+            "data": {"dataset": "FC2", "input_height": 64, "input_width": 64, "flow_channels": 2},
+        }
+        self.assertFalse(_build_resume_signature_v3(base_config)["distill_enabled"])
+        self.assertTrue(_build_resume_signature_v3(distill_config)["distill_enabled"])
 
 
 if __name__ == "__main__":
