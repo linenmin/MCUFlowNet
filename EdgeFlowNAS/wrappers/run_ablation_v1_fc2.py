@@ -30,6 +30,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fc2_eval_num_workers", type=int, default=None)
     parser.add_argument("--num_epochs", type=int, default=None)
     parser.add_argument("--batch_size", type=int, default=None)
+    parser.add_argument("--micro_batch_size", type=int, default=None)
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--lr_min", type=float, default=None)
     parser.add_argument("--grad_clip_global_norm", type=float, default=None)
@@ -39,8 +40,21 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--resume_experiment_name", default=None)
     parser.add_argument("--resume_ckpt_name", default=None)
     parser.add_argument("--allow_config_mismatch", action="store_true")
+    parser.add_argument("--variants", default=None, help="Comma-separated ablation variant names to run")
     parser.add_argument("--seed", type=int, default=None)
     return parser
+
+
+def _filter_variants(config: dict, variant_names: str) -> None:
+    requested = [item.strip() for item in str(variant_names).replace("+", ",").split(",") if item.strip()]
+    if not requested:
+        return
+    variants = list(config.get("variants", []))
+    by_name = {str(item.get("name")): item for item in variants}
+    missing = [name for name in requested if name not in by_name]
+    if missing:
+        raise ValueError(f"unknown ablation variant(s): {', '.join(missing)}")
+    config["variants"] = [by_name[name] for name in requested]
 
 
 def _apply_common_overrides(config: dict, args) -> dict:
@@ -50,7 +64,7 @@ def _apply_common_overrides(config: dict, args) -> dict:
         config.setdefault("runtime", {})["seed"] = args.seed
     if args.gpu_device is not None:
         config.setdefault("train", {})["gpu_device"] = args.gpu_device
-    for key in ("num_epochs", "batch_size", "lr", "lr_min", "grad_clip_global_norm", "early_stop_patience", "early_stop_min_delta"):
+    for key in ("num_epochs", "batch_size", "micro_batch_size", "lr", "lr_min", "grad_clip_global_norm", "early_stop_patience", "early_stop_min_delta"):
         value = getattr(args, key)
         if value is not None:
             config.setdefault("train", {})[key] = value
@@ -72,6 +86,8 @@ def _apply_common_overrides(config: dict, args) -> dict:
         config.setdefault("checkpoint", {})["resume_ckpt_name"] = args.resume_ckpt_name
     if args.allow_config_mismatch:
         config.setdefault("checkpoint", {})["allow_config_mismatch"] = True
+    if args.variants is not None:
+        _filter_variants(config, args.variants)
     return config
 
 

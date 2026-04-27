@@ -60,6 +60,21 @@ def _summarize_grad_norms(values: List[float], clip_threshold: float) -> Dict[st
     }
 
 
+def _resolve_micro_batch_size(train_cfg: Dict[str, Any], batch_size: int) -> int:
+    value = int(train_cfg.get("micro_batch_size", batch_size))
+    if value <= 0:
+        raise ValueError("train.micro_batch_size must be positive")
+    return min(value, int(batch_size))
+
+
+def _iter_micro_slices(total_size: int, micro_batch_size: int) -> List[slice]:
+    if total_size <= 0:
+        return []
+    if micro_batch_size <= 0:
+        raise ValueError("micro_batch_size must be positive")
+    return [slice(start, min(start + micro_batch_size, total_size)) for start in range(0, total_size, micro_batch_size)]
+
+
 def _load_trainer_state(path: Path) -> Dict[str, Any]:
     if not path.exists():
         return {}
@@ -84,6 +99,7 @@ def _resume_signature(config: Dict[str, Any], variants: List[Dict[str, Any]]) ->
         "input_width": int(data_cfg.get("input_width", 0)),
         "flow_channels": int(data_cfg.get("flow_channels", 2)),
         "batch_size": int(train_cfg.get("batch_size", 32)),
+        "micro_batch_size": int(train_cfg.get("micro_batch_size", train_cfg.get("batch_size", 32))),
         "num_epochs": int(train_cfg.get("num_epochs", 0)),
         "lr": float(train_cfg.get("lr", 0.0)),
         "lr_min": float(train_cfg.get("lr_min", 0.0)),
@@ -124,7 +140,7 @@ def _save_checkpoint_with_variant(sess, saver, path_prefix: Path, epoch: int, gl
     return path
 
 
-def _build_single_model_graph(scope_name: str, variant_config: Dict[str, Any], input_ph, label_ph, lr_ph, is_training_ph, flow_channels: int, pred_channels: int, weight_decay: float, grad_clip_global_norm: float) -> Dict[str, Any]:
+def _build_single_model_graph(scope_name: str, variant_config: Dict[str, Any], input_ph, label_ph, lr_ph, grad_scale_ph, is_training_ph, flow_channels: int, pred_channels: int, weight_decay: float, grad_clip_global_norm: float) -> Dict[str, Any]:
     with tf.compat.v1.variable_scope(scope_name):
         model = ABlationEdgeFlowNetV1(
             input_ph=input_ph,
@@ -147,16 +163,31 @@ def _build_single_model_graph(scope_name: str, variant_config: Dict[str, Any], i
         optimizer = tf.compat.v1.train.AdamOptimizer(learning_rate=lr_ph, beta1=0.9, beta2=0.999, epsilon=1e-8)
         grads_and_vars = optimizer.compute_gradients(loss_tensor, var_list=trainable_vars)
         bn_updates = [op for op in tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.UPDATE_OPS) if op.name.startswith(f"{scope_name}/")]
-        grads = [g for g, _ in grads_and_vars if g is not None]
+        grad_var_pairs = [(g, v) for g, v in grads_and_vars if g is not None]
+        grads = [g for g, _ in grad_var_pairs]
         vars_ = [v for g, v in grads_and_vars if g is not None]
+        accum_vars = [
+            tf.compat.v1.get_variable(
+                name=f"grad_accum_{idx}",
+                initializer=tf.zeros_like(v, dtype=tf.float32),
+                trainable=False,
+            )
+            for idx, (_, v) in enumerate(grad_var_pairs)
+        ]
+        zero_grad_op = tf.group(*[accum.assign(tf.zeros_like(accum)) for accum in accum_vars], name="zero_grad_accumulators") if accum_vars else tf.no_op(name="zero_grad_accumulators")
+        with tf.control_dependencies(bn_updates):
+            accum_op = tf.group(
+                *[accum.assign_add(tf.cast(grad, tf.float32) * grad_scale_ph) for accum, grad in zip(accum_vars, grads)],
+                name="accumulate_gradients",
+            ) if accum_vars else tf.no_op(name="accumulate_gradients")
+        averaged_grads = list(accum_vars)
         if grad_clip_global_norm > 0:
-            clipped_grads, grad_norm = tf.clip_by_global_norm(grads, clip_norm=grad_clip_global_norm)
+            clipped_grads, grad_norm = tf.clip_by_global_norm(averaged_grads, clip_norm=grad_clip_global_norm)
             apply_pairs = list(zip(clipped_grads, vars_))
         else:
-            grad_norm = tf.linalg.global_norm(grads) if grads else tf.constant(0.0, dtype=tf.float32)
-            apply_pairs = [(g, v) for g, v in grads_and_vars if g is not None]
-        with tf.control_dependencies(bn_updates):
-            train_op = optimizer.apply_gradients(apply_pairs)
+            grad_norm = tf.linalg.global_norm(averaged_grads) if averaged_grads else tf.constant(0.0, dtype=tf.float32)
+            apply_pairs = list(zip(averaged_grads, vars_))
+        train_op = optimizer.apply_gradients(apply_pairs)
         pred_accum = accumulate_predictions(preds)
         epe_tensor = build_epe_metric(pred_tensor=pred_accum, label_ph=label_ph, num_out=flow_channels)
         scope_global_vars = [v for v in tf.compat.v1.global_variables() if v.name.startswith(f"{scope_name}/")]
@@ -169,6 +200,8 @@ def _build_single_model_graph(scope_name: str, variant_config: Dict[str, Any], i
         "loss_optical": loss_terms["optical_total"],
         "loss_uncertainty": loss_terms["uncertainty_total"],
         "train_op": train_op,
+        "zero_grad_op": zero_grad_op,
+        "accum_op": accum_op,
         "grad_norm": grad_norm,
         "epe": epe_tensor,
         "saver": saver,
@@ -229,6 +262,7 @@ def train_ablation_v1(config: Dict[str, Any]) -> int:
     variants = build_ablation_variants(config.get("variants", None))
     model_names = [str(v["name"]) for v in variants]
     batch_size = int(train_cfg.get("batch_size", 32))
+    micro_batch_size = _resolve_micro_batch_size(train_cfg, batch_size)
     num_epochs = int(train_cfg.get("num_epochs", 400))
     base_lr = float(train_cfg.get("lr", 1e-4))
     lr_min = float(train_cfg.get("lr_min", 1e-6))
@@ -254,19 +288,22 @@ def train_ablation_v1(config: Dict[str, Any]) -> int:
     steps_per_epoch = int(math.ceil(float(len(train_provider)) / float(max(1, batch_size))))
     total_steps = max(1, num_epochs * steps_per_epoch)
     logger.info("output_dir=%s git_commit=%s", experiment_dir, _git_commit_hash())
-    logger.info("dataset=%s train_samples=%d val_samples=%d input=%dx%d batch=%d workers(fc2/ft3d)=%s/%s", data_cfg.get("dataset"), len(train_provider), len(val_provider), input_h, input_w, batch_size, data_cfg.get("fc2_num_workers", ""), data_cfg.get("ft3d_num_workers", ""))
+    logger.info("dataset=%s train_samples=%d val_samples=%d input=%dx%d batch=%d micro_batch=%d workers(fc2/ft3d)=%s/%s", data_cfg.get("dataset"), len(train_provider), len(val_provider), input_h, input_w, batch_size, micro_batch_size, data_cfg.get("fc2_num_workers", ""), data_cfg.get("ft3d_num_workers", ""))
     logger.info("optimizer=Adam lr=%.2e lr_min=%.2e grad_clip_global_norm=%.1f early_stop_patience=%d eval_every=%d steps_per_epoch=%d", base_lr, lr_min, grad_clip, early_stop_patience, eval_every_epoch, steps_per_epoch)
+    if micro_batch_size < batch_size:
+        logger.info("gradient_accumulation enabled micro_batch=%d logical_batch=%d; LR/global_step/checkpoints advance per logical batch, BatchNorm statistics update per micro-batch", micro_batch_size, batch_size)
 
     input_ph = tf.compat.v1.placeholder(tf.float32, shape=[None, input_h, input_w, 6], name="Input")
     label_ph = tf.compat.v1.placeholder(tf.float32, shape=[None, input_h, input_w, flow_channels], name="Label")
     lr_ph = tf.compat.v1.placeholder(tf.float32, shape=(), name="LearningRate")
+    grad_scale_ph = tf.compat.v1.placeholder(tf.float32, shape=(), name="GradientScale")
     is_training_ph = tf.compat.v1.placeholder(tf.bool, shape=(), name="IsTraining")
 
     model_graphs: Dict[str, Dict[str, Any]] = {}
     for variant in variants:
         name = str(variant["name"])
         logger.info("build graph model=%s variant=%s", name, variant)
-        model_graphs[name] = _build_single_model_graph(name, variant, input_ph, label_ph, lr_ph, is_training_ph, flow_channels, pred_channels, weight_decay, grad_clip)
+        model_graphs[name] = _build_single_model_graph(name, variant, input_ph, label_ph, lr_ph, grad_scale_ph, is_training_ph, flow_channels, pred_channels, weight_decay, grad_clip)
 
     model_dirs: Dict[str, Path] = {}
     model_ckpt_paths: Dict[str, Dict[str, Path]] = {}
@@ -339,11 +376,14 @@ def train_ablation_v1(config: Dict[str, Any]) -> int:
             epoch_start = time.time()
             if hasattr(train_provider, "start_epoch"):
                 train_provider.start_epoch(shuffle=True)
-            train_fetch = {}
+            zero_fetch = [mg["zero_grad_op"] for mg in model_graphs.values()]
+            accum_fetch = {}
+            apply_fetch = {}
             for name, mg in model_graphs.items():
-                train_fetch[f"loss_{name}"] = mg["loss"]
-                train_fetch[f"grad_norm_{name}"] = mg["grad_norm"]
-                train_fetch[f"train_{name}"] = mg["train_op"]
+                accum_fetch[f"loss_{name}"] = mg["loss"]
+                accum_fetch[f"accum_{name}"] = mg["accum_op"]
+                apply_fetch[f"grad_norm_{name}"] = mg["grad_norm"]
+                apply_fetch[f"train_{name}"] = mg["train_op"]
 
             epoch_losses = {name: 0.0 for name in model_names}
             grad_norms = {name: [] for name in model_names}
@@ -353,13 +393,35 @@ def train_ablation_v1(config: Dict[str, Any]) -> int:
             for _ in iterator:
                 input_batch, _, _, label_batch = train_provider.next_batch(batch_size=batch_size)
                 input_batch = standardize_image_tensor(input_batch)
+                logical_batch_size = int(input_batch.shape[0])
+                micro_slices = _iter_micro_slices(logical_batch_size, micro_batch_size)
+                if not micro_slices:
+                    continue
                 current_lr = _cosine_lr_with_min(base_lr, lr_min, global_step, total_steps)
                 lr_first = current_lr if lr_first is None else lr_first
                 lr_last = current_lr
-                results = sess.run(train_fetch, feed_dict={input_ph: input_batch, label_ph: label_batch, lr_ph: current_lr, is_training_ph: True})
+                sess.run(zero_fetch)
+                step_losses = {name: 0.0 for name in model_names}
+                for micro_slice in micro_slices:
+                    micro_input = input_batch[micro_slice]
+                    micro_label = label_batch[micro_slice]
+                    grad_scale = float(micro_input.shape[0]) / float(logical_batch_size)
+                    results = sess.run(
+                        accum_fetch,
+                        feed_dict={
+                            input_ph: micro_input,
+                            label_ph: micro_label,
+                            lr_ph: current_lr,
+                            grad_scale_ph: grad_scale,
+                            is_training_ph: True,
+                        },
+                    )
+                    for name in model_names:
+                        step_losses[name] += float(results[f"loss_{name}"]) * grad_scale
+                apply_results = sess.run(apply_fetch, feed_dict={lr_ph: current_lr})
                 for name in model_names:
-                    epoch_losses[name] += float(results[f"loss_{name}"])
-                    grad_norms[name].append(float(results[f"grad_norm_{name}"]))
+                    epoch_losses[name] += step_losses[name]
+                    grad_norms[name].append(float(apply_results[f"grad_norm_{name}"]))
                 global_step += 1
                 iterator.set_postfix(lr=f"{current_lr:.2e}", loss=f"{np.mean([epoch_losses[n] for n in model_names]) / max(1, len(grad_norms[model_names[0]])):.4f}")
 

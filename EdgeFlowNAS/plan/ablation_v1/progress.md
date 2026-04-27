@@ -65,8 +65,19 @@
 
 - Local non-TensorFlow tests:
   - `python -m pytest tests/test_ablation_v1_model.py tests/test_ablation_v1_config_and_wrappers.py tests/test_fc2_num_workers.py -q`
-  - result: `3 passed, 3 skipped`
+  - initial result: `3 passed, 3 skipped`
 - TensorFlow graph/unit tests in `tf_work_hpc`:
+  - `D:\Anaconda3\envs\tf_work_hpc\python.exe -m unittest tests.test_ablation_v1_model tests.test_ablation_v1_config_and_wrappers`
+  - initial result: `OK`
+- Low-memory ablation update:
+  - added `train.micro_batch_size` to FC2/FT3D configs; default remains `32`, so full training behavior is unchanged unless overridden.
+  - added `--micro_batch_size` CLI override for FC2/FT3D ablation wrappers.
+  - added `--variants` CLI override so 8GB smoke jobs can run one model at a time instead of keeping all four model graphs resident.
+  - trainer now accumulates weighted micro-batch gradients and applies Adam, LR schedule, `global_step`, checkpointing, and gradient clipping once per logical batch.
+  - `train.log` records logical batch, micro-batch, and the BatchNorm caveat when accumulation is enabled.
+- Low-memory verification:
+  - `python -m pytest tests/test_ablation_v1_model.py tests/test_ablation_v1_config_and_wrappers.py tests/test_fc2_num_workers.py -q`
+  - result: `3 passed, 5 skipped`
   - `D:\Anaconda3\envs\tf_work_hpc\python.exe -m unittest tests.test_ablation_v1_model tests.test_ablation_v1_config_and_wrappers`
   - result: `OK`
 - Vela equivalence smoke at `64x64`:

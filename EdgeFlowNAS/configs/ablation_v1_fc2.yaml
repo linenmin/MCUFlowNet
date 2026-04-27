@@ -25,6 +25,7 @@ train:
   gpu_device: 0
   num_epochs: 400
   batch_size: 32
+  micro_batch_size: 32
   lr: 1.0e-4
   lr_min: 1.0e-6
   weight_decay: 0.0
