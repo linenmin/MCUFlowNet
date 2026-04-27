@@ -342,6 +342,7 @@ class FT3DBatchProvider:
         self.crop_mode = str(crop_mode).strip().lower()
         self.augment_cfg = dict(augment_cfg or {})
         self.num_workers = max(1, int(num_workers))
+        self.skipped_nonfinite_count = 0
         if self.sampling_mode not in ("random", "sequential", "shuffle_no_replacement"):
             raise ValueError(f"unsupported sampling_mode: {sampling_mode}")
         if self.crop_mode not in ("random", "center"):
@@ -424,12 +425,14 @@ class FT3DBatchProvider:
                 sample_path = self._claim_sample_path()
                 continue
             if not np.all(np.isfinite(flow)):
+                self.skipped_nonfinite_count += 1
                 sample_path = self._claim_sample_path()
                 continue
             img0 = img0.astype(np.float32)
             img1 = img1.astype(np.float32)
             flow = np.clip(flow / self.flow_divisor, a_min=-50.0, a_max=50.0).astype(np.float32)
             if not np.all(np.isfinite(flow)):
+                self.skipped_nonfinite_count += 1
                 sample_path = self._claim_sample_path()
                 continue
             try:

@@ -68,6 +68,36 @@ class BaseLayers:  # 定义基础层类
         )
         return net  # 返回组合层输出
 
+    @count_and_scope
+    def conv_transpose(self, inputs, filters, kernel_size=None, strides=None, activation=None, name=None):
+        """执行二维转置卷积。"""
+        kernel_size = kernel_size or self.kernel_size
+        strides = strides or self.strides
+        return tf.compat.v1.layers.conv2d_transpose(
+            inputs=inputs,
+            filters=int(filters),
+            kernel_size=kernel_size,
+            strides=strides,
+            padding=self.padding,
+            activation=activation,
+            use_bias=False,
+            name=name,
+        )
+
+    @count_and_scope
+    def conv_transpose_bn_relu(self, inputs, filters, kernel_size=None, strides=None, name=None):
+        """执行转置卷积+BN+ReLU组合。"""
+        net = self.conv_transpose(
+            inputs=inputs,
+            filters=filters,
+            kernel_size=kernel_size,
+            strides=strides,
+            name=(None if name is None else f"{name}_deconv"),
+        )
+        net = self.bn(inputs=net, name=(None if name is None else f"{name}_bn"))
+        net = self.relu(inputs=net, name=(None if name is None else f"{name}_relu"))
+        return net
+
     @count_and_scope  # 添加计数作用域装饰器
     def resize_conv(self, inputs, filters, kernel_size=None, name=None):  # 定义上采样卷积函数
         """执行双线性上采样后卷积。"""  # 说明函数用途

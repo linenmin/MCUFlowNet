@@ -82,6 +82,7 @@ def build_fc2_provider(config: Dict, split: str, seed_offset: int = 0, provider_
         source_dir=source_dir,
         sampling_mode=sampling_mode,
         crop_mode=crop_mode,
+        num_workers=int(data_cfg.get("fc2_num_workers" if mode == "train" else "fc2_eval_num_workers", data_cfg.get("fc2_num_workers", 1))),
     )
     return provider
 

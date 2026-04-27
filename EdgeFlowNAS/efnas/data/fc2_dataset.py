@@ -2,6 +2,7 @@
 
 import os
 import random
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -112,6 +113,7 @@ class FC2BatchProvider:
         source_dir: str = "",
         sampling_mode: str = "random",
         crop_mode: str = "random",
+        num_workers: int = 1,
     ):
         self.samples = list(samples)
         self.crop_h = int(crop_h)
@@ -120,6 +122,8 @@ class FC2BatchProvider:
         self.rng = random.Random(int(seed))
         self.sampling_mode = str(sampling_mode).strip().lower()
         self.crop_mode = str(crop_mode).strip().lower()
+        self.num_workers = max(1, int(num_workers))
+        self._executor: Optional[ThreadPoolExecutor] = None
         if self.sampling_mode not in ("random", "sequential", "shuffle_no_replacement"):
             raise ValueError(f"unsupported sampling_mode: {sampling_mode}")
         if self.crop_mode not in ("random", "center"):
@@ -165,6 +169,48 @@ class FC2BatchProvider:
         self._cursor = (self._cursor + 1) % len(self.samples)
         return sample_path
 
+    def _load_one_from_sample(self, img0_path: str, rng: random.Random) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Load one valid sample triplet and crop from a claimed path."""
+        img0_path, img1_path, flow_path = _build_fc2_triplet(img0_path=img0_path)
+        if not os.path.exists(img0_path) or not os.path.exists(img1_path) or not os.path.exists(flow_path):
+            raise FileNotFoundError(img0_path)
+
+        img0 = cv2.imread(img0_path, cv2.IMREAD_COLOR)
+        img1 = cv2.imread(img1_path, cv2.IMREAD_COLOR)
+        if img0 is None or img1 is None:
+            raise ValueError(f"failed to read FC2 images: {img0_path}")
+
+        flow = _read_flow_file(flow_path)
+        img0 = img0.astype(np.float32)
+        img1 = img1.astype(np.float32)
+        flow = np.clip(flow, a_min=-50.0, a_max=50.0).astype(np.float32)
+
+        if self.crop_mode == "random":
+            return _random_crop_triplet(
+                img0=img0,
+                img1=img1,
+                flow=flow,
+                crop_h=self.crop_h,
+                crop_w=self.crop_w,
+                rng=rng,
+            )
+        return _center_crop_triplet(
+            img0=img0,
+            img1=img1,
+            flow=flow,
+            crop_h=self.crop_h,
+            crop_w=self.crop_w,
+        )
+
+    def _load_job(self, job: Tuple[str, int]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        sample_path, seed = job
+        return self._load_one_from_sample(sample_path, random.Random(int(seed)))
+
+    def _executor_instance(self) -> ThreadPoolExecutor:
+        if self._executor is None:
+            self._executor = ThreadPoolExecutor(max_workers=self.num_workers, thread_name_prefix="fc2_loader")
+        return self._executor
+
     def _load_one(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Load one valid sample triplet and crop."""
         if not self.samples:
@@ -178,41 +224,9 @@ class FC2BatchProvider:
         retry_limit = max(64, len(self.samples))
         for _ in range(retry_limit):
             img0_path = self._next_sample_path()
-            img0_path, img1_path, flow_path = _build_fc2_triplet(img0_path=img0_path)
-            if not os.path.exists(img0_path) or not os.path.exists(img1_path) or not os.path.exists(flow_path):
-                continue
-
-            img0 = cv2.imread(img0_path, cv2.IMREAD_COLOR)
-            img1 = cv2.imread(img1_path, cv2.IMREAD_COLOR)
-            if img0 is None or img1 is None:
-                continue
-
+            seed = self.rng.randint(0, 2**31 - 1)
             try:
-                flow = _read_flow_file(flow_path)
-            except Exception:
-                continue
-
-            img0 = img0.astype(np.float32)
-            img1 = img1.astype(np.float32)
-            flow = np.clip(flow, a_min=-50.0, a_max=50.0).astype(np.float32)
-
-            try:
-                if self.crop_mode == "random":
-                    return _random_crop_triplet(
-                        img0=img0,
-                        img1=img1,
-                        flow=flow,
-                        crop_h=self.crop_h,
-                        crop_w=self.crop_w,
-                        rng=self.rng,
-                    )
-                return _center_crop_triplet(
-                    img0=img0,
-                    img1=img1,
-                    flow=flow,
-                    crop_h=self.crop_h,
-                    crop_w=self.crop_w,
-                )
+                return self._load_job((img0_path, seed))
             except Exception:
                 continue
 
@@ -220,11 +234,16 @@ class FC2BatchProvider:
 
     def next_batch(self, batch_size: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Load one mini-batch."""
+        if self.num_workers > 1:
+            jobs = [(self._next_sample_path(), self.rng.randint(0, 2**31 - 1)) for _ in range(int(batch_size))]
+            loaded = list(self._executor_instance().map(self._load_job, jobs))
+        else:
+            loaded = [self._load_one() for _ in range(int(batch_size))]
+
         p1_batch = []
         p2_batch = []
         flow_batch = []
-        for _ in range(int(batch_size)):
-            img0, img1, flow = self._load_one()
+        for img0, img1, flow in loaded:
             p1_batch.append(img0)
             p2_batch.append(img1)
             flow_batch.append(flow)
