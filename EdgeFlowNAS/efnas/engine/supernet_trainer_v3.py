@@ -301,6 +301,11 @@ def _build_graph(config: Dict[str, Any]) -> Dict[str, object]:
                     tower_optical.append(tower_terms["optical_total"])
                     tower_uncertainty.append(tower_terms["uncertainty_total"])
 
+            tower_bn_updates = [
+                op
+                for op in tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.UPDATE_OPS)
+                if op.name.startswith("shared_supernet/")
+            ]
             shared_scope.reuse_variables()
             eval_model = MultiScaleResNetSupernetV3(
                 input_ph=input_ph,
@@ -344,8 +349,7 @@ def _build_graph(config: Dict[str, Any]) -> Dict[str, object]:
             accum_vars.append(accum_var)
             zero_ops.append(tf.compat.v1.assign(accum_var, tf.zeros_like(accum_var), name=f"strict_zero_{idx}"))
             add_ops.append(tf.compat.v1.assign_add(accum_var, grad, name=f"strict_add_{idx}"))
-        bn_updates = [op for op in tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.UPDATE_OPS) if not op.name.startswith("teacher/")]
-        with tf.control_dependencies(add_ops + bn_updates):
+        with tf.control_dependencies(add_ops + tower_bn_updates):
             accum_op = tf.no_op(name="strict_accum_done")
         avg_divisor = tf.maximum(accum_divisor_ph, 1.0, name="strict_avg_divisor")
         avg_grads = [accum_var / avg_divisor for accum_var in accum_vars]

@@ -11,6 +11,23 @@ except ModuleNotFoundError:
 class TestSupernetNetworkStructureV3(unittest.TestCase):
     """Validate V3 graph structure."""
 
+    def _op_depends_on(self, start_op, target_op, seen=None):
+        """Return True if a TensorFlow op transitively depends on another op."""
+        if seen is None:
+            seen = set()
+        if start_op in seen:
+            return False
+        seen.add(start_op)
+        if start_op is target_op:
+            return True
+        for tensor in getattr(start_op, "inputs", []):
+            if self._op_depends_on(tensor.op, target_op, seen=seen):
+                return True
+        for control_op in getattr(start_op, "control_inputs", []):
+            if self._op_depends_on(control_op, target_op, seen=seen):
+                return True
+        return False
+
     def setUp(self):
         if tf is None:
             self.skipTest("TensorFlow is required for graph construction tests")
@@ -53,6 +70,7 @@ class TestSupernetNetworkStructureV3(unittest.TestCase):
         )
         self.assertEqual(graph["multi_gpu_mode"], "arch_parallel")
         self.assertEqual(graph["arch_codes_ph"].shape.as_list(), [3, 11])
+        self.assertFalse(self._op_depends_on(graph["accum_op"], graph["arch_code_ph"].op))
 
 
 if __name__ == "__main__":
