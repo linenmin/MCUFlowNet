@@ -56,6 +56,18 @@ class TestNSGA2BaselineHelpers(unittest.TestCase):
         self.assertIn("d", selected_codes)
         self.assertNotIn("e", selected_codes)
 
+    def test_v3_search_space_adapter_uses_v3_module(self) -> None:
+        space = nsga2_search.load_search_space("efnas.nas.search_space_v3")
+        self.assertEqual(space.num_blocks(), 11)
+        self.assertEqual([space.num_choices(i) for i in range(11)], [3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2])
+        space.validate([2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1])
+        with self.assertRaises(ValueError):
+            space.validate([2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1])
+
+    def test_gpu_assignment_round_robins_visible_devices(self) -> None:
+        assignments = nsga2_search.assign_gpus_to_arches(["a", "b", "c", "d"], ["0", "2"])
+        self.assertEqual(assignments, [("a", "0"), ("b", "2"), ("c", "0"), ("d", "2")])
+
 
 if __name__ == "__main__":
     unittest.main()

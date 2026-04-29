@@ -29,6 +29,14 @@ def _append_opt(cmd: list, name: str, value: Any) -> None:
     cmd.extend([name, str(value)])
 
 
+def _resolve_project_path(project_root: str, value: Any) -> str:
+    """Resolve config path values relative to the project root."""
+    path = str(value)
+    if os.path.isabs(path):
+        return path
+    return os.path.join(project_root, path)
+
+
 def _build_eval_command(
     project_root: str,
     eval_cfg: Dict[str, Any],
@@ -37,8 +45,8 @@ def _build_eval_command(
     run_output_dir: str,
 ) -> list:
     """Build eval subprocess command from `evaluation` config."""
-    eval_script = os.path.join(project_root, eval_cfg["eval_script"])
-    supernet_config = os.path.join(project_root, eval_cfg["supernet_config"])
+    eval_script = _resolve_project_path(project_root, eval_cfg["eval_script"])
+    supernet_config = _resolve_project_path(project_root, eval_cfg["supernet_config"])
 
     cmd = [
         sys.executable,
@@ -61,6 +69,10 @@ def _build_eval_command(
     _append_opt(cmd, "--max_fc2_val_samples", eval_cfg.get("max_fc2_val_samples"))
     _append_opt(cmd, "--batch_size", eval_cfg.get("batch_size"))
     _append_opt(cmd, "--num_workers", eval_cfg.get("num_workers"))
+    _append_opt(cmd, "--prefetch_batches", eval_cfg.get("prefetch_batches"))
+    experiment_dir = eval_cfg.get("supernet_experiment_dir") or eval_cfg.get("experiment_dir")
+    if experiment_dir is not None and str(experiment_dir).strip() != "":
+        _append_opt(cmd, "--experiment_dir", _resolve_project_path(project_root, experiment_dir))
     if bool(eval_cfg.get("cpu_only", False)):
         cmd.append("--cpu_only")
 
@@ -81,6 +93,15 @@ def _build_eval_command(
     return cmd
 
 
+def _build_worker_env(assigned_gpu: Optional[str] = None) -> Dict[str, str]:
+    """Build subprocess environment for one architecture evaluation."""
+    env = os.environ.copy()
+    env["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
+    if assigned_gpu is not None and str(assigned_gpu).strip() != "":
+        env["CUDA_VISIBLE_DEVICES"] = str(assigned_gpu).strip()
+    return env
+
+
 def evaluate_single_arch(
     arch_code_str: str,
     epoch: int,
@@ -88,6 +109,7 @@ def evaluate_single_arch(
     project_root: str,
     cfg: Dict[str, Any],
     llm_client: Any = None,
+    assigned_gpu: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Evaluate one architecture and return parsed metrics row."""
     eval_cfg = cfg["evaluation"]
@@ -107,9 +129,9 @@ def evaluate_single_arch(
         run_output_dir=run_output_dir,
     )
 
-    # Force TensorFlow to allocate GPU memory on demand for concurrent workers
-    env = os.environ.copy()
-    env["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
+    env = _build_worker_env(assigned_gpu=assigned_gpu)
+    if assigned_gpu is not None:
+        logger.info("[Worker] arch=%s assigned_gpu=%s", arch_code_str, assigned_gpu)
 
     try:
         result = subprocess.run(

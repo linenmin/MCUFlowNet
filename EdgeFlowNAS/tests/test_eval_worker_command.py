@@ -40,6 +40,7 @@ class TestEvalWorkerCommand(unittest.TestCase):
             "bn_recal_batches": 4,
             "eval_batches_per_arch": 8,
             "num_workers": 2,
+            "prefetch_batches": 2,
             "cpu_only": True,
             "vela_optimise": "Size",
             "vela_limit": 1,
@@ -63,6 +64,8 @@ class TestEvalWorkerCommand(unittest.TestCase):
         self.assertIn("--eval_batches_per_arch", cmd)
         self.assertIn("8", cmd)
         self.assertIn("--num_workers", cmd)
+        self.assertIn("2", cmd)
+        self.assertIn("--prefetch_batches", cmd)
         self.assertIn("2", cmd)
         self.assertIn("--cpu_only", cmd)
         self.assertIn("--vela_optimise", cmd)
@@ -98,9 +101,38 @@ class TestEvalWorkerCommand(unittest.TestCase):
         self.assertNotIn("--eval_batches_per_arch", cmd)
         self.assertNotIn("--max_fc2_val_samples", cmd)
         self.assertNotIn("--num_workers", cmd)
+        self.assertNotIn("--prefetch_batches", cmd)
         self.assertNotIn("--cpu_only", cmd)
         self.assertNotIn("--vela_float32", cmd)
         self.assertNotIn("--vela_verbose_log", cmd)
+
+    def test_build_eval_command_passes_v3_experiment_dir(self) -> None:
+        project_root = os.path.abspath(".")
+        eval_cfg = {
+            "eval_script": "wrappers/run_supernet_subnet_distribution_v3.py",
+            "supernet_config": "configs/supernet_v3_fc2_172x224.yaml",
+            "checkpoint_type": "best",
+            "supernet_experiment_dir": "outputs/supernet/v3_no_distill",
+            "prefetch_batches": 2,
+        }
+
+        cmd = eval_worker._build_eval_command(
+            project_root=project_root,
+            eval_cfg=eval_cfg,
+            arch_code_str="0,0,0,0,0,0,0,0,0,0,0",
+            output_tag="agent_eval_v3",
+            run_output_dir=os.path.join(project_root, "outputs", "tmp_run"),
+        )
+
+        self.assertIn("--experiment_dir", cmd)
+        self.assertIn(os.path.join(project_root, "outputs/supernet/v3_no_distill"), cmd)
+        self.assertIn("--prefetch_batches", cmd)
+        self.assertIn("2", cmd)
+
+    def test_build_worker_env_assigns_one_gpu(self) -> None:
+        env = eval_worker._build_worker_env(assigned_gpu="3")
+        self.assertEqual(env["CUDA_VISIBLE_DEVICES"], "3")
+        self.assertEqual(env["TF_FORCE_GPU_ALLOW_GROWTH"], "true")
 
     def test_parse_vela_summary_backfills_cycles_and_macs_from_nested_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

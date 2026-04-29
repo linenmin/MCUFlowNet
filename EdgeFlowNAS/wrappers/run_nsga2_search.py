@@ -41,7 +41,30 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="global log level",
     )
+    parser.add_argument("--supernet_experiment_dir", type=str, default=None, help="trained supernet experiment folder for evaluator")
+    parser.add_argument("--gpu_devices", type=str, default=None, help="comma-separated GPU ids assigned to eval workers")
+    parser.add_argument("--max_workers", type=int, default=None, help="override concurrent evaluation workers")
+    parser.add_argument("--num_workers", type=int, default=None, help="override per-eval FC2 loader workers")
+    parser.add_argument("--prefetch_batches", type=int, default=None, help="override per-eval prefetch depth")
+    parser.add_argument("--max_fc2_val_samples", type=int, default=None, help="optional FC2 val cap for pilots")
     return parser
+
+
+def _apply_cli_overrides(cfg: dict, args: argparse.Namespace) -> dict:
+    """Apply runtime CLI overrides to a loaded NSGA-II config."""
+    if args.supernet_experiment_dir is not None:
+        cfg.setdefault("evaluation", {})["supernet_experiment_dir"] = args.supernet_experiment_dir
+    if args.gpu_devices is not None:
+        cfg.setdefault("concurrency", {})["gpu_devices"] = args.gpu_devices
+    if args.max_workers is not None:
+        cfg.setdefault("concurrency", {})["max_workers"] = int(args.max_workers)
+    if args.num_workers is not None:
+        cfg.setdefault("evaluation", {})["num_workers"] = int(args.num_workers)
+    if args.prefetch_batches is not None:
+        cfg.setdefault("evaluation", {})["prefetch_batches"] = int(args.prefetch_batches)
+    if args.max_fc2_val_samples is not None:
+        cfg.setdefault("evaluation", {})["max_fc2_val_samples"] = int(args.max_fc2_val_samples)
+    return cfg
 
 
 def _setup_logging(level_text: str) -> None:
@@ -69,6 +92,7 @@ def main() -> int:
 
     with open(config_path, "r", encoding="utf-8") as handle:
         cfg = yaml.safe_load(handle)
+    cfg = _apply_cli_overrides(cfg, args)
 
     output_root = os.path.join(_PROJECT_ROOT, cfg["paths"]["output_root"])
     from efnas.search.file_io import find_latest_experiment_dir, init_experiment_dir

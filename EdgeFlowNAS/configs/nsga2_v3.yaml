@@ -1,0 +1,41 @@
+# EdgeFlowNAS NSGA-II baseline search config (V3)
+
+search:
+  total_evaluations: 800
+  population_size: 50
+  seed: 2026
+  crossover_prob: 0.9
+  mutation_prob: null
+  duplicate_retry_factor: 20
+  search_space_size: 23328
+  search_space_module: "efnas.nas.search_space_v3"
+
+concurrency:
+  max_workers: 6
+  gpu_devices: "0,1,2,3,4,5"
+
+evaluation:
+  eval_script: "wrappers/run_supernet_subnet_distribution_v3.py"
+  supernet_config: "configs/supernet_v3_fc2_172x224.yaml"
+  # Prefer passing this from CLI:
+  # --supernet_experiment_dir outputs/supernet/edgeflownas_supernet_v3_fc2_172x224_run1_archparallel
+  supernet_experiment_dir: ""
+  checkpoint_type: "best"
+  enable_vela: true
+  vela_mode: "verbose"
+  vela_keep_artifacts: true
+  vela_prune_tflite_after_reduce: true
+  per_layer_csv_max_rows: 500
+  bn_recal_batches: 32
+  batch_size: 32
+  eval_batches_per_arch: null
+  max_fc2_val_samples: null
+  num_workers: 2
+  prefetch_batches: 2
+
+paths:
+  output_root: "outputs/nsga2_v3"
+
+files:
+  state_json: "nsga2_state.json"
+  pareto_csv: "pareto_front.csv"

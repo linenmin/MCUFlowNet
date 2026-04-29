@@ -25,6 +25,29 @@ class TestRunNSGA2SearchWrapper(unittest.TestCase):
         self.assertTrue(args.resume)
         self.assertEqual(args.experiment_name, "trial_a")
 
+    def test_parser_accepts_v3_runtime_overrides(self) -> None:
+        parser = _build_parser()
+        args = parser.parse_args(
+            [
+                "--supernet_experiment_dir",
+                "outputs/supernet/v3_no_distill",
+                "--gpu_devices",
+                "0,1,2,3,4,5",
+                "--max_workers",
+                "6",
+                "--num_workers",
+                "2",
+                "--prefetch_batches",
+                "2",
+            ]
+        )
+
+        self.assertEqual(args.supernet_experiment_dir, "outputs/supernet/v3_no_distill")
+        self.assertEqual(args.gpu_devices, "0,1,2,3,4,5")
+        self.assertEqual(args.max_workers, 6)
+        self.assertEqual(args.num_workers, 2)
+        self.assertEqual(args.prefetch_batches, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

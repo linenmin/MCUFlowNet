@@ -1,6 +1,8 @@
 """Tests for bounded batch prefetch provider."""
 
 import unittest
+from threading import Event
+import threading
 
 from efnas.data.prefetch_provider import PrefetchBatchProvider
 
@@ -29,6 +31,20 @@ class DummyProvider:
         return int(batch_size)
 
 
+class BlockingProvider:
+    """Provider that lets tests close prefetch while a batch is in flight."""
+
+    def __init__(self):
+        self.release = Event()
+
+    def __len__(self):
+        return 1
+
+    def next_batch(self, batch_size):
+        self.release.wait(timeout=5.0)
+        return int(batch_size)
+
+
 class TestPrefetchBatchProvider(unittest.TestCase):
     """Validate bounded prefetch wrapper behavior."""
 
@@ -52,6 +68,29 @@ class TestPrefetchBatchProvider(unittest.TestCase):
             self.assertEqual(wrapped.next_batch(3), 3)
         finally:
             wrapped.close()
+            wrapped.close()
+
+    def test_close_does_not_clear_queue_before_worker_exits(self):
+        provider = BlockingProvider()
+        wrapped = PrefetchBatchProvider(provider, prefetch_batches=1)
+        thread_errors = []
+        old_hook = threading.excepthook
+
+        def capture_thread_error(args):
+            thread_errors.append(args.exc_value)
+
+        threading.excepthook = capture_thread_error
+        try:
+            wrapped._start_prefetch(batch_size=4)
+            worker = wrapped._thread
+            wrapped.close()
+            provider.release.set()
+            worker.join(timeout=5.0)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(thread_errors, [])
+        finally:
+            threading.excepthook = old_hook
+            provider.release.set()
             wrapped.close()
 
 

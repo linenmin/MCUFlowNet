@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import importlib
 import json
 import logging
 import os
@@ -15,6 +16,47 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from efnas.nas.search_space_v2 import get_num_blocks, get_num_choices, validate_arch_code
 
 logger = logging.getLogger(__name__)
+
+
+class SearchSpaceAdapter:
+    """Small adapter around a categorical search-space module."""
+
+    def __init__(self, module_name: str):
+        self.module_name = str(module_name)
+        self.module = importlib.import_module(self.module_name)
+
+    def num_blocks(self) -> int:
+        return int(self.module.get_num_blocks())
+
+    def num_choices(self, block_idx: int) -> int:
+        return int(self.module.get_num_choices(block_idx))
+
+    def validate(self, arch_code: Sequence[int]) -> None:
+        self.module.validate_arch_code([int(item) for item in arch_code])
+
+
+def load_search_space(module_name: Optional[str] = None) -> SearchSpaceAdapter:
+    """Load a categorical search-space adapter."""
+    return SearchSpaceAdapter(module_name or "efnas.nas.search_space_v2")
+
+
+def _parse_gpu_devices(raw_devices: Any) -> List[str]:
+    """Parse a comma/space separated GPU device list."""
+    if raw_devices is None:
+        return []
+    if isinstance(raw_devices, (list, tuple)):
+        return [str(item).strip() for item in raw_devices if str(item).strip()]
+    return [item.strip() for item in str(raw_devices).replace(";", ",").split(",") if item.strip()]
+
+
+def assign_gpus_to_arches(arch_codes: Sequence[str], gpu_devices: Sequence[str]) -> List[Tuple[str, Optional[str]]]:
+    """Assign candidate architectures to visible GPU ids in round-robin order."""
+    devices = [str(item).strip() for item in gpu_devices if str(item).strip()]
+    assignments: List[Tuple[str, Optional[str]]] = []
+    for idx, arch_code in enumerate(arch_codes):
+        assigned_gpu = devices[idx % len(devices)] if devices else None
+        assignments.append((str(arch_code), assigned_gpu))
+    return assignments
 
 
 def _file_io():
@@ -36,10 +78,13 @@ def arch_to_text(arch_code: Sequence[int]) -> str:
     return ",".join(str(int(value)) for value in arch_code)
 
 
-def text_to_arch(arch_code_text: str) -> List[int]:
+def text_to_arch(arch_code_text: str, search_space: Optional[SearchSpaceAdapter] = None) -> List[int]:
     """Parse canonical architecture text."""
     arch_code = [int(token.strip()) for token in str(arch_code_text).split(",") if token.strip()]
-    validate_arch_code(arch_code)
+    if search_space is None:
+        validate_arch_code(arch_code)
+    else:
+        search_space.validate(arch_code)
     return arch_code
 
 
@@ -54,23 +99,30 @@ def resolve_generation_count(total_evaluations: int, population_size: int) -> in
     return total // pop_size
 
 
-def sample_random_arch(rng: random.Random) -> List[int]:
+def sample_random_arch(rng: random.Random, search_space: Optional[SearchSpaceAdapter] = None) -> List[int]:
     """Sample one valid random V2 architecture."""
-    arch_code = [rng.randrange(get_num_choices(block_idx)) for block_idx in range(get_num_blocks())]
-    validate_arch_code(arch_code)
+    space = search_space or load_search_space()
+    arch_code = [rng.randrange(space.num_choices(block_idx)) for block_idx in range(space.num_blocks())]
+    space.validate(arch_code)
     return arch_code
 
 
-def mutate_arch(arch_code: Sequence[int], rng: random.Random, mutation_prob: float) -> List[int]:
+def mutate_arch(
+    arch_code: Sequence[int],
+    rng: random.Random,
+    mutation_prob: float,
+    search_space: Optional[SearchSpaceAdapter] = None,
+) -> List[int]:
     """Mutate one architecture with per-gene categorical mutation."""
+    space = search_space or load_search_space()
     child = [int(value) for value in arch_code]
-    for block_idx in range(get_num_blocks()):
+    for block_idx in range(space.num_blocks()):
         if rng.random() >= float(mutation_prob):
             continue
-        num_choices = get_num_choices(block_idx)
+        num_choices = space.num_choices(block_idx)
         candidates = [value for value in range(num_choices) if value != child[block_idx]]
         child[block_idx] = int(rng.choice(candidates))
-    validate_arch_code(child)
+    space.validate(child)
     return child
 
 
@@ -79,17 +131,19 @@ def uniform_crossover(
     parent_b: Sequence[int],
     rng: random.Random,
     crossover_prob: float,
+    search_space: Optional[SearchSpaceAdapter] = None,
 ) -> Tuple[List[int], List[int]]:
     """Perform uniform crossover on two categorical architectures."""
+    space = search_space or load_search_space()
     child_a = [int(value) for value in parent_a]
     child_b = [int(value) for value in parent_b]
     if rng.random() >= float(crossover_prob):
         return child_a, child_b
-    for block_idx in range(get_num_blocks()):
+    for block_idx in range(space.num_blocks()):
         if rng.random() < 0.5:
             child_a[block_idx], child_b[block_idx] = child_b[block_idx], child_a[block_idx]
-    validate_arch_code(child_a)
-    validate_arch_code(child_b)
+    space.validate(child_a)
+    space.validate(child_b)
     return child_a, child_b
 
 
@@ -198,11 +252,13 @@ class NSGA2SearchRunner:
         self.total_generations = resolve_generation_count(self.total_evaluations, self.population_size)
         self.seed = int(search_cfg.get("seed", 2026))
         self.crossover_prob = float(search_cfg.get("crossover_prob", 0.9))
+        self.search_space = load_search_space(search_cfg.get("search_space_module", "efnas.nas.search_space_v2"))
         mutation_prob = search_cfg.get("mutation_prob")
-        self.mutation_prob = float(mutation_prob) if mutation_prob is not None else 1.0 / float(get_num_blocks())
+        self.mutation_prob = float(mutation_prob) if mutation_prob is not None else 1.0 / float(self.search_space.num_blocks())
         self.duplicate_retry_factor = int(search_cfg.get("duplicate_retry_factor", 20))
         self.search_space_size = int(search_cfg.get("search_space_size", 23328))
         self.max_workers = int(cfg["concurrency"]["max_workers"])
+        self.gpu_devices = _parse_gpu_devices(cfg.get("concurrency", {}).get("gpu_devices"))
         self.state_path = Path(self.exp_dir) / "metadata" / str(cfg.get("files", {}).get("state_json", "nsga2_state.json"))
         self.pareto_csv_path = Path(self.exp_dir) / "metadata" / str(cfg.get("files", {}).get("pareto_csv", "pareto_front.csv"))
         self._rng = random.Random(self.seed)
@@ -288,14 +344,15 @@ class NSGA2SearchRunner:
             parent_a = current_population[self._tournament_select_index(current_population, ranks, crowding_lookup)]
             parent_b = current_population[self._tournament_select_index(current_population, ranks, crowding_lookup)]
             child_a, child_b = uniform_crossover(
-                text_to_arch(parent_a["arch_code"]),
-                text_to_arch(parent_b["arch_code"]),
+                text_to_arch(parent_a["arch_code"], search_space=self.search_space),
+                text_to_arch(parent_b["arch_code"], search_space=self.search_space),
                 rng=self._rng,
                 crossover_prob=self.crossover_prob,
+                search_space=self.search_space,
             )
             for child in (
-                mutate_arch(child_a, rng=self._rng, mutation_prob=self.mutation_prob),
-                mutate_arch(child_b, rng=self._rng, mutation_prob=self.mutation_prob),
+                mutate_arch(child_a, rng=self._rng, mutation_prob=self.mutation_prob, search_space=self.search_space),
+                mutate_arch(child_b, rng=self._rng, mutation_prob=self.mutation_prob, search_space=self.search_space),
             ):
                 arch_text = arch_to_text(child)
                 if arch_text in evaluated_arches or arch_text in batch_seen:
@@ -330,7 +387,7 @@ class NSGA2SearchRunner:
         attempts = 0
 
         while len(arches) < target_count and attempts < max_attempts:
-            arch_text = arch_to_text(sample_random_arch(self._rng))
+            arch_text = arch_to_text(sample_random_arch(self._rng, search_space=self.search_space))
             if arch_text in evaluated_arches or arch_text in seen:
                 duplicate_count += 1
                 attempts += 1
@@ -343,6 +400,7 @@ class NSGA2SearchRunner:
     def _evaluate_arch_batch(self, arch_codes: Sequence[str], generation: int) -> None:
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             worker_fn = _evaluate_single_arch()
+            assignments = assign_gpus_to_arches(arch_codes, self.gpu_devices)
             futures = {
                 executor.submit(
                     worker_fn,
@@ -352,8 +410,9 @@ class NSGA2SearchRunner:
                     project_root=self.project_root,
                     cfg=self.cfg,
                     llm_client=None,
+                    assigned_gpu=assigned_gpu,
                 ): arch_code
-                for arch_code in arch_codes
+                for arch_code, assigned_gpu in assignments
             }
             for future in as_completed(futures):
                 arch_code = futures[future]
