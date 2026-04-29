@@ -47,7 +47,7 @@ def parse_arch_code(raw: Any) -> List[int]:
 def _wrap_prefetch(provider: Any, prefetch_batches: int) -> Any:
     if int(prefetch_batches) <= 0:
         return provider
-    return PrefetchBatchProvider(provider, prefetch_batches=int(prefetch_batches), name="batch_prefetch")
+    return PrefetchBatchProvider(provider, prefetch_batches=int(prefetch_batches))
 
 
 def _close_provider(provider: Any) -> None:

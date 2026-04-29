@@ -68,6 +68,26 @@ class TestDistillOrNotShortRetrain(unittest.TestCase):
         self.assertEqual(args.sintel_eval_every_epoch, 5)
         self.assertEqual(args.fc2_num_workers, 4)
 
+    def test_prefetch_wrapper_uses_existing_provider_signature(self):
+        try:
+            import tensorflow  # noqa: F401
+        except ModuleNotFoundError:
+            self.skipTest("TensorFlow is required to import trainer")
+        from efnas.engine.distill_or_not_trainer import _wrap_prefetch
+
+        class DummyProvider:
+            source_dir = "dummy"
+
+            def __len__(self):
+                return 1
+
+            def next_batch(self, batch_size):
+                return batch_size
+
+        wrapped = _wrap_prefetch(DummyProvider(), 1)
+        self.assertEqual(wrapped.next_batch(4), 4)
+        wrapped.close()
+
     def test_fixed_v3_model_builds_only_selected_stem_branch(self):
         try:
             import tensorflow as tf
