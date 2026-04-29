@@ -32,15 +32,16 @@ def setup_supernet_v3_eval_model(
     arch_code_ph = tf.compat.v1.placeholder(tf.int32, shape=[get_num_blocks()], name="ArchCode")
     is_training_ph = tf.compat.v1.placeholder_with_default(tf.constant(False, dtype=tf.bool), shape=[], name="IsTraining")
 
-    model = MultiScaleResNetSupernetV3(
-        input_ph=input_ph,
-        arch_code_ph=arch_code_ph,
-        is_training_ph=is_training_ph,
-        num_out=int(flow_channels) * 2,
-        init_neurons=32,
-        expansion_factor=2.0,
-    )
-    preds = model.build()
+    with tf.compat.v1.variable_scope("shared_supernet"):
+        model = MultiScaleResNetSupernetV3(
+            input_ph=input_ph,
+            arch_code_ph=arch_code_ph,
+            is_training_ph=is_training_ph,
+            num_out=int(flow_channels) * 2,
+            init_neurons=32,
+            expansion_factor=2.0,
+        )
+        preds = model.build()
     preds_accum = accumulate_predictions(preds)
     epe_tensor = build_epe_metric(pred_tensor=preds_accum, label_ph=label_ph, num_out=int(flow_channels))
 
