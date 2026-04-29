@@ -54,6 +54,26 @@ class TestSupernetNetworkStructureV3(unittest.TestCase):
         self.assertTrue(any("eca_bottleneck" in name for name in op_names))
         self.assertTrue(any("global_gate_4x" in name for name in op_names))
 
+    def test_v3_fixed_export_graph_contains_only_selected_branches(self):
+        """Vela export must be a selected-only subnet, not a checkpoint-shaped supernet."""
+        from efnas.nas.supernet_subnet_distribution_v3 import _FixedSubnetForExportV3
+
+        input_ph = tf.compat.v1.placeholder(tf.float32, shape=[1, 64, 64, 6], name="input_ph")
+        is_training_ph = tf.constant(False, dtype=tf.bool, name="is_training")
+        model = _FixedSubnetForExportV3(
+            input_ph=input_ph,
+            is_training_ph=is_training_ph,
+            arch_code=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            num_out=4,
+        )
+        outputs = model.build()
+        op_names = [op.name for op in tf.compat.v1.get_default_graph().get_operations()]
+
+        self.assertEqual([tensor.shape.as_list()[1:3] for tensor in outputs], [[16, 16], [32, 32], [64, 64]])
+        self.assertFalse(any("/branch2_" in name or "/branch3_" in name for name in op_names))
+        self.assertFalse(any("/E0/k5" in name or "/E0/k7" in name for name in op_names))
+        self.assertFalse(any("/H1/k5" in name or "/H2/k5" in name for name in op_names))
+
     def test_v3_arch_parallel_graph_exposes_three_arch_codes(self):
         """Arch-parallel mode should build a 3-subnet training graph."""
         from efnas.engine.supernet_trainer_v3 import _build_graph

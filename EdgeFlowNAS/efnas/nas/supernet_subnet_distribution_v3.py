@@ -169,15 +169,10 @@ class _FixedSubnetForExportV3(BaseLayers):
         import tensorflow as tf
 
         with tf.compat.v1.variable_scope(name):
-            out1 = self._res_block(inputs=inputs, filters=filters, name="branch1_block1")
-
-            out2 = self._res_block(inputs=inputs, filters=filters, name="branch2_block1")
-            out2 = self._res_block(inputs=out2, filters=filters, name="branch2_block2")
-
-            out3 = self._res_block(inputs=inputs, filters=filters, name="branch3_block1")
-            out3 = self._res_block(inputs=out3, filters=filters, name="branch3_block2")
-            out3 = self._res_block(inputs=out3, filters=filters, name="branch3_block3")
-            return [out1, out2, out3][choice]
+            out = inputs
+            for block_idx in range(choice + 1):
+                out = self._res_block(inputs=out, filters=filters, name=f"branch{choice + 1}_block{block_idx + 1}")
+            return out
 
     def _conv_bn_relu_dilated(self, inputs, filters, kernel_size, dilation_rate, name):
         import tensorflow as tf
@@ -222,51 +217,39 @@ class _FixedSubnetForExportV3(BaseLayers):
         import tensorflow as tf
 
         context = tf.reduce_mean(context_inputs, axis=[1, 2], keepdims=True, name=f"{name}_mean")
-        gate = self.conv(inputs=context, filters=int(target_filters), kernel_size=(1, 1), activation=None, name=f"{name}_proj")
+        gate = self.conv(inputs=context, filters=int(target_filters), kernel_size=(1, 1), strides=(1, 1), activation=None, name=f"{name}_proj")
         gate = tf.math.sigmoid(gate, name=f"{name}_sigmoid")
         return tf.multiply(target_inputs, gate, name=f"{name}_scale")
 
     def _e0_choice_block(self, inputs, filters, choice_idx: int, name: str):
         choice = int(choice_idx)
-        import tensorflow as tf
-
-        with tf.compat.v1.variable_scope(name):
-            conv3 = self.conv_bn_relu(inputs=inputs, filters=filters, kernel_size=(3, 3), strides=(2, 2), name="k3")
-            conv5 = self.conv_bn_relu(inputs=inputs, filters=filters, kernel_size=(5, 5), strides=(2, 2), name="k5")
-            conv7 = self.conv_bn_relu(inputs=inputs, filters=filters, kernel_size=(7, 7), strides=(2, 2), name="k7")
-            return [conv3, conv5, conv7][choice]
+        kernels = [(3, 3), (5, 5), (7, 7)]
+        names = ["k3", "k5", "k7"]
+        return self.conv_bn_relu(inputs=inputs, filters=filters, kernel_size=kernels[choice], strides=(2, 2), name=f"{name}/{names[choice]}")
 
     def _e1_choice_block(self, inputs, filters, choice_idx: int, name: str):
         choice = int(choice_idx)
-        import tensorflow as tf
-
-        with tf.compat.v1.variable_scope(name):
-            conv3 = self.conv_bn_relu(inputs=inputs, filters=filters, kernel_size=(3, 3), strides=(2, 2), name="k3")
-            conv5 = self.conv_bn_relu(inputs=inputs, filters=filters, kernel_size=(5, 5), strides=(2, 2), name="k5")
-            net = self.conv_bn_relu(inputs=inputs, filters=filters, kernel_size=(3, 3), strides=(2, 2), name="k3_down")
-            dilated = self._conv_bn_relu_dilated(inputs=net, filters=filters, kernel_size=(3, 3), dilation_rate=(2, 2), name="k3_dilated")
-            return [conv3, conv5, dilated][choice]
+        if choice == 0:
+            return self.conv_bn_relu(inputs=inputs, filters=filters, kernel_size=(3, 3), strides=(2, 2), name=f"{name}/k3")
+        if choice == 1:
+            return self.conv_bn_relu(inputs=inputs, filters=filters, kernel_size=(5, 5), strides=(2, 2), name=f"{name}/k5")
+        net = self.conv_bn_relu(inputs=inputs, filters=filters, kernel_size=(3, 3), strides=(2, 2), name=f"{name}/k3_down")
+        return self._conv_bn_relu_dilated(inputs=net, filters=filters, kernel_size=(3, 3), dilation_rate=(2, 2), name=f"{name}/k3_dilated")
 
     def _head_choice_conv(self, inputs, filters, choice_idx: int, name: str):
         choice = int(choice_idx)
-        import tensorflow as tf
-
-        with tf.compat.v1.variable_scope(name):
-            conv3 = self.conv(inputs=inputs, filters=filters, kernel_size=(3, 3), activation=None, name="k3")
-            conv5 = self.conv(inputs=inputs, filters=filters, kernel_size=(5, 5), activation=None, name="k5")
-            return [conv3, conv5][choice]
+        kernel = (3, 3) if choice == 0 else (5, 5)
+        label = "k3" if choice == 0 else "k5"
+        return self.conv(inputs=inputs, filters=filters, kernel_size=kernel, strides=(1, 1), activation=None, name=f"{name}/{label}")
 
     def _head_choice_resize_conv(self, inputs, filters, choice_idx: int, name: str):
         choice = int(choice_idx)
-        import tensorflow as tf
-
-        with tf.compat.v1.variable_scope(name):
-            conv3 = self.resize_conv(inputs=inputs, filters=filters, kernel_size=(3, 3), name="k3")
-            conv5 = self.resize_conv(inputs=inputs, filters=filters, kernel_size=(5, 5), name="k5")
-            return [conv3, conv5][choice]
+        kernel = (3, 3) if choice == 0 else (5, 5)
+        label = "k3" if choice == 0 else "k5"
+        return self.resize_conv(inputs=inputs, filters=filters, kernel_size=kernel, name=f"{name}/{label}")
 
     def build(self):
-        """Build fixed V3 subnet graph with checkpoint-compatible scopes."""
+        """Build a selected-only V3 subnet graph for structural Vela profiling."""
         if self._preds is not None:
             return self._preds
 
@@ -338,8 +321,29 @@ def _build_tflite_for_arch_v3(
     quantize_int8: bool,
     rep_dataset_samples: int,
 ) -> None:
-    """Export one fixed-arch V3 subnet to TFLite for Vela profiling."""
+    """Export one selected-only fixed V3 subnet to TFLite for Vela profiling.
+
+    Vela uses only graph structure, tensor shapes, and quantized constants for latency
+    and SRAM estimation. Restoring inherited supernet weights would require building
+    checkpoint-compatible unselected branches, which pollutes the exported TFLite graph.
+    """
     import tensorflow as tf
+
+    def _accumulate_predictions_static(preds):
+        pred_accum = None
+        for pred in preds:
+            if pred_accum is None:
+                pred_accum = pred
+                continue
+            pred_shape = pred.shape.as_list()
+            pred_accum = tf.compat.v1.image.resize_bilinear(
+                pred_accum,
+                [int(pred_shape[1]), int(pred_shape[2])],
+                align_corners=False,
+                half_pixel_centers=False,
+            )
+            pred_accum = pred_accum + pred
+        return pred_accum
 
     tf.compat.v1.disable_eager_execution()
     graph = tf.Graph()
@@ -347,34 +351,29 @@ def _build_tflite_for_arch_v3(
         tf.compat.v1.set_random_seed(2026)
         input_ph = tf.compat.v1.placeholder(tf.float32, shape=[1, int(input_h), int(input_w), 6], name="Input")
         is_training_const = tf.constant(False, dtype=tf.bool, name="IsTraining")
-        with tf.compat.v1.variable_scope("shared_supernet"):
-            model = _FixedSubnetForExportV3(
-                input_ph=input_ph,
-                is_training_ph=is_training_const,
-                arch_code=arch_code,
-                num_out=int(flow_channels) * 2,
-                init_neurons=32,
-                expansion_factor=2.0,
-            )
-            preds = model.build()
-        preds_accum = accumulate_predictions(preds)
+        model = _FixedSubnetForExportV3(
+            input_ph=input_ph,
+            is_training_ph=is_training_const,
+            arch_code=arch_code,
+            num_out=int(flow_channels) * 2,
+            init_neurons=32,
+            expansion_factor=2.0,
+        )
+        preds = model.build()
+        preds_accum = _accumulate_predictions_static(preds)
         output_tensor = preds_accum[..., 0:int(flow_channels)]
-        saver = tf.compat.v1.train.Saver(max_to_keep=1)
 
         with tf.compat.v1.Session(graph=graph) as sess:
             sess.run(tf.compat.v1.global_variables_initializer())
-            saver.restore(sess, str(checkpoint_prefix))
             converter = tf.compat.v1.lite.TFLiteConverter.from_session(sess, [input_ph], [output_tensor])
             if quantize_int8:
                 converter.optimizations = [tf.lite.Optimize.DEFAULT]
                 converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8, tf.lite.OpsSet.TFLITE_BUILTINS]
                 converter.inference_input_type = tf.int8
                 converter.inference_output_type = tf.int8
-                rng = np.random.default_rng(seed=2026)
-
                 def representative_dataset_gen():
                     for _ in range(max(1, int(rep_dataset_samples))):
-                        sample = rng.random((1, int(input_h), int(input_w), 6)).astype(np.float32)
+                        sample = np.zeros((1, int(input_h), int(input_w), 6), dtype=np.float32)
                         yield [sample]
 
                 converter.representative_dataset = representative_dataset_gen
