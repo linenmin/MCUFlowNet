@@ -259,6 +259,7 @@ class NSGA2SearchRunner:
         self.search_space_size = int(search_cfg.get("search_space_size", 23328))
         self.max_workers = int(cfg["concurrency"]["max_workers"])
         self.gpu_devices = _parse_gpu_devices(cfg.get("concurrency", {}).get("gpu_devices"))
+        self.prune_tflite_after_reduce = bool(cfg.get("evaluation", {}).get("vela_prune_tflite_after_reduce", False))
         self.state_path = Path(self.exp_dir) / "metadata" / str(cfg.get("files", {}).get("state_json", "nsga2_state.json"))
         self.pareto_csv_path = Path(self.exp_dir) / "metadata" / str(cfg.get("files", {}).get("pareto_csv", "pareto_front.csv"))
         self._rng = random.Random(self.seed)
@@ -271,16 +272,26 @@ class NSGA2SearchRunner:
         logger.info("=" * 60)
 
         _file_io().rescue_orphaned_results(self.exp_dir)
+        self._maybe_prune_vela_tflite(stage="startup_rescue")
         state = self._load_or_init_state()
         current_population = self._rows_from_arch_codes(state.get("population_arches", []))
         start_generation = int(state.get("next_generation", 0))
 
-        for generation in range(start_generation, self.total_generations):
-            logger.info("=" * 50)
-            logger.info("=== Generation %d / %d ===", generation, self.total_generations - 1)
-            logger.info("=" * 50)
-            current_population = self._run_single_generation(generation, current_population)
-            self._save_state(next_generation=generation + 1, population=current_population)
+        try:
+            for generation in range(start_generation, self.total_generations):
+                logger.info("=" * 50)
+                logger.info("=== Generation %d / %d ===", generation, self.total_generations - 1)
+                logger.info("=" * 50)
+                current_population = self._run_single_generation(generation, current_population)
+                self._save_state(next_generation=generation + 1, population=current_population)
+        except KeyboardInterrupt:
+            _file_io().collect_and_commit_worker_results(self.exp_dir)
+            self._maybe_prune_vela_tflite(stage="interrupt_rescue")
+            raise
+        except Exception:
+            _file_io().collect_and_commit_worker_results(self.exp_dir)
+            self._maybe_prune_vela_tflite(stage="exception_rescue")
+            raise
 
         logger.info("=" * 60)
         logger.info("NSGA-II baseline finished")
@@ -303,6 +314,7 @@ class NSGA2SearchRunner:
             if candidate_arches:
                 self._evaluate_arch_batch(candidate_arches, generation)
                 _file_io().collect_and_commit_worker_results(self.exp_dir)
+                self._maybe_prune_vela_tflite(stage=f"generation_{generation}_reduce")
 
         generation_rows = self._rows_for_generation(generation)
 
@@ -322,6 +334,15 @@ class NSGA2SearchRunner:
             len(next_population),
         )
         return next_population
+
+    def _maybe_prune_vela_tflite(self, stage: str) -> int:
+        """Optionally delete heavyweight Vela TFLite artifacts while keeping metrics."""
+        if not self.prune_tflite_after_reduce:
+            return 0
+        removed = _file_io().prune_vela_tflite_artifacts(self.exp_dir)
+        if removed > 0:
+            logger.info("[Prune] %s: deleted %d Vela tflite files", stage, removed)
+        return removed
 
     def _generate_offspring_arches(
         self,

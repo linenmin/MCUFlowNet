@@ -1,5 +1,7 @@
 import random
+import tempfile
 import unittest
+from pathlib import Path
 
 from efnas.baselines import nsga2_search
 
@@ -67,6 +69,33 @@ class TestNSGA2BaselineHelpers(unittest.TestCase):
     def test_gpu_assignment_round_robins_visible_devices(self) -> None:
         assignments = nsga2_search.assign_gpus_to_arches(["a", "b", "c", "d"], ["0", "2"])
         self.assertEqual(assignments, [("a", "0"), ("b", "2"), ("c", "0"), ("d", "2")])
+
+    def test_prunes_vela_tflite_artifacts_when_enabled(self) -> None:
+        cfg = {
+            "search": {
+                "total_evaluations": 50,
+                "population_size": 50,
+                "seed": 2026,
+                "search_space_module": "efnas.nas.search_space_v3",
+            },
+            "concurrency": {"max_workers": 1, "gpu_devices": "0"},
+            "evaluation": {"vela_prune_tflite_after_reduce": True},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            exp_dir = Path(tmp)
+            artifact_dir = exp_dir / "dashboard" / "eval_outputs" / "run_000" / "analysis" / "vela_tmp" / "arch_000"
+            artifact_dir.mkdir(parents=True)
+            tflite_path = artifact_dir / "model_int8.tflite"
+            keep_path = artifact_dir / "vela_summary.csv"
+            tflite_path.write_bytes(b"tflite")
+            keep_path.write_text("fps,1\n", encoding="utf-8")
+
+            runner = nsga2_search.NSGA2SearchRunner(cfg=cfg, exp_dir=str(exp_dir), project_root=str(Path.cwd()))
+            removed = runner._maybe_prune_vela_tflite(stage="test")
+
+            self.assertEqual(removed, 1)
+            self.assertFalse(tflite_path.exists())
+            self.assertTrue(keep_path.exists())
 
 
 if __name__ == "__main__":
