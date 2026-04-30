@@ -1,84 +1,74 @@
-# Findings: Distill-Or-Not Short Retrain Probe
+# Findings: Distill-Or-Not Same-FPS Probe
 
-## Candidate Source
+## Experimental Scope Correction
 
-The selected 10 candidates are from:
+The original 10-subnet selection used Pareto/front-rank disagreement. That selection is useful for a broad Pareto-disagreement probe, but it is not the cleanest test of whether distill or no-distill gives a better EPE rank signal.
 
-`D:/Dataset/MCUFlowNet/EdgeFlowNAS/outputs/nsga2_v3/frontier_top5_rank_gap_probe_20260430/top10.csv`
+The corrected experiment fixes the hardware niche first:
 
-Selection rule:
+- use common architecture codes across both V3 NSGA-II runs
+- restrict to a narrow FPS range
+- compare only EPE ranks inside that same FPS window
 
-- common architecture evaluated by both V3 NSGA-II runs
-- at least one run has `front_rank <= 5`
-- largest cross-run `front_rank_gap`
-- tie-break by `dominance_count_gap`, then `rank_score_gap`
-- no cross-supernet absolute EPE comparison
+This better matches the research question:
 
-## Existing Code Surface
+> Under similar deployment speed, which supernet ranks architecture quality more faithfully?
 
-### Not directly usable as-is
+## Current Candidate Set
 
-- `wrappers/run_retrain_v2_fc2.py`
-  - supports multiple `arch_codes`
-  - but imports `FixedArchModelV2`
-  - warm-start mapping uses `MultiScaleResNetSupernetV2`
-  - parses V2 arch semantics through `arch_codec_v2`
-  - therefore unsafe for V3 rank probe without a V3-specific adaptation
+Current source:
 
-- `configs/retrain_v2_fc2.yaml`
-  - uses `input_height=352`, `input_width=480`
-  - LR default is `5e-5 -> 1e-6`
-  - not aligned with current V3 supernet resolution or requested LR consistency
+`plan/distillOrNot/same_fps_rank_gap_top8.csv`
 
-- `wrappers/run_ablation_v1_fc2.py`
-  - already has FC2/Sintel validation and useful logging
-  - but trains named ablation variants, not arbitrary 11D V3 architecture codes
+External analysis output:
 
-### Useful reusable parts
+`outputs/nsga2_v3/same_fps_rank_gap_probe_20260430/`
 
-- `efnas.engine.retrain_v2_trainer`
-  - multi-scale uncertainty loss
-  - FC2 train/eval loop
-  - checkpoint saving
-  - FC2 comparison CSV
-  - Sintel validation integration
+Selection summary:
 
-- `efnas.engine.ablation_v1_trainer`
-  - has validation progress bars
-  - has Sintel best checkpoint logic
-  - has gradient statistics and richer logs
-  - can serve as the better pattern for a new short-probe trainer
+- common architectures: 154
+- FPS window: `6.589863 - 6.895185`
+- selected FPS range: `6.597428 - 6.895185`
+- selected relative FPS span: `4.45%`
+- selected within-window EPE rank-gap range: `8 - 10`
 
-- `efnas.nas.supernet_subnet_distribution_v3`
-  - contains a selected-only `_FixedSubnetForExportV3`
-  - useful as a reference for V3 hard-routed architecture semantics
-  - should not be imported as a private training model directly; better to move or duplicate into a proper network module
+## Multi-GPU Design Finding
 
-- `efnas.data.dataloader_builder`
-  - already supports `fc2_num_workers` and `fc2_eval_num_workers`
+The implemented launcher uses one child process per architecture. Four child processes run concurrently on four GPUs.
 
-- `efnas.data.prefetch_provider.PrefetchBatchProvider`
-  - can be reused to provide bounded CPU prefetch for train/eval providers
+This means batches are not physically shared across candidates. Each process constructs its own FC2 provider and prefetch queue.
 
-## Key Technical Finding
+Why this design:
 
-The requested experiment should not train all 10 subnets inside one TensorFlow graph on one GPU. That would be memory-heavy, difficult to parallelize cleanly across 5 GPUs, and would couple failures.
+- TensorFlow 1 multi-model single-graph training is easier when everything stays on one GPU, but less clean across multiple GPUs.
+- One process per architecture gives robust GPU isolation through `CUDA_VISIBLE_DEVICES`.
+- A failed candidate does not kill checkpoints for every candidate in a shared graph.
+- Per-candidate logs and checkpoints are simpler.
+- GPU memory is bounded by one fixed subnet graph, not a shared graph containing many subnet graphs.
 
-The safer design is:
+Trade-off:
 
-- one child process per architecture
-- each process sees exactly one GPU via `CUDA_VISIBLE_DEVICES`
-- a launcher keeps 5 child processes active until all 10 complete
+- The FC2 batches are loaded independently by each process, so disk/CPU load is duplicated.
+- With the current 4-GPU Slurm template, `fc2_num_workers=4` gives about 16 train loader workers total. This is intentional for `--cpus-per-task=24`.
 
-This matches the successful NSGA-style multi-GPU pattern already used in this project.
+Common-randomness note:
 
-## Initialization Finding
+- All processes currently receive the same default seed unless overridden.
+- That gives comparable initialization and data-order intent, but separate multiprocessing data loaders may still make exact batch identity an implementation detail.
+- If the final comparison requires strict common batches, a future one-GPU shared-batch runner can be added, but it would be slower and is not necessary for this rank-calibration probe.
 
-The initialization policy materially affects the interpretation:
+## Vela/Fix-Subnet Verification
 
-- If warm-started from no-distill, no-distill may look better because the weights are from that supernet.
-- If warm-started from distill, distill may get the same advantage.
-- If training from scratch, the comparison becomes a cleaner test of architecture rank predictiveness.
+The fixed V3 subnet graph was checked with the local `vela` environment.
 
-Therefore common random initialization is the recommended default unless the research question is explicitly about inherited-weight fine-tuning quality.
+For reference arch:
 
+`2,1,0,0,0,0,1,1,1,1,1`
+
+`FixedArchModelV3` export produced:
+
+- SRAM: `1.353515625 MB`
+- inference time: `147.233625 ms`
+- FPS: `6.791926776`
+
+This matches the previously validated fixed V3 reference and confirms the new fixed model is not exporting the full mixed-branch supernet graph.

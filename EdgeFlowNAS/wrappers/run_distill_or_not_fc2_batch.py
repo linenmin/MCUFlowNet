@@ -24,7 +24,7 @@ def _project_path(path_text: str) -> Path:
 
 
 def load_candidates(csv_path: Path) -> List[Dict[str, object]]:
-    """Load candidate rows from top10.csv."""
+    """Load candidate rows from a distill-or-not probe CSV."""
     rows: List[Dict[str, object]] = []
     with Path(csv_path).open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
@@ -66,10 +66,10 @@ def _write_status(path: Path, rows: Sequence[Dict[str, object]]) -> None:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Launch V3 distill-or-not FC2 scratch probes")
     parser.add_argument("--config", default="configs/distill_or_not_fc2_short.yaml")
-    parser.add_argument("--candidates_csv", default="outputs/nsga2_v3/frontier_top5_rank_gap_probe_20260430/top10.csv")
-    parser.add_argument("--experiment_name", default="distill_or_not_fc2_short_run1")
-    parser.add_argument("--gpu_devices", default="0,1,2,3,4")
-    parser.add_argument("--max_workers", type=int, default=5)
+    parser.add_argument("--candidates_csv", default="plan/distillOrNot/same_fps_rank_gap_top8.csv")
+    parser.add_argument("--experiment_name", default="distill_or_not_same_fps_rank_gap_run1")
+    parser.add_argument("--gpu_devices", default="0,1,2,3")
+    parser.add_argument("--max_workers", type=int, default=4)
     parser.add_argument("--base_path", default=None)
     parser.add_argument("--train_dir", default=None)
     parser.add_argument("--val_dir", default=None)

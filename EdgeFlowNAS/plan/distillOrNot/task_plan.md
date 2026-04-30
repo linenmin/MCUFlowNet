@@ -1,130 +1,125 @@
-# Task Plan: Distill-Or-Not Short Retrain Probe
+# Task Plan: Distill-Or-Not Same-FPS Short Retrain Probe
 
 ## Goal
 
-Run a controlled short-retrain experiment for the 10 V3 NSGA-II rank-disagreement subnets selected in:
+Run a controlled short-retrain experiment for 8 V3 subnets selected from the two V3 NSGA-II runs in:
 
-`D:/Dataset/MCUFlowNet/EdgeFlowNAS/outputs/nsga2_v3/frontier_top5_rank_gap_probe_20260430/top10.csv`
+`D:/Dataset/MCUFlowNet/EdgeFlowNAS/outputs/nsga2_v3`
 
-The goal is to test whether the V3 no-distill or distill supernet inherited ranking better predicts short FC2 retrain ranking.
+The experiment asks:
 
-## Current Phase
+> Within the same FPS/hardware niche, which supernet's EPE ranking is closer to a scratch short-retrain ranking: distill or no-distill?
 
-Planning and code-surface audit complete. Implementation is pending user confirmation on the initialization policy.
+This is a rank-calibration probe. It does not test whether inherited distill weights can be deployed directly.
 
-## Fixed Requirements
+## Candidate Source
+
+The current candidate list is:
+
+`D:/Dataset/MCUFlowNet/EdgeFlowNAS/plan/distillOrNot/same_fps_rank_gap_top8.csv`
+
+It is copied from:
+
+`D:/Dataset/MCUFlowNet/EdgeFlowNAS/outputs/nsga2_v3/same_fps_rank_gap_probe_20260430/same_fps_rank_gap_top8.csv`
+
+Selection rule:
+
+- Align common architecture codes from the distill and no-distill V3 NSGA-II `history_archive.csv` files.
+- Restrict comparison to a contiguous FPS window with <= 5% relative span.
+- Compute EPE rank inside that FPS window separately for distill and no-distill.
+- Select the 8 subnets with the largest within-window EPE rank gap.
+
+Selected FPS niche:
+
+- Window FPS range: `6.589863 - 6.895185`.
+- Window size: 21 common architectures.
+- Selected FPS range: `6.597428 - 6.895185`.
+- Selected FPS relative span: `4.45%`.
+- Selected rank-gap range: `8 - 10`.
+
+## Fixed Training Requirements
 
 | Requirement | Current Decision |
 | --- | --- |
 | Dataset | FlyingChairs2 |
 | Input resolution | `172x224`, matching V3 supernet/search resolution |
-| Candidate count | 10 selected rank-gap subnets |
-| GPU usage | One Slurm job/script using 5 GPUs, one architecture process per GPU |
-| CPU loading | Use FC2 threaded loading plus bounded prefetch |
+| Candidate count | 8 same-FPS rank-gap subnets |
+| Initialization | Scratch/common random initialization |
+| GPU usage | One Slurm job using 4 GPUs, one architecture process per GPU |
+| CPU loading | FC2 threaded loading plus bounded prefetch |
 | Epochs | 50 |
 | FC2 validation | Every epoch |
 | Sintel validation | Every 5 epochs |
-| Learning rate policy | Same as V3 FC2 supernet unless user chooses otherwise: Adam, cosine LR `1e-4 -> 1e-6` |
-| Output root | Proposed: `outputs/distill_or_not_fc2_short` |
+| Learning rate policy | Adam, cosine LR `1e-4 -> 1e-6` |
+| Output root | `outputs/distill_or_not_fc2_short` |
+| Experiment name | `distill_or_not_same_fps_rank_gap_run1` |
 
-## Proposed Architecture
+## Implemented Code Surface
 
-### Phase 1: V3 Fixed-Architecture Training Surface
-
-- [ ] Add a V3 fixed-architecture model implementation for training.
-- [ ] Reuse V3 semantics:
-  - 11D code
-  - first six dimensions with choices `0/1/2`
-  - last five dimensions with choices `0/1`
-  - fixed bilinear decoder
+- `efnas.network.fixed_arch_models_v3.FixedArchModelV3`
+  - selected-only hard-routed V3 model
+  - 11D architecture code
+  - bilinear decoder
   - bottleneck ECA
   - 1/4 global gate
-- [ ] Preserve multi-scale output and uncertainty loss used by current retraining.
-- [ ] Save `last`, `best`, and `sintel_best` checkpoints.
+  - multi-scale outputs
 
-### Phase 2: FC2 Short-Retrain Trainer
+- `efnas.engine.distill_or_not_trainer`
+  - single-architecture scratch FC2 training
+  - multi-scale uncertainty loss
+  - gradient accumulation through `micro_batch_size`
+  - FC2 validation with progress bars
+  - optional Sintel validation
+  - saves `last`, `best`, and `sintel_best`
 
-- [ ] Add config, proposed: `configs/distill_or_not_fc2_short.yaml`.
-- [ ] Add a single-architecture trainer wrapper, proposed: `wrappers/run_distill_or_not_fc2_one.py`.
-- [ ] Support:
-  - `--arch_code`
-  - `--model_name`
-  - `--experiment_name`
-  - `--gpu_device`
-  - `--num_epochs`
-  - `--fc2_num_workers`
-  - `--fc2_eval_num_workers`
-  - `--prefetch_batches`
-  - `--sintel_eval_every_epoch`
-  - `--fc2_eval_every_epoch`
-  - `--resume`
+- `wrappers/run_distill_or_not_fc2_one.py`
+  - trains one candidate on one visible GPU
 
-### Phase 3: Five-GPU Launcher
+- `wrappers/run_distill_or_not_fc2_batch.py`
+  - launches candidates across multiple GPUs
+  - defaults to 4 GPUs and the same-FPS top-8 CSV
 
-- [ ] Add a launcher wrapper, proposed: `wrappers/run_distill_or_not_fc2_batch.py`.
-- [ ] Read `top10.csv`.
-- [ ] Launch at most 5 child processes concurrently.
-- [ ] Assign each child process exactly one GPU through `CUDA_VISIBLE_DEVICES`.
-- [ ] Keep one architecture per child process to avoid graph/memory coupling.
-- [ ] Collect process return codes and write a launcher manifest.
-- [ ] Support resume by skipping completed or launching with `--resume`.
+- `plan/distillOrNot/distill_or_not_fc2_short_4gpu.slurm`
+  - HPC entrypoint for the 8-subnet experiment
 
-### Phase 4: Validation
+## Why One Process Per Architecture
 
-- [ ] Unit-test candidate CSV parsing.
-- [ ] Unit-test command construction and GPU assignment.
-- [ ] Dry-run launcher with `--dry_run`.
-- [ ] Smoke-test one architecture for 1 epoch on a small FC2 cap if available.
-- [ ] Verify generated outputs contain:
-  - per-model `eval_history.csv`
-  - FC2 EPE every epoch
-  - Sintel EPE every 5 epochs
-  - `comparison.csv` or equivalent summary
-  - `run_manifest.json`
+The launcher intentionally does not put all candidates into one TensorFlow graph.
 
-### Phase 5: HPC Script
+Instead, each child process:
 
-- [ ] Write Slurm example for 5 GPUs.
-- [ ] Recommended starting resources:
-  - `--gpus-per-node=5`
-  - `--cpus-per-task=20` to `30`
-  - `--mem=140G` to `210G`
-  - `--time=72:00:00`
-- [ ] Default worker plan:
-  - `--fc2_num_workers 4`
-  - `--fc2_eval_num_workers 4`
-  - `--prefetch_batches 2`
-  - total loader threads approximately `5 * 4 = 20`, plus TensorFlow/Vela/runtime overhead.
+- owns one architecture
+- sees one GPU through `CUDA_VISIBLE_DEVICES`
+- builds one TF1 graph/session
+- has its own FC2 providers and prefetch queue
 
-## Important Design Decision Pending
+This is different from the older retrain code that trained multiple models in one graph and shared batches. That old pattern was useful for one-GPU pairwise comparison, but it does not scale cleanly to 4 GPUs because TensorFlow 1 graph/session placement, checkpointing, failure isolation, and GPU memory ownership become tightly coupled.
 
-The main unresolved decision is initialization:
+The current design favors:
 
-1. **Train from scratch / common random initialization**
-   - Best for measuring architecture quality independent of either supernet.
-   - Least biased for deciding which inherited rank predicts true retrain quality.
-   - This is my recommendation.
+- clean multi-GPU utilization
+- independent checkpoint/resume per candidate
+- failure isolation
+- lower per-process graph memory
+- simpler Slurm scheduling
 
-2. **Warm-start all candidates from one common supernet checkpoint**
-   - Closer to the original retrain workflow if the project defines retrain as inherited-weight fine-tuning.
-   - But choosing no-distill or distill checkpoint would bias the experiment toward that supernet.
+The trade-off is duplicated data loading. With `--fc2_num_workers 4` and four concurrent processes, the effective training workers are about 16 plus four Python main processes, which matches the 24-CPU Slurm template.
 
-3. **Warm-start each candidate from both supernets**
-   - Most complete but doubles compute to 20 short runs.
-   - Tests both ranking and inherited-weight quality, but makes interpretation less clean.
+## Comparison After Training
 
-## Recommended Default
+After the 8 short runs finish:
 
-Use common random initialization with the same seed family, then compare the final 50-epoch FC2/Sintel ranks against:
+1. Compute final FC2 EPE rank across the 8 subnets.
+2. Compute final Sintel EPE rank across the 8 subnets.
+3. Compare those ranks against:
+   - distill EPE rank inside the FPS window
+   - no-distill EPE rank inside the FPS window
+4. Report:
+   - Spearman correlation
+   - Kendall correlation if available
+   - per-candidate absolute rank error
+   - winner count: distill closer vs no-distill closer
 
-- no-distill inherited front rank
-- distill inherited front rank
+The expected claim, if supported, is:
 
-This directly tests ranking predictiveness without giving either supernet a warm-start advantage.
-
-## Open Questions For User
-
-1. Should the 50-epoch short retrain start from scratch, or should it warm-start from a supernet checkpoint?
-2. Should all 10 subnets share the same seed, or should each use a stable different seed derived from candidate ID?
-3. Should early stopping be disabled for this probe?
-
+> Distillation improves or does not improve supernet EPE rank calibration within a fixed hardware/FPS niche.

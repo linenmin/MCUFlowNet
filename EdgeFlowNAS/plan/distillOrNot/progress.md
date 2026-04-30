@@ -1,65 +1,52 @@
-# Progress Log: Distill-Or-Not Short Retrain Probe
+# Progress Log: Distill-Or-Not Same-FPS Probe
 
 ## Session: 2026-04-30
 
-### Status
+### Current Status
 
-- **Status:** implementation verified locally; git commit/push pending.
-- **Initialization policy:** confirmed by user as scratch/common random initialization.
+- Corrected candidate selection from old 10-subnet Pareto/front-rank probe to new 8-subnet same-FPS rank-gap probe.
+- Training code remains scratch/common random initialization.
+- Slurm template is configured for 4 P100 GPUs.
 
-### Actions taken
+### Completed
 
-- Loaded planning workflow.
-- Created `D:/Dataset/MCUFlowNet/EdgeFlowNAS/plan/distillOrNot`.
-- Reviewed selected candidate CSV:
-  - `outputs/nsga2_v3/frontier_top5_rank_gap_probe_20260430/top10.csv`
-- Reviewed available wrappers:
-  - `wrappers/run_retrain_v2_fc2.py`
-  - `wrappers/run_ablation_v1_fc2.py`
-  - `wrappers/run_supernet_subnet_distribution_v3.py`
-- Reviewed relevant configs:
-  - `configs/retrain_v2_fc2.yaml`
-  - `configs/ablation_v1_fc2.yaml`
-  - `configs/supernet_v3_fc2_172x224.yaml`
-- Reviewed relevant trainer/evaluator surfaces:
-  - `efnas.engine.retrain_v2_trainer`
-  - `efnas.engine.ablation_v1_trainer`
-  - `efnas.engine.ablation_v1_sintel_runtime`
-  - `efnas.nas.supernet_subnet_distribution_v3`
-  - `efnas.data.dataloader_builder`
-
-### Current conclusion
-
-Existing training code has most of the needed pieces, but there is no clean V3 fixed-architecture short-retrain entrypoint yet.
-
-Recommended implementation:
-
-1. Add a V3 fixed-architecture trainable model.
-2. Add a single-architecture FC2 short trainer.
-3. Add a five-GPU batch launcher.
-4. Add a config and Slurm example.
-
-### Implementation update
-
-- Added TDD coverage for candidate CSV parsing, GPU round-robin assignment, wrapper CLI controls, and fixed V3 selected-branch graph construction.
-- Added `efnas.network.fixed_arch_models_v3.FixedArchModelV3`.
-- Added `efnas.engine.distill_or_not_trainer` for single-candidate scratch FC2 retraining.
-- Added `efnas.engine.distill_or_not_sintel_runtime` for V3 fixed checkpoint Sintel validation.
-- Added wrappers:
+- Created and verified V3 fixed-architecture training path:
+  - `efnas.network.fixed_arch_models_v3.FixedArchModelV3`
+  - `efnas.engine.distill_or_not_trainer`
+  - `efnas.engine.distill_or_not_sintel_runtime`
   - `wrappers/run_distill_or_not_fc2_one.py`
   - `wrappers/run_distill_or_not_fc2_batch.py`
-- Added config:
-  - `configs/distill_or_not_fc2_short.yaml`
-- Added versioned candidate list and Slurm template:
-  - `rank_gap_top10.csv`
-  - `distill_or_not_fc2_short_5gpu.slurm`
+- Fixed prefetch wrapper signature bug after HPC log showed `PrefetchBatchProvider.__init__()` did not accept `name=`.
+- Verified focused tests:
+  - `python -m unittest tests.test_distill_or_not_short_retrain`
+- Verified fixed V3 Vela structure using local `vela` environment:
+  - SRAM `1.353515625 MB`
+  - inference `147.233625 ms`
+  - FPS `6.791926776`
+- Generated same-FPS candidate analysis:
+  - `outputs/nsga2_v3/same_fps_rank_gap_probe_20260430/same_fps_rank_gap_top8.csv`
+  - `outputs/nsga2_v3/same_fps_rank_gap_probe_20260430/fps_window_all_candidates.csv`
+  - `outputs/nsga2_v3/same_fps_rank_gap_probe_20260430/summary.md`
+- Copied the selected 8 candidates into a versioned plan CSV:
+  - `plan/distillOrNot/same_fps_rank_gap_top8.csv`
+- Updated 4-GPU Slurm template:
+  - `plan/distillOrNot/distill_or_not_fc2_short_4gpu.slurm`
 
-### Pending
+### Current Candidate Set
 
-- Commit and push.
+| ID | Arch code | FPS | Distill rank | No-distill rank | Gap |
+| --- | --- | --- | --- | --- | --- |
+| SF01 | `0,1,0,2,0,2,0,0,1,0,0` | 6.6722 | 5 | 15 | 10 |
+| SF02 | `0,1,0,2,0,2,0,0,0,0,1` | 6.6015 | 4 | 14 | 10 |
+| SF03 | `0,0,0,2,0,2,0,0,0,0,0` | 6.8952 | 8 | 17 | 9 |
+| SF04 | `2,0,1,1,0,2,1,0,1,0,0` | 6.6233 | 17 | 9 | 8 |
+| SF05 | `1,0,1,1,0,2,0,0,1,0,1` | 6.6329 | 15 | 7 | 8 |
+| SF06 | `1,0,1,1,0,2,0,0,0,0,1` | 6.7032 | 14 | 6 | 8 |
+| SF07 | `1,0,1,1,0,2,1,0,1,0,1` | 6.5974 | 13 | 5 | 8 |
+| SF08 | `1,0,1,1,0,2,0,0,0,0,0` | 6.8494 | 16 | 8 | 8 |
 
-### Verification
+### Next
 
-- `python -m unittest tests.test_distill_or_not_short_retrain` passed.
-- `python wrappers/run_distill_or_not_fc2_batch.py --dry_run ...` passed and showed 10 candidates assigned round-robin over GPUs 0-4.
-- `python -m py_compile ...` passed for the new trainer/runtime/model/wrapper files.
+- Run the 8-candidate short retrain on HPC with:
+  - `sbatch plan/distillOrNot/distill_or_not_fc2_short_4gpu.slurm`
+- After completion, compare FC2/Sintel final ranks against the two within-FPS-window supernet ranks.

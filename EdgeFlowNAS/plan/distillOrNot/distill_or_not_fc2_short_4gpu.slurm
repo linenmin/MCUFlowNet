@@ -25,8 +25,8 @@ export OPENBLAS_NUM_THREADS=1
 
 python wrappers/run_distill_or_not_fc2_batch.py \
   --config configs/distill_or_not_fc2_short.yaml \
-  --candidates_csv plan/distillOrNot/rank_gap_top10.csv \
-  --experiment_name distill_or_not_fc2_short_run1 \
+  --candidates_csv plan/distillOrNot/same_fps_rank_gap_top8.csv \
+  --experiment_name distill_or_not_same_fps_rank_gap_run1 \
   --gpu_devices 0,1,2,3 \
   --max_workers 4 \
   --num_epochs 50 \
