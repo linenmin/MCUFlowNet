@@ -3,6 +3,7 @@
 import csv
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 
@@ -87,6 +88,27 @@ class TestDistillOrNotShortRetrain(unittest.TestCase):
         wrapped = _wrap_prefetch(DummyProvider(), 1)
         self.assertEqual(wrapped.next_batch(4), 4)
         wrapped.close()
+
+    def test_atomic_json_write_tolerates_parallel_writers(self):
+        try:
+            import tensorflow  # noqa: F401
+        except ModuleNotFoundError:
+            self.skipTest("TensorFlow is required to import trainer")
+        from efnas.engine.distill_or_not_trainer import _save_json_atomic
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "trainer_state.json"
+
+            def write_many(worker_id):
+                for step in range(50):
+                    _save_json_atomic(path, {"worker": worker_id, "step": step})
+
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                futures = [pool.submit(write_many, worker_id) for worker_id in range(8)]
+                for future in futures:
+                    future.result()
+
+            self.assertTrue(path.exists())
 
     def test_fixed_v3_model_builds_only_selected_stem_branch(self):
         try:

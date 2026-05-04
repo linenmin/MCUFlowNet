@@ -5,7 +5,10 @@ from __future__ import annotations
 import csv
 import json
 import math
+import os
+import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Sequence
 
@@ -80,9 +83,22 @@ def _load_csv_rows(path: Path) -> List[Dict[str, Any]]:
 
 
 def _save_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_name = f".{path.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp"
+    tmp_path = path.with_name(tmp_name)
     tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp_path.replace(path)
+    try:
+        for attempt in range(20):
+            try:
+                tmp_path.replace(path)
+                return
+            except PermissionError:
+                if attempt == 19:
+                    raise
+                time.sleep(0.05)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
 
 
 def _summarize_grad_norms(values: Sequence[float], clip_threshold: float) -> Dict[str, float]:

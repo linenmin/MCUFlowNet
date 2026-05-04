@@ -17,6 +17,8 @@
   - `wrappers/run_distill_or_not_fc2_one.py`
   - `wrappers/run_distill_or_not_fc2_batch.py`
 - Fixed prefetch wrapper signature bug after HPC log showed `PrefetchBatchProvider.__init__()` did not accept `name=`.
+- Diagnosed SF03 HPC failure as concurrent child-process writes to the shared `trainer_state.json.tmp` file, not as an architecture, NaN, or OOM failure.
+- Added a regression test for parallel `_save_json_atomic()` calls and changed the temp-file path to include process/thread/UUID plus short replace retry.
 - Verified focused tests:
   - `python -m unittest tests.test_distill_or_not_short_retrain`
 - Verified fixed V3 Vela structure using local `vela` environment:
