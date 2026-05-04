@@ -18,14 +18,37 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 
+FINAL_RETRAIN_V3_CANDIDATES: List[Dict[str, object]] = [
+    {
+        "model_name": "v3_acc",
+        "arch_code": "0,1,2,2,2,2,0,0,0,0,1",
+        "role": "strongest_predicted_accuracy",
+    },
+    {
+        "model_name": "v3_efn_fps",
+        "arch_code": "2,0,0,2,2,1,0,0,0,0,0",
+        "role": "edgeflownet_fps_match",
+    },
+    {
+        "model_name": "v3_light",
+        "arch_code": "0,0,0,0,0,0,0,0,0,0,0",
+        "role": "lightest_pareto_endpoint",
+    },
+]
+
+
 def _project_path(path_text: str) -> Path:
     path = Path(path_text)
     return path if path.is_absolute() else Path(_PROJECT_ROOT) / path
 
 
 def load_candidates(csv_path: Path) -> List[Dict[str, object]]:
+    resolved_path = _project_path(str(csv_path))
+    default_path = _project_path("plan/retrain_v3/retrain_v3_candidates.csv")
+    if not resolved_path.exists() and resolved_path == default_path:
+        return [dict(item) for item in FINAL_RETRAIN_V3_CANDIDATES]
     rows: List[Dict[str, object]] = []
-    with _project_path(str(csv_path)).open("r", encoding="utf-8", newline="") as handle:
+    with resolved_path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
         for idx, row in enumerate(reader, start=1):
             model_name = str(row.get("model_name") or row.get("candidate_id") or f"v3_{idx:02d}").strip()
