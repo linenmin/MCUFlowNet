@@ -1,0 +1,95 @@
+runtime:
+  experiment_name: "retrain_v3_ft3d_run1"
+  output_root: "outputs/retrain_v3_ft3d"
+  seed: 42
+
+model_name: "v3_light"
+arch_code: "0,0,0,0,0,0,0,0,0,0,0"
+
+train:
+  gpu_device: 0
+  num_epochs: 50
+  batch_size: 32
+  micro_batch_size: 32
+  lr: 1.0e-5
+  lr_min: 1.0e-6
+  optimizer: "adam"
+  lr_schedule: "cosine"
+  weight_decay: 0.0
+  grad_clip_global_norm: 200.0
+  train_sampling_mode: "shuffle_no_replacement"
+  train_crop_mode: "random"
+  early_stop_patience: 0
+
+data:
+  dataset: "FT3D"
+  base_path: "../Datasets"
+  ft3d_frames_base_paths:
+    - "../Datasets/FlyingThings3D/frames_cleanpass"
+    - "../Datasets/FlyingThings3D/frames_finalpass"
+  ft3d_flow_base_path: "../Datasets/FlyingThings3D/optical_flow"
+  train_dir: "TRAIN"
+  val_dir: "TEST"
+  ft3d_frames_subdir: ""
+  ft3d_flow_subdir: ""
+  ft3d_directions: ["into_future", "into_past"]
+  ft3d_flow_divisor: 12.5
+  ft3d_num_workers: 4
+  ft3d_eval_num_workers: 1
+  prefetch_batches: 2
+  eval_prefetch_batches: 0
+  ft3d_excluded_flow_paths:
+    - "../Datasets/FlyingThings3D/optical_flow/TEST/A/0085/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0012/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0096/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0186/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0441/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0456/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0483/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0728/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/B/0459/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/C/0031/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/C/0080/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/C/0140/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/C/0260/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/C/0323/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+  ft3d_train_augment:
+    enabled: true
+    min_scale: -0.4
+    max_scale: 0.8
+    spatial_aug_prob: 0.8
+    stretch_prob: 0.8
+    max_stretch: 0.2
+    do_flip: true
+    h_flip_prob: 0.5
+    v_flip_prob: 0.1
+    photometric_aug_prob: 1.0
+    brightness: 0.4
+    contrast: 0.4
+    saturation: 0.4
+    asymmetric_color_aug_prob: 0.2
+    eraser_aug_prob: 0.5
+    eraser_min_size: 50
+    eraser_max_size: 100
+  input_height: 480
+  input_width: 640
+  flow_channels: 2
+
+eval:
+  eval_every_epoch: 1
+  eval_batches: 0
+  sintel:
+    dataset_root: "../Datasets/Sintel"
+    sintel_list: "EdgeFlowNet/code/dataset_paths/MPI_Sintel_Final_train_list.txt"
+    patch_size: "416,1024"
+    eval_every_epoch: 2
+    max_samples:
+    ckpt_name: "sintel_best"
+
+checkpoint:
+  load_checkpoint: false
+  resume_experiment_name: ""
+  resume_ckpt_name: "last"
+  init_mode: "experiment_dir"
+  init_experiment_dir: "outputs/retrain_v3_fc2/retrain_v3_fc2_run1"
+  init_ckpt_name: "best"
