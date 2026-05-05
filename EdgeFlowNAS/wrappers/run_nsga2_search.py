@@ -47,6 +47,18 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--num_workers", type=int, default=None, help="override per-eval FC2 loader workers")
     parser.add_argument("--prefetch_batches", type=int, default=None, help="override per-eval prefetch depth")
     parser.add_argument("--max_fc2_val_samples", type=int, default=None, help="optional FC2 val cap for pilots")
+    # Phase 2 (search_hybrid_v1): warm-start agent flag
+    parser.add_argument(
+        "--enable_warmstart",
+        action="store_true",
+        help="invoke warmstart_agent (LLM) to seed NSGA-II generation 0 instead of random init",
+    )
+    parser.add_argument(
+        "--warmstart_role",
+        type=str,
+        default="warmstart_agent",
+        help="LLM client role name for warmstart agent (must be configured in cfg.llm.models)",
+    )
     return parser
 
 
@@ -107,7 +119,40 @@ def main() -> int:
         exp_dir = init_experiment_dir(output_root, args.experiment_name)
         logger.info("new experiment dir: %s", exp_dir)
 
-    runner = NSGA2SearchRunner(cfg=cfg, exp_dir=exp_dir, project_root=_PROJECT_ROOT)
+    # Phase 2: warm-start agent (optional, only on fresh experiments —— resume
+    # 不重新调用 warmstart, 避免重复污染 generation 0).
+    external_initial_population = None
+    if args.enable_warmstart and not args.resume:
+        from efnas.search.llm_client import LLMClient
+        from efnas.search.warmstart_agent import warmstart_pipeline
+        from efnas.baselines.nsga2_search import load_search_space
+
+        pop_size = int(cfg["search"]["population_size"])
+        search_space_module = cfg["search"].get("search_space_module", "efnas.nas.search_space_v2")
+        search_space = load_search_space(search_space_module)
+        llm_client = LLMClient(cfg)
+        llm_model = cfg.get("llm", {}).get("models", {}).get(args.warmstart_role, "")
+        logger.info("warmstart enabled: role=%s model=%s pop_size=%d",
+                    args.warmstart_role, llm_model, pop_size)
+        external_initial_population = warmstart_pipeline(
+            llm_client,
+            exp_dir,
+            search_space=search_space,
+            population_size=pop_size,
+            llm_model=str(llm_model),
+            role=args.warmstart_role,
+        )
+        logger.info("warmstart returned %d valid arch_codes (will partial-fill if < %d)",
+                    len(external_initial_population), pop_size)
+    elif args.enable_warmstart and args.resume:
+        logger.info("--enable_warmstart ignored on --resume (warmstart only seeds gen 0)")
+
+    runner = NSGA2SearchRunner(
+        cfg=cfg,
+        exp_dir=exp_dir,
+        project_root=_PROJECT_ROOT,
+        external_initial_population=external_initial_population,
+    )
     try:
         runner.run()
     except KeyboardInterrupt:

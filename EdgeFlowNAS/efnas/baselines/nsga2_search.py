@@ -241,7 +241,25 @@ def _row_to_objectives(row: Dict[str, Any]) -> Tuple[float, float]:
 class NSGA2SearchRunner:
     """Project-native NSGA-II baseline runner."""
 
-    def __init__(self, cfg: Dict[str, Any], exp_dir: str, project_root: str) -> None:
+    def __init__(
+        self,
+        cfg: Dict[str, Any],
+        exp_dir: str,
+        project_root: str,
+        *,
+        external_initial_population: Optional[Sequence[str]] = None,
+    ) -> None:
+        """初始化 NSGA-II runner。
+
+        Args:
+            cfg: 完整配置字典（含 search / concurrency / evaluation / files 段）
+            exp_dir: 本次实验输出根目录
+            project_root: EdgeFlowNAS 项目根
+            external_initial_population: Phase 2 warm-start hook —— 可选的外部
+                generation-0 初始种群（arch_code 字符串列表）。如果提供，gen 0 不
+                走纯 random sampling，而是消费这个列表并对非法/重复条目做 random
+                partial fill。Phase 2.4 wrapper 会从 warmstart_agent 拿到这个列表。
+        """
         self.cfg = cfg
         self.exp_dir = exp_dir
         self.project_root = project_root
@@ -263,6 +281,8 @@ class NSGA2SearchRunner:
         self.state_path = Path(self.exp_dir) / "metadata" / str(cfg.get("files", {}).get("state_json", "nsga2_state.json"))
         self.pareto_csv_path = Path(self.exp_dir) / "metadata" / str(cfg.get("files", {}).get("pareto_csv", "pareto_front.csv"))
         self._rng = random.Random(self.seed)
+        # Phase 2.1: warm-start hook
+        self._external_initial_population: List[str] = list(external_initial_population or [])
 
     def run(self) -> None:
         """Run the NSGA-II baseline."""
@@ -308,7 +328,11 @@ class NSGA2SearchRunner:
         needed = max(0, self.population_size - len(existing_rows))
         if needed > 0:
             if generation == 0 and not current_population:
-                candidate_arches, duplicate_count = self._sample_unique_random_arches(needed)
+                # Phase 2.1: 优先消费外部 warm-start 种群；不足部分 random 补齐
+                if self._external_initial_population:
+                    candidate_arches, duplicate_count = self._consume_external_initial_population(needed)
+                else:
+                    candidate_arches, duplicate_count = self._sample_unique_random_arches(needed)
             else:
                 candidate_arches, duplicate_count = self._generate_offspring_arches(current_population, needed)
             if candidate_arches:
@@ -324,7 +348,12 @@ class NSGA2SearchRunner:
             combined_rows = list(current_population) + [row for row in generation_rows if row["arch_code"] not in {item["arch_code"] for item in current_population}]
             next_population = select_next_population(combined_rows, min(self.population_size, len(combined_rows)))
 
-        self._record_generation_metrics(generation=generation, new_evaluated=len(generation_rows), duplicates=duplicate_count)
+        self._record_generation_metrics(
+            generation=generation,
+            new_evaluated=len(generation_rows),
+            duplicates=duplicate_count,
+            current_population=next_population,
+        )
         self._write_pareto_snapshot()
         logger.info(
             "generation=%d evaluated=%d duplicates=%d next_population=%d",
@@ -395,6 +424,70 @@ class NSGA2SearchRunner:
 
         return batch_arches, duplicate_count
 
+    def _consume_external_initial_population(
+        self,
+        target_count: int,
+    ) -> Tuple[List[str], int]:
+        """Phase 2.1: 消费 warm-start agent 提供的外部初始种群。
+
+        策略:
+        1. 按顺序遍历 self._external_initial_population
+        2. 用 search_space.validate 验证每条 arch_code
+        3. 跳过非法 / 已评估 / 同 batch 内重复
+        4. 收集 target_count 个合法的；如果外部种群不够 target_count，剩余位置
+           用 _sample_unique_random_arches 补齐 (partial fill)
+        5. **不 fail**——这是 best-effort warm-start，LLM 出错也不让 NSGA-II 挂掉
+
+        Returns:
+            (collected_arch_codes, duplicate_count)
+        """
+        evaluated_arches = _file_io().get_evaluated_arch_codes(self.exp_dir)
+        batch_arches: List[str] = []
+        batch_seen: set = set()
+        duplicate_count = 0
+        invalid_count = 0
+        external_total = len(self._external_initial_population)
+
+        for raw_code in self._external_initial_population:
+            if len(batch_arches) >= target_count:
+                break
+            arch_text = str(raw_code).strip()
+            if not arch_text:
+                continue
+            try:
+                parsed = text_to_arch(arch_text, search_space=self.search_space)
+            except Exception:
+                invalid_count += 1
+                logger.warning("[Warmstart] 跳过非法 arch_code: %r", arch_text)
+                continue
+            normalized = arch_to_text(parsed)
+            if normalized in evaluated_arches or normalized in batch_seen:
+                duplicate_count += 1
+                continue
+            batch_arches.append(normalized)
+            batch_seen.add(normalized)
+
+        consumed = len(batch_arches)
+        logger.info(
+            "[Warmstart] consumed=%d / external_total=%d, invalid=%d, duplicates=%d",
+            consumed, external_total, invalid_count, duplicate_count,
+        )
+
+        # Partial random fill 如果 LLM 给的不够
+        if consumed < target_count:
+            shortfall = target_count - consumed
+            logger.warning(
+                "[Warmstart] LLM 提供 %d 合法种子，缺 %d，用 random 补齐",
+                consumed, shortfall,
+            )
+            random_arches, random_dups = self._sample_unique_random_arches(
+                shortfall, extra_seen=batch_seen,
+            )
+            batch_arches.extend(random_arches)
+            duplicate_count += random_dups
+
+        return batch_arches, duplicate_count
+
     def _sample_unique_random_arches(
         self,
         target_count: int,
@@ -444,33 +537,42 @@ class NSGA2SearchRunner:
                 except Exception:
                     logger.exception("baseline evaluation crashed: %s", arch_code)
 
-    def _record_generation_metrics(self, generation: int, new_evaluated: int, duplicates: int) -> None:
+    def _record_generation_metrics(
+        self,
+        generation: int,
+        new_evaluated: int,
+        duplicates: int,
+        *,
+        current_population: Optional[Sequence[Dict[str, Any]]] = None,
+    ) -> None:
+        """Phase 1.3: 写入完整 generation_metrics 行（36 列含 HV / crowding /
+        entropy / gap / stagnation 等）。"""
         file_io = _file_io()
+        from efnas.search import search_metrics
+
         history = file_io.read_history(self.exp_dir)
-        total = len(history)
-        best_epe = ""
-        pareto_count = 0
-        if not history.empty:
-            try:
-                epe_values = history["epe"].astype(float)
-                fps_values = history["fps"].astype(float)
-                best_epe = round(float(epe_values.min()), 6)
-                pareto_count = len(fast_non_dominated_sort(list(zip(epe_values.tolist(), (-fps_values).tolist())))[0])
-            except (TypeError, ValueError):
-                best_epe = ""
-                pareto_count = 0
-        metrics = {
-            "epoch": generation,
-            "total_evaluated": total,
-            "new_evaluated": new_evaluated,
-            "duplicates": duplicates,
-            "best_epe": best_epe,
-            "pareto_count": pareto_count,
-            "findings_count": 0,
-            "assumptions_count": 0,
-            "coverage_pct": round(total / max(1, self.search_space_size) * 100, 2),
-        }
-        file_io.append_epoch_metrics(self.exp_dir, metrics)
+        metrics_history = file_io.read_epoch_metrics(self.exp_dir)
+        pop_arch_codes: List[str] = [
+            str(row["arch_code"])
+            for row in (current_population or [])
+            if "arch_code" in row
+        ]
+
+        metrics = search_metrics.compute_full_generation_metrics(
+            history_df=history,
+            current_population_arch_codes=pop_arch_codes,
+            metrics_history_df=metrics_history,
+            epoch=generation,
+            new_evaluated=new_evaluated,
+            duplicates=duplicates,
+            population_size=self.population_size,
+            search_space_size=self.search_space_size,
+        )
+        file_io.append_epoch_metrics(
+            self.exp_dir,
+            metrics,
+            columns=search_metrics.GENERATION_METRICS_COLUMNS,
+        )
 
     def _write_pareto_snapshot(self) -> None:
         file_io = _file_io()

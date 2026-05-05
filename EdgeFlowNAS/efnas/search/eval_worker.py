@@ -169,19 +169,18 @@ def evaluate_single_arch(
 
     epe = _parse_epe(run_output_dir=run_output_dir, output_tag=output_tag)
     vela_metrics = _parse_vela_summary(run_output_dir=run_output_dir)
-    per_layer_text = _read_per_layer_report(
-        run_output_dir=run_output_dir,
-        max_rows=cfg["evaluation"].get("per_layer_csv_max_rows", 200),
-    )
 
+    # Phase 1.2: 替代旧 Agent C per-arch LLM 调用 —— 用纯 Python parser 把 Vela
+    # 报告里的逐层硬件信息持久化为 analysis/layer_profile.json。Phase 3
+    # Scientist 通过 query_vela_for_arch() 按需读取，零 LLM 调用。
+    try:
+        from efnas.search.vela_parser import parse_and_persist_layer_profile
+        parse_and_persist_layer_profile(run_output_dir)
+    except Exception:
+        logger.exception("[Worker] Vela 层级 profile 持久化失败 arch=%s", arch_code_str)
+
+    # micro_insight 列保留为向后兼容字段，新评估始终为空字符串
     micro_insight = ""
-    if llm_client is not None and per_layer_text:
-        micro_insight = _invoke_agent_c(
-            llm_client=llm_client,
-            arch_code_str=arch_code_str,
-            per_layer_text=per_layer_text,
-            vela_metrics=vela_metrics,
-        )
 
     row = {
         "arch_code": arch_code_str,
@@ -348,59 +347,9 @@ def _parse_vela_summary(run_output_dir: str) -> Dict[str, Any]:
     return metrics
 
 
-def _read_per_layer_report(run_output_dir: str, max_rows: int = 200) -> str:
-    """Read per-layer CSV report text and truncate rows."""
-    import glob
-
-    analysis_dir = _analysis_dir(run_output_dir)
-    patterns = [
-        os.path.join(run_output_dir, "*per-layer*.csv"),
-        os.path.join(run_output_dir, "*per_layer*.csv"),
-        os.path.join(analysis_dir, "**", "*per-layer*.csv"),
-        os.path.join(analysis_dir, "**", "*per_layer*.csv"),
-    ]
-
-    for pattern_item in patterns:
-        files = glob.glob(pattern_item, recursive=True)
-        if not files:
-            continue
-        try:
-            with open(files[0], "r", encoding="utf-8") as f:
-                lines = f.readlines()
-            if len(lines) > max_rows + 1:
-                lines = lines[: max_rows + 1]
-                lines.append(f"\n... (truncated: show first {max_rows} rows)\n")
-            return "".join(lines)
-        except Exception:
-            continue
-
-    return ""
-
-
-def _invoke_agent_c(
-    llm_client: Any,
-    arch_code_str: str,
-    per_layer_text: str,
-    vela_metrics: Dict[str, Any],
-) -> str:
-    """Call Agent C (HW distiller) with per-layer report and summary metrics."""
-    from efnas.search.prompts import AGENT_C_SYSTEM
-
-    summary_info = json.dumps(vela_metrics, ensure_ascii=False, indent=2) if vela_metrics else "N/A"
-    user_msg = (
-        f"## 当前子网架构编码: {arch_code_str}\n\n"
-        f"## Vela Summary 关键指标:\n```json\n{summary_info}\n```\n\n"
-        f"## Vela Per-Layer 详细报告:\n```csv\n{per_layer_text}\n```\n"
-    )
-
-    try:
-        insight = llm_client.chat(
-            role="agent_c",
-            system_prompt=AGENT_C_SYSTEM,
-            user_message=user_msg,
-            force_json=False,
-        )
-        return insight.strip()
-    except Exception:
-        logger.exception("[Agent C] 调用失败 arch=%s", arch_code_str)
-        return "Agent C 调用失败，无法生成硬件洞察"
+# Phase 1.1 removed: `_read_per_layer_report` and `_invoke_agent_c`.
+# Reason: 771 per-arch LLM calls produced near-zero-entropy "DB0 Util ~33%"
+# duplications. Phase 1.2 replaces this path with a deterministic Python
+# parser that emits structured `(layer_name, op_type, cycles, util_pct)`
+# vectors into `analysis/layer_profile.json`, queried on-demand by Phase 3
+# Scientist instead of being eagerly translated to Chinese narrative.
