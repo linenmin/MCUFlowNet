@@ -20,13 +20,15 @@ llm:
     scientist_stage_b1: "gemini/gemini-3.1-pro-preview"
     scientist_stage_b2: "gemini/gemini-3.1-pro-preview"
     supervisor_agent:   "gemini/gemini-3.1-pro-preview"
-  # Gemini 3 系列官方推荐温度 = 1.0 (低温会触发 looping warning)
+  # IMPORTANT: Gemini 3.1 系列在 LiteLLM 网关上**只接受 temperature=1.0**.
+  # 任何其他值会被 LiteLLM 拒绝或被 Gemini 默默改写, 不要尝试调低.
+  # 输出确定性靠 prompt + response_format=json_object 控制, 不靠温度.
   temperature:
     warmstart_agent:    1.0
     scientist_stage_a:  1.0
-    scientist_stage_b1: 0.6   # 写代码偏低温
+    scientist_stage_b1: 1.0
     scientist_stage_b2: 1.0
-    supervisor_agent:   0.7
+    supervisor_agent:   1.0
   max_tokens: 8192
   request_timeout: 180
   max_retries: 3
