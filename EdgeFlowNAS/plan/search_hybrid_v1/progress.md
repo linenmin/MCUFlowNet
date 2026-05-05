@@ -595,3 +595,102 @@ Phase 1 的最后一块，工作量小，1-2 小时即可完成。完成后 Phas
   的独立贡献)
 - 风险评估: 如果 Phase 4 ablation 显示 Supervisor 不显著优于 rule-based,
   应该准备删掉
+
+---
+
+## Session: 2026-05-05 (Phase 4 Complete)
+
+### Status
+
+- **Status**: Phase 4 (Supervisor Agent) 完成. 用户两次关键 push 修正了原
+  设计:
+  1. **动作空间扩到 5 levers** (不是只 mutation_prob) —— 匹配 Phase 1.3 的
+     8 大类指标
+  2. **无策略边界, 仅合法性校验** —— agent 知道 current_state + supervisor_log
+     可自我纠偏, 硬边界是替 agent 担心
+
+### Files added
+
+- `efnas/search/supervisor_agent.py` (~250 行): invoke / log / pipeline
+- `tests/test_supervisor_agent.py` (26 tests)
+
+### Files modified
+
+- `efnas/baselines/nsga2_search.py`:
+  - `mutate_arch` 加 `per_dim_multiplier` kwarg
+  - `_tournament_select_index` 用 `self._tournament_size`
+  - `_run_single_generation` 加 reseed injection
+  - 新方法 `current_supervisor_state`, `apply_supervisor_actions`,
+    `_maybe_invoke_supervisor`
+  - `__init__` 加 `supervisor_llm` kwarg + 新 mutable state
+- `efnas/search/prompts.py`: 新增 `SUPERVISOR_AGENT_SYSTEM` (~5KB)
+  含 5 levers + diagnostic signals + risk reminder
+- `wrappers/run_nsga2_search.py`: 加 `--enable_supervisor` /
+  `--supervisor_role` flags
+
+### Key Design Decisions (用户参与的关键修订)
+
+1. **5-lever 动作空间** (用户的关键 push #1):
+   - `mutation_prob` (scalar, ∈ [0.0, 1.0])
+   - `crossover_prob` (scalar, ∈ [0.0, 1.0])
+   - `per_dim_mutation_multiplier` (list of 11 non-negative floats)
+   - `tournament_size` (int, ∈ [2, population_size])
+   - `reseed_bottom_pct` (int, ∈ [0, 100])
+   每个允许 null = 不调
+2. **无策略边界, 仅合法性校验** (用户的关键 push #2): apply_supervisor_actions
+   只拒绝数学上无效的值 (NaN / 越界到 NSGA-II 跑不动). 不做 [0.5×, 1.5×] 步长
+   限制. agent 看自己的 supervisor_log 自我纠偏.
+3. **不做自动 rollback**: 给 agent 看 supervisor_log (含每次 before/after/
+   rationale/expected_effect/review_after_gen), 让 agent 自己决定要不要回退.
+4. **Ablation 简化**: 4 组对照 (a/b/c/d), (d) vs (c) 是 Supervisor 增量的
+   核心 claim. 不做 rule-based (d') 对照 —— ablation 只测增量, 机制对照
+   是二级问题.
+5. **Supervisor 与 Scientist 同频**: K=3 代触发, Scientist 之后立刻 Supervisor.
+   一次 trigger 总共 4 LLM calls (3 scientist + 1 supervisor).
+6. **失败全兜底**: LLM 失败 / actions 全被拒 / apply 异常 都不阻断 NSGA-II;
+   失败仍写一条 supervisor_log 让 agent 下次知道.
+7. **Reseed 实现选择**: 不是"替换底部 X% 种群成员", 而是"从本代 needed 量里
+   切出 N 个 random arch 注入 offspring batch", 让 NSGA-II 选择压力自然过滤.
+   语义等价但实现更简洁 (~10 行代码).
+8. **风险红线明文化**: task_plan.md 写明"(d) ≤ (c) 即 Phase 4 出局" —— 让
+   "删 Phase 4" 成为显式工程选项.
+
+### Verification
+
+- `tests.test_supervisor_agent`: **26/26** passed
+- 联合套件 Phase 1-4 (含 supervisor_agent / sandbox / scientist /
+  warmstart / insights / search_metrics / vela_parser / nsga2_baseline /
+  run_nsga2_search_wrapper / eval_worker_command / file_io / llm):
+  **195/195** passed
+- 全套 `unittest discover`: **327 tests, 1 unrelated error** (仍是
+  reportlab 缺包)
+- API 验证: supervisor_agent 全部公共导出存在; SUPERVISOR_AGENT_SYSTEM
+  prompt 存在; CLI flags `--enable_supervisor` / `--supervisor_role` 正常
+
+### Behavioral Notes for Downstream
+
+- 每次 Supervisor 调用产出一行 `supervisor_log.json` 记录 (即使 LLM 失败
+  也写, 含 _global rejected 标记)
+- Reseed 注入的 random arches 走正常评估管道, 走完正常 NSGA-II 选择,
+  好的能挤掉差的种群成员
+- per_dim_multiplier=0 等价于该维永不 mutate (合法的 agent 选择, 不被拒)
+- tournament_size 上限是 population_size; 设到 population_size 等于
+  greedy selection (失多样性, 但仍合法)
+- Supervisor 与 Scientist 同频: 一次 K=3 代触发先跑 Scientist (3 LLM calls),
+  然后跑 Supervisor (1 LLM call). 整 run 16 代下:
+  - 5 次 trigger × (3 scientist + 1 supervisor) = 20 LLM calls
+  - 加上 Warmstart (1 call) 和 sandbox 执行 ≈ 25-30 LLM calls / run
+
+### Next Action
+
+进入 **Phase 5: Validation & Paper Artifacts** —— 跑 4 组完整 ablation:
+
+| 组 | 配置 |
+|---|---|
+| (a) | NSGA-II only |
+| (b) | + Warmstart |
+| (c) | + Scientist |
+| (d) | + Supervisor (完整系统) |
+
+每组多 seed 跑, HV / Pareto count / 收敛速度 / insights 命中率 对比.
+重点验证: (d) vs (c) 是否有显著增量? 如否, 准备消融 Phase 4.

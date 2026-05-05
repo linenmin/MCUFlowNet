@@ -112,12 +112,26 @@ def mutate_arch(
     rng: random.Random,
     mutation_prob: float,
     search_space: Optional[SearchSpaceAdapter] = None,
+    *,
+    per_dim_multiplier: Optional[Sequence[float]] = None,
 ) -> List[int]:
-    """Mutate one architecture with per-gene categorical mutation."""
+    """Mutate one architecture with per-gene categorical mutation.
+
+    Phase 4: optional ``per_dim_multiplier`` 给每维独立 mutation_prob 缩放系数.
+    实际每维 mutation 概率 = ``mutation_prob × multiplier[d]``, 截断到 [0, 1].
+    长度不足或 None 时退化为均匀 mutation_prob (Phase 1 行为).
+    """
     space = search_space or load_search_space()
     child = [int(value) for value in arch_code]
+    base_prob = float(mutation_prob)
     for block_idx in range(space.num_blocks()):
-        if rng.random() >= float(mutation_prob):
+        effective_prob = base_prob
+        if per_dim_multiplier is not None and block_idx < len(per_dim_multiplier):
+            try:
+                effective_prob = max(0.0, min(1.0, base_prob * float(per_dim_multiplier[block_idx])))
+            except (TypeError, ValueError):
+                effective_prob = base_prob
+        if rng.random() >= effective_prob:
             continue
         num_choices = space.num_choices(block_idx)
         candidates = [value for value in range(num_choices) if value != child[block_idx]]
@@ -251,6 +265,7 @@ class NSGA2SearchRunner:
         scientist_llm: Optional[Any] = None,
         scientist_interval: int = 3,
         scientist_sandbox_timeout: int = 30,
+        supervisor_llm: Optional[Any] = None,
     ) -> None:
         """初始化 NSGA-II runner。
 
@@ -290,6 +305,13 @@ class NSGA2SearchRunner:
         self._scientist_llm = scientist_llm
         self._scientist_interval = max(1, int(scientist_interval))
         self._scientist_sandbox_timeout = int(scientist_sandbox_timeout)
+        # Phase 4: 5-lever 可变状态 (Supervisor 通过 apply_supervisor_actions 调整)
+        # mutation_prob / crossover_prob 已在上面用 self.* 存; tournament_size /
+        # per_dim_multiplier / reseed_bottom_pct 是 Phase 4 新增.
+        self._tournament_size: int = 2
+        self._per_dim_mutation_multiplier: List[float] = [1.0] * self.search_space.num_blocks()
+        self._reseed_bottom_pct: int = 0
+        self._supervisor_llm: Optional[Any] = supervisor_llm
 
     def run(self) -> None:
         """Run the NSGA-II baseline."""
@@ -341,7 +363,31 @@ class NSGA2SearchRunner:
                 else:
                     candidate_arches, duplicate_count = self._sample_unique_random_arches(needed)
             else:
-                candidate_arches, duplicate_count = self._generate_offspring_arches(current_population, needed)
+                # Phase 4 lever 5: reseed_bottom_pct 把 needed 拆成 offspring +
+                # random injection 两部分.
+                reseed_pct = max(0, min(100, int(self._reseed_bottom_pct or 0)))
+                n_reseed = int(round(needed * reseed_pct / 100.0)) if reseed_pct > 0 else 0
+                n_offspring = max(0, needed - n_reseed)
+                candidate_arches = []
+                duplicate_count = 0
+                if n_offspring > 0:
+                    offspring, dup1 = self._generate_offspring_arches(
+                        current_population, n_offspring,
+                    )
+                    candidate_arches.extend(offspring)
+                    duplicate_count += dup1
+                if n_reseed > 0:
+                    reseed_arches, dup2 = self._sample_unique_random_arches(
+                        n_reseed, extra_seen=set(candidate_arches),
+                    )
+                    candidate_arches.extend(reseed_arches)
+                    duplicate_count += dup2
+                    logger.info(
+                        "[Reseed] gen=%d injected %d random arches (pct=%d%%, "
+                        "offspring=%d, total=%d)",
+                        generation, len(reseed_arches), reseed_pct,
+                        n_offspring, len(candidate_arches),
+                    )
             if candidate_arches:
                 self._evaluate_arch_batch(candidate_arches, generation)
                 _file_io().collect_and_commit_worker_results(self.exp_dir)
@@ -372,6 +418,9 @@ class NSGA2SearchRunner:
 
         # Phase 3: 每 K 代触发 Scientist 大反思 (best-effort, 不阻断主搜索)
         self._maybe_invoke_scientist(generation)
+
+        # Phase 4: Scientist 之后立刻 Supervisor (best-effort, 不阻断主搜索)
+        self._maybe_invoke_supervisor(generation)
 
         return next_population
 
@@ -411,6 +460,159 @@ class NSGA2SearchRunner:
         except Exception:
             logger.exception("[Scientist] pipeline 异常 (不阻断主搜索)")
 
+    def _maybe_invoke_supervisor(self, generation: int) -> None:
+        """Phase 4: 每 K=scientist_interval 代后触发 Supervisor (5-lever 调参).
+
+        触发频率与 Scientist 同步 (K=3), 在 Scientist 跑完之后立即跑, 让
+        Supervisor 能消费 fresh insights.md.
+
+        失败兜底: supervisor_pipeline 任何环节失败都不抛异常, 不阻断 NSGA-II
+        主搜索. 失败时 supervisor_log 仍会记录一条 "LLM failed" 条目.
+        """
+        if self._supervisor_llm is None:
+            return
+        if (generation + 1) % self._scientist_interval != 0:
+            return
+        try:
+            from efnas.search.supervisor_agent import supervisor_pipeline
+            summary = supervisor_pipeline(
+                self._supervisor_llm, self.exp_dir, self,
+                generation=generation,
+            )
+            logger.info(
+                "[Supervisor] gen=%d success=%s applied=%s rejected=%s %s",
+                generation,
+                summary.get("success"),
+                list(summary.get("applied", {}).keys()),
+                list(summary.get("rejected", {}).keys()),
+                f"error={summary.get('error')}" if summary.get("error") else "",
+            )
+        except Exception:
+            logger.exception("[Supervisor] pipeline 异常 (不阻断主搜索)")
+
+    # ===============================================================
+    # Phase 4: Supervisor 5-lever 接口
+    # ===============================================================
+
+    def current_supervisor_state(self) -> Dict[str, Any]:
+        """返回 5 个 lever 的当前数值, 给 Supervisor agent 看自己上次调了啥."""
+        return {
+            "mutation_prob": float(self.mutation_prob),
+            "crossover_prob": float(self.crossover_prob),
+            "tournament_size": int(self._tournament_size),
+            "per_dim_mutation_multiplier": list(self._per_dim_mutation_multiplier),
+            "reseed_bottom_pct": int(self._reseed_bottom_pct),
+        }
+
+    def apply_supervisor_actions(self, actions: Dict[str, Any]) -> Dict[str, Any]:
+        """应用 Supervisor agent 的 5-lever 调整, 仅做数学合法性校验.
+
+        策略选择 (是否合理) 全交给 agent. 本函数只拒绝**数学上无效**的值
+        (NaN / 越界到无法跑 NSGA-II 的范围). 对合法值不做"建议范围"约束.
+
+        Args:
+            actions: dict 含可选字段 mutation_prob / crossover_prob /
+                tournament_size / per_dim_mutation_multiplier / reseed_bottom_pct.
+                每字段允许 None 表示不调.
+
+        Returns:
+            dict 含:
+                - applied: 实际生效的字段及新值
+                - rejected: 被拒字段及原因
+                - before_state: 调整前的 5 lever 值
+                - after_state: 调整后的 5 lever 值
+        """
+        before = self.current_supervisor_state()
+        applied: Dict[str, Any] = {}
+        rejected: Dict[str, str] = {}
+
+        if actions is None or not isinstance(actions, dict):
+            return {
+                "applied": {},
+                "rejected": {"_global": "actions is not a dict"},
+                "before_state": before,
+                "after_state": before,
+            }
+
+        # mutation_prob
+        if actions.get("mutation_prob") is not None:
+            try:
+                v = float(actions["mutation_prob"])
+                if not (0.0 <= v <= 1.0) or v != v:  # NaN check
+                    rejected["mutation_prob"] = f"out of [0.0, 1.0]: {v}"
+                else:
+                    self.mutation_prob = v
+                    applied["mutation_prob"] = v
+            except (TypeError, ValueError) as e:
+                rejected["mutation_prob"] = f"invalid: {e}"
+
+        # crossover_prob
+        if actions.get("crossover_prob") is not None:
+            try:
+                v = float(actions["crossover_prob"])
+                if not (0.0 <= v <= 1.0) or v != v:
+                    rejected["crossover_prob"] = f"out of [0.0, 1.0]: {v}"
+                else:
+                    self.crossover_prob = v
+                    applied["crossover_prob"] = v
+            except (TypeError, ValueError) as e:
+                rejected["crossover_prob"] = f"invalid: {e}"
+
+        # tournament_size
+        if actions.get("tournament_size") is not None:
+            try:
+                v = int(actions["tournament_size"])
+                if v < 2 or v > self.population_size:
+                    rejected["tournament_size"] = (
+                        f"out of [2, {self.population_size}]: {v}"
+                    )
+                else:
+                    self._tournament_size = v
+                    applied["tournament_size"] = v
+            except (TypeError, ValueError) as e:
+                rejected["tournament_size"] = f"invalid: {e}"
+
+        # per_dim_mutation_multiplier
+        if actions.get("per_dim_mutation_multiplier") is not None:
+            raw = actions["per_dim_mutation_multiplier"]
+            num_dims = self.search_space.num_blocks()
+            if not isinstance(raw, list) or len(raw) != num_dims:
+                rejected["per_dim_mutation_multiplier"] = (
+                    f"must be list of length {num_dims}, got {type(raw).__name__} "
+                    f"len={len(raw) if isinstance(raw, list) else 'n/a'}"
+                )
+            else:
+                try:
+                    parsed = [float(x) for x in raw]
+                    if any(x < 0.0 or x != x for x in parsed):
+                        rejected["per_dim_mutation_multiplier"] = (
+                            "all elements must be non-negative finite"
+                        )
+                    else:
+                        self._per_dim_mutation_multiplier = parsed
+                        applied["per_dim_mutation_multiplier"] = parsed
+                except (TypeError, ValueError) as e:
+                    rejected["per_dim_mutation_multiplier"] = f"invalid: {e}"
+
+        # reseed_bottom_pct
+        if actions.get("reseed_bottom_pct") is not None:
+            try:
+                v = int(actions["reseed_bottom_pct"])
+                if v < 0 or v > 100:
+                    rejected["reseed_bottom_pct"] = f"out of [0, 100]: {v}"
+                else:
+                    self._reseed_bottom_pct = v
+                    applied["reseed_bottom_pct"] = v
+            except (TypeError, ValueError) as e:
+                rejected["reseed_bottom_pct"] = f"invalid: {e}"
+
+        return {
+            "applied": applied,
+            "rejected": rejected,
+            "before_state": before,
+            "after_state": self.current_supervisor_state(),
+        }
+
     def _maybe_prune_vela_tflite(self, stage: str) -> int:
         """Optionally delete heavyweight Vela TFLite artifacts while keeping metrics."""
         if not self.prune_tflite_after_reduce:
@@ -448,8 +650,16 @@ class NSGA2SearchRunner:
                 search_space=self.search_space,
             )
             for child in (
-                mutate_arch(child_a, rng=self._rng, mutation_prob=self.mutation_prob, search_space=self.search_space),
-                mutate_arch(child_b, rng=self._rng, mutation_prob=self.mutation_prob, search_space=self.search_space),
+                mutate_arch(
+                    child_a, rng=self._rng, mutation_prob=self.mutation_prob,
+                    search_space=self.search_space,
+                    per_dim_multiplier=self._per_dim_mutation_multiplier,
+                ),
+                mutate_arch(
+                    child_b, rng=self._rng, mutation_prob=self.mutation_prob,
+                    search_space=self.search_space,
+                    per_dim_multiplier=self._per_dim_mutation_multiplier,
+                ),
             ):
                 arch_text = arch_to_text(child)
                 if arch_text in evaluated_arches or arch_text in batch_seen:
@@ -704,19 +914,22 @@ class NSGA2SearchRunner:
         ranks: Dict[int, int],
         crowding_lookup: Dict[int, float],
     ) -> int:
-        if len(current_population) == 1:
+        """K-way tournament selection.
+
+        Phase 4: K = ``self._tournament_size`` (默认 2). 较大 K 增加选择压力.
+        """
+        n = len(current_population)
+        if n == 1:
             return 0
-        idx_a, idx_b = self._rng.sample(list(range(len(current_population))), 2)
-        rank_a = ranks[idx_a]
-        rank_b = ranks[idx_b]
-        if rank_a < rank_b:
-            return idx_a
-        if rank_b < rank_a:
-            return idx_b
-        crowding_a = crowding_lookup.get(idx_a, 0.0)
-        crowding_b = crowding_lookup.get(idx_b, 0.0)
-        if crowding_a > crowding_b:
-            return idx_a
-        if crowding_b > crowding_a:
-            return idx_b
-        return idx_a if self._rng.random() < 0.5 else idx_b
+        size = max(2, min(int(self._tournament_size), n))
+        contestants = self._rng.sample(list(range(n)), size)
+        best = contestants[0]
+        for idx in contestants[1:]:
+            rank_idx = ranks[idx]
+            rank_best = ranks[best]
+            if rank_idx < rank_best:
+                best = idx
+            elif rank_idx == rank_best:
+                if crowding_lookup.get(idx, 0.0) > crowding_lookup.get(best, 0.0):
+                    best = idx
+        return best

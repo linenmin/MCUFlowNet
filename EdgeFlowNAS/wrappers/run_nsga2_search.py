@@ -77,6 +77,20 @@ def _build_parser() -> argparse.ArgumentParser:
         default=30,
         help="max seconds per verification code execution in scientist sandbox",
     )
+    # Phase 4 (search_hybrid_v1): supervisor agent flag
+    parser.add_argument(
+        "--enable_supervisor",
+        action="store_true",
+        help="invoke supervisor_agent every scientist_interval generations to "
+             "tune NSGA-II 5 levers (mutation_prob, crossover_prob, "
+             "per_dim_mutation_multiplier, tournament_size, reseed_bottom_pct)",
+    )
+    parser.add_argument(
+        "--supervisor_role",
+        type=str,
+        default="supervisor_agent",
+        help="LLM client role name for supervisor agent",
+    )
     return parser
 
 
@@ -180,6 +194,20 @@ def main() -> int:
             args.scientist_interval, args.scientist_sandbox_timeout,
         )
 
+    # Phase 4: supervisor agent (复用 LLMClient if any of warmstart/scientist
+    # already built one)
+    supervisor_llm = None
+    if args.enable_supervisor:
+        from efnas.search.llm_client import LLMClient
+        try:
+            supervisor_llm = scientist_llm if scientist_llm is not None else llm_client  # type: ignore[name-defined]
+        except NameError:
+            supervisor_llm = LLMClient(cfg)
+        logger.info(
+            "supervisor enabled: triggers with scientist (every %d gens)",
+            args.scientist_interval,
+        )
+
     runner = NSGA2SearchRunner(
         cfg=cfg,
         exp_dir=exp_dir,
@@ -188,6 +216,7 @@ def main() -> int:
         scientist_llm=scientist_llm,
         scientist_interval=args.scientist_interval,
         scientist_sandbox_timeout=args.scientist_sandbox_timeout,
+        supervisor_llm=supervisor_llm,
     )
     try:
         runner.run()
