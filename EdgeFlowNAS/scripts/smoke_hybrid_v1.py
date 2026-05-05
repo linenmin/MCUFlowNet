@@ -62,11 +62,10 @@ def step2_llm():
     fails = []
     for r in roles:
         try:
-            out = client.chat(
+            out = client.chat_json(
                 role=r,
                 system_prompt="You are a JSON-only echo bot. Reply with exactly the JSON object the user requests.",
                 user_message=f'Reply with this exact JSON: {{"role":"{r}","ok":true}}',
-                response_format={"type": "json_object"},
             )
             preview = str(out)[:90].replace("\n", " ")
             print(f"  [OK]   {r:25s}  {preview}")
