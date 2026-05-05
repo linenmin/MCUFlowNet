@@ -248,6 +248,9 @@ class NSGA2SearchRunner:
         project_root: str,
         *,
         external_initial_population: Optional[Sequence[str]] = None,
+        scientist_llm: Optional[Any] = None,
+        scientist_interval: int = 3,
+        scientist_sandbox_timeout: int = 30,
     ) -> None:
         """初始化 NSGA-II runner。
 
@@ -283,6 +286,10 @@ class NSGA2SearchRunner:
         self._rng = random.Random(self.seed)
         # Phase 2.1: warm-start hook
         self._external_initial_population: List[str] = list(external_initial_population or [])
+        # Phase 3: scientist hook (None 表示禁用)
+        self._scientist_llm = scientist_llm
+        self._scientist_interval = max(1, int(scientist_interval))
+        self._scientist_sandbox_timeout = int(scientist_sandbox_timeout)
 
     def run(self) -> None:
         """Run the NSGA-II baseline."""
@@ -362,7 +369,47 @@ class NSGA2SearchRunner:
             duplicate_count,
             len(next_population),
         )
+
+        # Phase 3: 每 K 代触发 Scientist 大反思 (best-effort, 不阻断主搜索)
+        self._maybe_invoke_scientist(generation)
+
         return next_population
+
+    def _maybe_invoke_scientist(self, generation: int) -> None:
+        """Phase 3: 每 K=scientist_interval 代后触发 Scientist 三阶段反思.
+
+        触发时机: ``(generation + 1) % K == 0``. 比如 K=3 时, 在 generation
+        2 / 5 / 8 / 11 / 14 之后各触发一次 (16 代总长 → 5 次反思).
+
+        失败兜底: scientist_pipeline 任何阶段失败都不抛异常出来, 也不阻断
+        NSGA-II 主搜索. log 一行执行摘要即可.
+        """
+        if self._scientist_llm is None:
+            return
+        if (generation + 1) % self._scientist_interval != 0:
+            return
+        try:
+            from efnas.search.scientist_agent import scientist_pipeline
+            summary = scientist_pipeline(
+                self._scientist_llm,
+                self.exp_dir,
+                generation=generation,
+                total_generations=self.total_generations,
+                sandbox_timeout=self._scientist_sandbox_timeout,
+            )
+            logger.info(
+                "[Scientist] gen=%d success=%s stages=%s drafts=%d "
+                "queries=%d verifications=%d %s",
+                generation,
+                summary.get("success"),
+                ",".join(summary.get("stages_completed", [])),
+                summary.get("drafts_count", 0),
+                summary.get("vela_queries_count", 0),
+                summary.get("verifications_count", 0),
+                f"error={summary.get('error')}" if summary.get("error") else "",
+            )
+        except Exception:
+            logger.exception("[Scientist] pipeline 异常 (不阻断主搜索)")
 
     def _maybe_prune_vela_tflite(self, stage: str) -> int:
         """Optionally delete heavyweight Vela TFLite artifacts while keeping metrics."""

@@ -493,3 +493,105 @@ Phase 1 的最后一块，工作量小，1-2 小时即可完成。完成后 Phas
 - Coordinator 怎么调度 Scientist 的 Vela 查询 + Python 验证脚本执行
 - 失败兜底: Scientist 返回空 / 输出格式破坏怎么办
 - insights.md 的备份策略 (每次 Scientist 调用前 snapshot 成 insights.md.gen{N})
+
+---
+
+## Session: 2026-05-05 (Phase 3 Complete)
+
+### Status
+
+- **Status**: Phase 3 (Scientist Agent) 完成. **核心创新点交付**: 三阶段
+  workflow + agent 自己规划 vela query + sandbox 执行 verification code.
+
+### Files added
+
+- `efnas/search/sandbox.py` (~150 行): AST 白名单 + subprocess 隔离 + 30s 超时
+- `efnas/search/scientist_agent.py` (~580 行): 三阶段 invoke + resolve +
+  execute + pipeline orchestrator
+- `tests/test_sandbox.py` (18 tests)
+- `tests/test_scientist_agent.py` (35 tests)
+
+### Files modified
+
+- `efnas/search/prompts.py`: 新增 `SCIENTIST_STAGE_A_SYSTEM` (纯归纳, 4080 chars),
+  `SCIENTIST_STAGE_B1_SYSTEM` (查询规划 + 沙箱规则, 5296 chars),
+  `SCIENTIST_STAGE_B2_SYSTEM` (grounding 收尾, 4564 chars)
+- `efnas/baselines/nsga2_search.py`: `__init__` 加 `scientist_llm` /
+  `scientist_interval` / `scientist_sandbox_timeout`; 新增
+  `_maybe_invoke_scientist` 方法在 `(gen+1) % K == 0` 时触发 pipeline
+- `wrappers/run_nsga2_search.py`: `--enable_scientist`, `--scientist_interval`
+  (默认 3), `--scientist_sandbox_timeout` (默认 30) CLI flags
+
+### Key Design Decisions (本 phase 用户参与的关键修订)
+
+1. **真两阶段 LLM 调用 (用户的关键 push)**: 之前我提议"一次调用内分两段",
+   用户指出这会让 hardware-verifiable findings 被偏向. 改为 Stage A / B-1 /
+   B-2 三个独立 LLM 调用. Stage A **不接触任何硬件数据**, 纯架构归纳; Stage
+   B 才做 grounding.
+2. **agent 自己规划 vela query (用户的另一关键 push)**: 我之前提"coordinator
+   预选 10 个代表性 archs", 用户指出这是工程层替 agent 决定它该看什么 ==
+   stage B 又被偏置. 改为 Stage B-1 输出 ``vela_queries`` schema (pattern /
+   arch_codes / Pareto filter / sort / limit), coordinator 只是 pandas 过滤
+   器执行器. agent 真正的主动权在于规划 query + 写 verification code +
+   解读返回结果.
+3. **AST 白名单沙箱**: 主防线是 AST parse 拒绝 disallowed import (os /
+   subprocess / pathlib 等), 而不是依赖 subprocess 隔离. 白名单: pandas,
+   numpy, json, math, re, itertools, scipy, scipy.stats, sys.
+4. **每阶段独立 fallback**: Stage A 失败 → 不写 insights.md (保持上次成功
+   状态); Stage B-1 / B-2 失败 → 用 stage A drafts 直接渲染 insights.md
+   (带"[B fallback]" 标注). 总失败也不阻断 NSGA-II 主搜索.
+5. **触发频率 K=3** (用户确认): NSGA-II `(gen+1) % 3 == 0` 时触发, 16 代
+   总长 → 5 次 Scientist 调用. 每次 3 LLM calls + N 次 sandbox = 全 run
+   ~15 LLM calls (Scientist 部分).
+6. **备份策略**: 每次 Scientist 调用前 `cp insights.md insights.md.gen{N}.bak`,
+   留全审计轨迹 (Phase 5 ablation 可看 insights 演化).
+7. **rationale + grounding 注解写法不强制**: 仍遵循 Phase 1.5 的"最小契约"
+   原则, body 是自由形式 markdown, 没有必填字段; 但 prompt 里举例怎么写
+   hardware grounding (cycles 引用 / 状态修改 / 反例处理).
+
+### Verification
+
+- `tests.test_sandbox`: **18/18** passed
+- `tests.test_scientist_agent`: **35/35** passed
+- 联合 Phase 1+2+3 套件: **169/169** passed
+- 全套 unittest discover: **301 tests, 1 unrelated error** (仍是 reportlab
+  缺包, 与 Phase 1.1/1.2/1.3/1.5/2 一致)
+
+### Behavioral Notes for Downstream
+
+- 每次 Scientist 调用产出 `insights.md.gen{N}.bak` 历史快照, Phase 5 可分析
+  insights 演化轨迹
+- Stage B-1 的 verification code 可以引用 Stage B-1 的 vela_queries 结果:
+  通过 `argv[2]` JSON 传给沙箱代码, 同一 `insight_id` 下的 query 结果会被
+  匹配过来
+- Vela query schema 是 deterministic 的 (pandas filter), 不调 LLM, 不会成为
+  瓶颈; 整个 pipeline 的 cost 主要在三个 LLM 调用
+- Stage B-2 的 `insights_md` 输出是 **完整文件内容**, 不是 diff, agent 可以
+  全改 (包括头部注释), 但解析只看 `### I-{id} ({status}): {title}` 格式
+  的小节
+- Sandbox 限制白名单不阻止 disallowed import 写在 string literal 里, 但 AST
+  parse 时 `import` / `from import` 节点严格检查; 攻击者要绕过得用 `eval` /
+  `exec` 这种 dynamic, 现实场景中 LLM 不会这么做 (我们写的 prompt 也明确
+  禁止了)
+
+### Open Questions Resolved in Phase 3
+
+- **#2 Scientist 触发频率 K**: K=3 已敲定
+- 新引入的细节决策 (vela query 由 agent 规划, code 真跑) 都已在 7 条 Key
+  Design Decisions 里明文记录
+
+仍未决:
+- **#4 Supervisor 与 Scientist 同步还是错开**: Phase 4 详细设计时再定
+
+### Next Action
+
+进入 **Phase 4: Supervisor Agent** (mutation_prob 监督). 这是 Phase 1-4 里
+**风险最高**的一块 (动态调超参可能反而扰乱 NSGA-II 收敛). 下次会议先讨论:
+- Supervisor 触发频率 (与 Scientist 同步还是错开?)
+- 决策空间硬上限 (我提议 mutation_prob 在 [0.5×, 1.5×] × current 内)
+- Rollback 机制 (K 代内未改善则恢复)
+- 输入: 完整 generation_metrics.csv (37 列) + 最近 insights.md 摘要
+- Ablation 设计: rule-based 自适应 vs LLM Supervisor (要能消融出 Supervisor
+  的独立贡献)
+- 风险评估: 如果 Phase 4 ablation 显示 Supervisor 不显著优于 rule-based,
+  应该准备删掉

@@ -59,6 +59,24 @@ def _build_parser() -> argparse.ArgumentParser:
         default="warmstart_agent",
         help="LLM client role name for warmstart agent (must be configured in cfg.llm.models)",
     )
+    # Phase 3 (search_hybrid_v1): scientist agent flags
+    parser.add_argument(
+        "--enable_scientist",
+        action="store_true",
+        help="invoke scientist_agent every K generations (3-stage reflection on history)",
+    )
+    parser.add_argument(
+        "--scientist_interval",
+        type=int,
+        default=3,
+        help="K (default 3): scientist fires after generation indices where (gen+1) %% K == 0",
+    )
+    parser.add_argument(
+        "--scientist_sandbox_timeout",
+        type=int,
+        default=30,
+        help="max seconds per verification code execution in scientist sandbox",
+    )
     return parser
 
 
@@ -147,11 +165,29 @@ def main() -> int:
     elif args.enable_warmstart and args.resume:
         logger.info("--enable_warmstart ignored on --resume (warmstart only seeds gen 0)")
 
+    # Phase 3: scientist agent (复用 warmstart 创建的 LLMClient 如果可能, 否则
+    # 单独 build).
+    scientist_llm = None
+    if args.enable_scientist:
+        from efnas.search.llm_client import LLMClient
+        # 如果 warmstart 也启用了, 上面已经 build 过 llm_client; 复用它
+        try:
+            scientist_llm = llm_client  # type: ignore[name-defined]
+        except NameError:
+            scientist_llm = LLMClient(cfg)
+        logger.info(
+            "scientist enabled: interval=%d sandbox_timeout=%ds",
+            args.scientist_interval, args.scientist_sandbox_timeout,
+        )
+
     runner = NSGA2SearchRunner(
         cfg=cfg,
         exp_dir=exp_dir,
         project_root=_PROJECT_ROOT,
         external_initial_population=external_initial_population,
+        scientist_llm=scientist_llm,
+        scientist_interval=args.scientist_interval,
+        scientist_sandbox_timeout=args.scientist_sandbox_timeout,
     )
     try:
         runner.run()
