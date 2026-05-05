@@ -129,15 +129,11 @@ def execute_python(
         with open(tmp_file, "w", encoding="utf-8") as f:
             f.write(code)
 
-        env = {
-            "PATH": os.environ.get("PATH", ""),
-            "PYTHONPATH": os.environ.get("PYTHONPATH", ""),
-            "SYSTEMROOT": os.environ.get("SYSTEMROOT", ""),  # Windows 必需
-        }
-        # 显式传 conda env 路径, 让子进程能找到 pandas/numpy/scipy
-        for key in ("CONDA_PREFIX", "CONDA_DEFAULT_ENV", "TMPDIR", "TEMP", "TMP"):
-            if key in os.environ:
-                env[key] = os.environ[key]
+        # 继承父进程完整 env. AST 白名单已经阻止 agent 代码 import 危险模块,
+        # 用 env 限制反而会在 HPC (Lmod-managed module 设的 LD_LIBRARY_PATH /
+        # CPATH 等) 把 Python 解释器自己启动需要的共享库路径剥光, 子进程返回
+        # exit code 127 (libpython.so 找不到). 这是 over-engineering, 删除.
+        env = os.environ.copy()
 
         try:
             result = subprocess.run(
