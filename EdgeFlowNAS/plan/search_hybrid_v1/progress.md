@@ -694,3 +694,82 @@ Phase 1 的最后一块，工作量小，1-2 小时即可完成。完成后 Phas
 
 每组多 seed 跑, HV / Pareto count / 收敛速度 / insights 命中率 对比.
 重点验证: (d) vs (c) 是否有显著增量? 如否, 准备消融 Phase 4.
+
+---
+
+## Session: 2026-05-05 (Phase 5 Implementation Complete)
+
+### Status
+
+- **Status**: Phase 5 工程实现完成. HPC slurm 待用户提交跑 ~9h, 跑完用
+  `run_phase5_ablation_analysis.py` 出最终红线判定.
+
+### Key User Decisions (这次 session)
+
+1. **单 seed × 4 组** (不做多 seed) —— 节省 HPC 时间, 12 跑减到 4 (实际 3
+   新跑因为 a 复用)
+2. **(a) 复用 search_v3 distill run**
+   (`outputs/nsga2_v3/nsga2_v3_distill_run1_20260429_201744`) —— 不重跑
+   baseline; 分析脚本只从 history_archive.csv 算 HV trajectory, Phase 1.3
+   richer metrics 不是 ablation 必需
+3. **LLM 全栈 Gemini 3.1 Pro** (gemini-3.1-pro-preview); 5 个 role 都路由到它
+4. **API key 用户自行管理** (export GEMINI_API_KEY 到 ~/.bashrc); slurm
+   提交前检查环境变量
+
+### Files added
+
+- `wrappers/run_phase5_ablation_analysis.py` (~400 行): 加载 4 组数据,
+  HV/best_epe/best_fps trajectory, Pareto summary, 红线判定, 出 plots +
+  json + markdown report
+- `plan/ablation_phase5/run_group_b.slurm`
+- `plan/ablation_phase5/run_group_c.slurm`
+- `plan/ablation_phase5/run_group_d.slurm`
+- `plan/search_hybrid_v1/phase5_ablation.md` (操作手册)
+
+### Files modified
+
+- `efnas/search/llm_client.py`: `ROLE_TO_CONFIG_KEY` 重写为 Phase 2-4 的 5
+  个 role; 删除旧 agent_a/b/c/d 间接映射
+- `configs/nsga2_v3.yaml`: 新增 `llm:` 段, 5 role 全栈 Gemini 3.1 Pro,
+  temperature 配置
+- `wrappers/run_nsga2_search.py`: 新增 `--ablation_group` 便捷 flag (自动
+  展开 enable_warmstart/scientist/supervisor) + `--output_root` CLI 覆盖
+- `tests/test_llm_json_retry.py`: role 名更新到 warmstart_agent
+
+### Verification
+
+- `tests.test_llm_json_retry + test_warmstart + test_scientist + test_supervisor +
+  test_run_nsga2_search_wrapper`: **80/80** passed
+- 分析脚本 smoke test on V3 distill baseline: **(a) final HV = 7.5217**,
+  plots/json/report 全部生成 ✅
+- Slurm 脚本格式对齐 `distill_or_not_fc2_short_4gpu.slurm` (用户已有模板)
+
+### Next Action (用户操作)
+
+1. 在 HPC 上 export `GEMINI_API_KEY` 到 ~/.bashrc 并 re-login
+2. 顺序提交 3 个 slurm:
+   ```bash
+   sbatch plan/ablation_phase5/run_group_b.slurm
+   sbatch plan/ablation_phase5/run_group_c.slurm
+   sbatch plan/ablation_phase5/run_group_d.slurm
+   ```
+3. 等 ~9h (4 P100 限制 → 一次只跑一组, 队列等)
+4. 全部跑完后:
+   ```bash
+   python wrappers/run_phase5_ablation_analysis.py
+   ```
+5. 看 `outputs/ablation_phase5/analysis_*/report.md` 红线判定
+
+### Phase 1-5 总览
+
+| Phase | 状态 | 测试 | 论文 ablation 对应 |
+|---|---|---|---|
+| 1 (Foundations) | ✅ | 96 tests | 无 (基础设施) |
+| 2 (Warmstart) | ✅ | 15 tests | (b) 增量 |
+| 3 (Scientist) | ✅ | 53 tests | (c) 增量 |
+| 4 (Supervisor) | ✅ | 26 tests | (d) 增量 |
+| 5 (Validation) | ✅ 实现完成, 待 HPC 跑 | 80 tests 验证 baseline | 4 组对照 |
+
+**整 hybrid system**: NSGA-II 主干 + 4 个 LLM 角色 (Warmstart × 1, Scientist × 5,
+Supervisor × 5) ≈ 21 LLM 调用 / run + 沙箱执行. 用户 HPC 4 P100 单跑 ~3h,
+3 新组共 ~9h.

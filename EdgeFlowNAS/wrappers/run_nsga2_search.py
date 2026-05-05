@@ -47,6 +47,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--num_workers", type=int, default=None, help="override per-eval FC2 loader workers")
     parser.add_argument("--prefetch_batches", type=int, default=None, help="override per-eval prefetch depth")
     parser.add_argument("--max_fc2_val_samples", type=int, default=None, help="optional FC2 val cap for pilots")
+    parser.add_argument(
+        "--output_root",
+        type=str,
+        default=None,
+        help="override cfg.paths.output_root (e.g., outputs/ablation_phase5)",
+    )
     # Phase 2 (search_hybrid_v1): warm-start agent flag
     parser.add_argument(
         "--enable_warmstart",
@@ -91,7 +97,29 @@ def _build_parser() -> argparse.ArgumentParser:
         default="supervisor_agent",
         help="LLM client role name for supervisor agent",
     )
+    # Phase 5 (search_hybrid_v1): convenience flag for ablation experiments.
+    # Auto-expands to the corresponding combination of enable_warmstart /
+    # enable_scientist / enable_supervisor flags.
+    parser.add_argument(
+        "--ablation_group",
+        type=str,
+        default=None,
+        choices=["a", "b", "c", "d"],
+        help="Ablation group convenience: a=NSGA-II only, b=+warmstart, "
+             "c=+scientist, d=+supervisor (full system). Overrides any "
+             "manually-set --enable_* flags below.",
+    )
     return parser
+
+
+def _apply_ablation_group(args: argparse.Namespace) -> None:
+    """Phase 5: 把 --ablation_group 展开成对应的 enable flags."""
+    group = args.ablation_group
+    if group is None:
+        return
+    args.enable_warmstart = group in ("b", "c", "d")
+    args.enable_scientist = group in ("c", "d")
+    args.enable_supervisor = group == "d"
 
 
 def _apply_cli_overrides(cfg: dict, args: argparse.Namespace) -> dict:
@@ -126,8 +154,17 @@ def _setup_logging(level_text: str) -> None:
 def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
+    _apply_ablation_group(args)
     _setup_logging(args.log_level)
     logger = logging.getLogger("run_nsga2_search")
+    if args.ablation_group is not None:
+        logger.info(
+            "ablation_group=%s expanded to: warmstart=%s scientist=%s supervisor=%s",
+            args.ablation_group,
+            args.enable_warmstart,
+            args.enable_scientist,
+            args.enable_supervisor,
+        )
 
     config_path = os.path.join(_PROJECT_ROOT, args.config)
     if not os.path.exists(config_path):
@@ -138,6 +175,8 @@ def main() -> int:
         cfg = yaml.safe_load(handle)
     cfg = _apply_cli_overrides(cfg, args)
 
+    if args.output_root is not None:
+        cfg.setdefault("paths", {})["output_root"] = args.output_root
     output_root = os.path.join(_PROJECT_ROOT, cfg["paths"]["output_root"])
     from efnas.search.file_io import find_latest_experiment_dir, init_experiment_dir
 

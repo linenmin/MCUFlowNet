@@ -1,4 +1,5 @@
-# EdgeFlowNAS NSGA-II baseline search config (V3)
+# EdgeFlowNAS NSGA-II + hybrid LLM agent config (V3)
+# Phase 5 (search_hybrid_v1): supports --ablation_group {a,b,c,d} via wrapper.
 
 search:
   total_evaluations: 800
@@ -9,6 +10,26 @@ search:
   duplicate_retry_factor: 20
   search_space_size: 23328
   search_space_module: "efnas.nas.search_space_v3"
+
+# Phase 2-4: 5 LLM agent roles, 全部路由到 Gemini 3.1 Pro.
+# (a) baseline 不读这一段; (b/c/d) 按需用对应 role.
+llm:
+  models:
+    warmstart_agent:    "gemini/gemini-3.1-pro-preview"
+    scientist_stage_a:  "gemini/gemini-3.1-pro-preview"
+    scientist_stage_b1: "gemini/gemini-3.1-pro-preview"
+    scientist_stage_b2: "gemini/gemini-3.1-pro-preview"
+    supervisor_agent:   "gemini/gemini-3.1-pro-preview"
+  # Gemini 3 系列官方推荐温度 = 1.0 (低温会触发 looping warning)
+  temperature:
+    warmstart_agent:    1.0
+    scientist_stage_a:  1.0
+    scientist_stage_b1: 0.6   # 写代码偏低温
+    scientist_stage_b2: 1.0
+    supervisor_agent:   0.7
+  max_tokens: 8192
+  request_timeout: 180
+  max_retries: 3
 
 concurrency:
   max_workers: 6

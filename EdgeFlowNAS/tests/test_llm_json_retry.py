@@ -14,12 +14,11 @@ class TestLLMJsonRetry(unittest.TestCase):
         cfg = {
             "llm": {
                 "models": {
-                    "agent_a_strategist": "gemini/test",
-                    "agent_b_generator": "gemini/test",
-                    "agent_c_distiller": "gemini/test",
-                    "agent_d_scientist": "gemini/test",
-                    "agent_d_coder": "gemini/test",
-                    "agent_d_rule_manager": "gemini/test",
+                    "warmstart_agent": "gemini/test",
+                    "scientist_stage_a": "gemini/test",
+                    "scientist_stage_b1": "gemini/test",
+                    "scientist_stage_b2": "gemini/test",
+                    "supervisor_agent": "gemini/test",
                 },
                 "temperature": 1.0,
                 "max_retries": 0,
@@ -31,13 +30,13 @@ class TestLLMJsonRetry(unittest.TestCase):
             client,
             "chat",
             side_effect=[
-                '{"generated_candidates": ["0,0,0',
-                '{"generated_candidates": ["0,0,0,0,0,0,0,0,0,0,0"]}',
+                '{"arch_codes": ["0,0,0',
+                '{"arch_codes": ["0,0,0,0,0,0,0,0,0,0,0"]}',
             ],
         ) as mock_chat:
-            result = client.chat_json("agent_b", "sys", "user")
+            result = client.chat_json("warmstart_agent", "sys", "user")
 
-        self.assertEqual(result["generated_candidates"], ["0,0,0,0,0,0,0,0,0,0,0"])
+        self.assertEqual(result["arch_codes"], ["0,0,0,0,0,0,0,0,0,0,0"])
         self.assertEqual(mock_chat.call_count, 2)
 
 

@@ -14,16 +14,24 @@ logger = logging.getLogger(__name__)
 
 
 class LLMClient:
-    """多模型路由的 LiteLLM 统一调用客户端。"""
+    """多模型路由的 LiteLLM 统一调用客户端。
 
-    # Agent 角色 -> YAML 配置键 的映射
+    Phase 2-4 (search_hybrid_v1) 后的角色:
+      - warmstart_agent (Phase 2)
+      - scientist_stage_a / scientist_stage_b1 / scientist_stage_b2 (Phase 3)
+      - supervisor_agent (Phase 4)
+
+    role 名直接 == config key, 不再做间接映射 (旧版 agent_a → agent_a_strategist
+    的映射已随 Phase 1 删除).
+    """
+
+    # Phase 2-4 role 名 == YAML llm.models 子键 (无间接映射)
     ROLE_TO_CONFIG_KEY = {
-        "agent_a": "agent_a_strategist",
-        "agent_b": "agent_b_generator",
-        "agent_c": "agent_c_distiller",
-        "agent_d1": "agent_d_scientist",
-        "agent_d2": "agent_d_coder",
-        "agent_d3": "agent_d_rule_manager",
+        "warmstart_agent": "warmstart_agent",
+        "scientist_stage_a": "scientist_stage_a",
+        "scientist_stage_b1": "scientist_stage_b1",
+        "scientist_stage_b2": "scientist_stage_b2",
+        "supervisor_agent": "supervisor_agent",
     }
 
     def __init__(self, cfg: Dict[str, Any]) -> None:
@@ -77,7 +85,7 @@ class LLMClient:
         """发起一次 LLM 对话调用。
 
         Args:
-            role: Agent 角色标识 ("agent_a", "agent_b", "agent_c", "agent_d1", "agent_d2", "agent_d3")。
+            role: Agent 角色标识. 见 ROLE_TO_CONFIG_KEY 的合法 key.
             system_prompt: 系统提示词。
             user_message: 用户消息（包含注入的上下文数据）。
             force_json: 是否强制要求模型输出 JSON 格式。
