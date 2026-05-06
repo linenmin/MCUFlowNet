@@ -51,8 +51,8 @@ LLM agent 承担三个独立角色 (互不重叠，都不与 NSGA-II 竞争 Pare
 搜索空间被一个严谨的 11 维整数数组完美映射，总空间大小为 `3^6 * 2^5 = 23328`。
 前 6 位是 3-choice block (取值 0/1/2)，后 5 位是 2-choice head block (取值 0/1)。
 数组按序的物理意义如下:
-- [0] `E0`: 前端输入算子块。`0=7x7 stride-2`, `1=5x5 stride-2`, `2=3x3 stride-2`
-- [1] `E1`: 第二个前端算子块。`0=5x5 stride-2`, `1=3x3 stride-2`, `2=3x3 stride-2 + 3x3 dilated`
+- [0] `E0`: 前端输入算子块。`0=3x3 Conv`, `1=5x5 Conv`, `2=7x7 Conv` (从轻到重)
+- [1] `E1`: 第二个前端算子块。`0=3x3 Conv`, `1=5x5 Conv`, `2=3x3 stride-2 dilated Conv`
 - [2] `EB0`: Encoder Backbone Block 0，ResNet-style residual block stack。`0=Deep1`, `1=Deep2`, `2=Deep3`
 - [3] `EB1`: Encoder Backbone Block 1。同上
 - [4] `DB0`: Decoder/Bottleneck Block 0，ResNet-style residual block stack。`0=Deep1`, `1=Deep2`, `2=Deep3`
@@ -66,8 +66,8 @@ LLM agent 承担三个独立角色 (互不重叠，都不与 NSGA-II 竞争 Pare
 # OBJECTIVE PHYSICS (典型 trade-off)
 - **EPE↓** 和模型容量正相关: 深 backbone (EB0/EB1/DB0/DB1 选 1 或 2)、大核 head
   (H*Out 选 1) 通常降 EPE
-- **FPS↑** 和计算量负相关: 轻量 stem (E0/E1 选 2)、浅 backbone (选 0)、3x3 head
-  (H*Out 选 0) 通常升 FPS
+- **FPS↑** 和计算量负相关: 轻量 stem (E0/E1 选 0, 都是 3x3 Conv)、浅 backbone
+  (选 0)、3x3 head (H*Out 选 0) 通常升 FPS
 - 端点附近的"绝对最优"是公知 (全 0 全浅 → 高 FPS 高 EPE; 全 2 全深 → 低 EPE 低 FPS)，
   Pareto 中段的 trade-off 才是搜索价值所在
 """
