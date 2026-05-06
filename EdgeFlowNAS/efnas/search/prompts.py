@@ -221,24 +221,15 @@ grounding 注解), 输出**完整的 final insights.md 内容**.
   "insights_md": "# Search Insights\\n\\n<!-- ... -->\\n\\n---\\n\\n### I-001 (active): 标题\\n\\n正文..."
 }}
 
-格式契约:
+格式契约 (机器解析):
 - 每条 insight 用 ``### I-{{id}} ({{status}}): {{title}}`` 三级标题
 - status 三选一 ``active`` / ``retired`` / ``under_review``
 - ID 以 ``I-`` 开头, 后续允许字母数字短横线
 - 正文自由形式, 无必填字段
 - 输出**完整 markdown**, 不是 diff
 
-# WHAT TO DO PER INSIGHT
-
-- **Vela 数据支持**: body 写 hardware grounding (引 ``block_tag`` / ``cycles`` /
-  ``util_pct`` 数字)
-- **Verification 通过且支持**: body 引述统计 (例 "47/50 子网 EPE < 4.0, 94%")
-- **Verification 反例严重**: status 改 ``under_review`` 或 ``retired``, body 写原因
-- **Vela 0 matches**: 保留 insight, body 写 "尚未探索, 建议下一代 mutation 探索"
-- **Verification timeout / error**: body 注 "代码验证失败 (原因)", 通常标 under_review
-- **annotations_no_code**: 直接把 annotation 写进 body
-
-核心原则: 让 final 文件反映 grounded reality, 而不是 Stage A 的 ungrounded 假设.
+每条 insight 是保留 / 修订 / 标 under_review / retired, 以及 body 怎么综合
+Stage A draft + Vela query + verification 输出, 由你判断.
 """
 
 
@@ -253,13 +244,11 @@ SUPERVISOR_AGENT_SYSTEM = UNIVERSAL_WORLDVIEW + """
 NSGA-II 已跑了若干代, Scientist 刚更新了 insights.md. 你看健康度指标 +
 insights, 决定要不要调 NSGA-II 搜索参数.
 
-**风险提醒**: NSGA-II 默认参数是经过广泛验证的合理初值. 你的存在意义是
-**信号明确时做有据有节的调整**, 不是为调而调. 大多数情况 ``no_change`` 是最
-合理的输出. 系统设计允许把无效的 Supervisor 整个消融出局, 所以**质量 > 活跃度**.
+是否调整、调哪几个 lever、调多少, 完全由你判断.
 
 # YOUR ACTION SPACE: 5 LEVERS
 
-每个 lever 允许 ``null`` 表示不调. 全 null = no_change. 怎么组合由你判断.
+每个 lever 允许 ``null`` 表示不调. 全 null = no_change.
 
 1. **``mutation_prob``** ∈ [0.0, 1.0], 默认 1/11 ≈ 0.091. 全局 per-gene mutation 概率.
 2. **``crossover_prob``** ∈ [0.0, 1.0], 默认 0.9. 父代对执行 uniform crossover 的概率.
@@ -274,26 +263,16 @@ insights, 决定要不要调 NSGA-II 搜索参数.
 # YOUR INPUT
 
 - ``current_state``: 5 lever 当前数值
-- ``recent_metrics``: 最近 8 行 generation_metrics.csv (HV / hv_improvement_rate_3gen /
-  mean_crowding_distance / gene_entropy_dim_0..10 / rank1_saturation / stagnation_* /
-  largest_pareto_gap / duplicate_rate / duplicate_rate_3gen_avg)
+- ``recent_metrics``: 最近 8 行 generation_metrics.csv. 列名:
+  ``HV / hv_improvement_rate_3gen / mean_crowding_distance /
+  gene_entropy_dim_0..10 / rank1_saturation / stagnation_best_epe /
+  stagnation_best_fps / stagnation_hv / largest_gap_fps_low /
+  largest_gap_fps_high / largest_gap_epe_low / largest_gap_epe_high /
+  duplicate_rate / duplicate_rate_3gen_avg``.
+  各 metric 的语义你自己根据列名判断, 我们不预设"什么算异常".
 - ``current_pareto_summary``: Pareto 端点 + 大小
 - ``current_insights_md``: Phase 3 最新输出 (可能空)
 - ``supervisor_log``: 你过去的调整历史 (before/after/rationale/expected_effect/review_after_gen)
-
-# DIAGNOSTIC SIGNALS (诊断材料, 非动作处方)
-
-- ``hv_improvement_rate_3gen`` 低: 整体停滞
-- ``mean_crowding_distance`` 低: 前沿挤压
-- ``gene_entropy_dim_X`` 低 (3-choice 维 < 0.4 / 2-choice 维 < 0.3): dim X 多样性塌缩
-- ``rank1_saturation`` > 0.8: 种群几乎全在第一前沿, crossover 在自己跟自己玩
-- ``stagnation_*`` 高: 极值或 HV 长期不更新
-- ``duplicate_rate`` 升: 生成器开始撞已评估子网
-
-读 ``supervisor_log`` 时关注: 上次预期是否兑现, ``review_after_gen`` 到了没,
-之前 rejected 的动作原因怎么避开.
-
-不要逐条 if-then; 综合看. 信号弱或矛盾时 ``no_change``.
 
 # OUTPUT FORMAT [JSON Only]
 
