@@ -246,30 +246,54 @@ insights, 决定要不要调 NSGA-II 搜索参数.
 
 是否调整、调哪几个 lever、调多少, 完全由你判断.
 
-# YOUR ACTION SPACE: 5 LEVERS
+# YOUR ACTION SPACE: 8 LEVERS
 
-每个 lever 允许 ``null`` 表示不调. 全 null = no_change.
+每个 lever 允许 ``null`` 表示不调. 全 null = no_change. 所有 lever 的"identity
+default" 都让算法行为还原标准 NSGA-II.
 
-1. **``mutation_prob``** ∈ [0.0, 1.0], 默认 1/11 ≈ 0.091. 全局 per-gene mutation 概率.
-2. **``crossover_prob``** ∈ [0.0, 1.0], 默认 0.9. 父代对执行 uniform crossover 的概率.
-   与 mutation_prob 自然 trade-off (高 mut + 低 cross 防"两层噪声").
+1. **``mutation_prob``** ∈ [0.0, 1.0], 默认 1/11 ≈ 0.091.
+   全局 per-gene mutation 概率.
+
+2. **``crossover_prob``** ∈ [0.0, 1.0], 默认 0.9.
+   父代对执行 uniform crossover 的概率. 概率 < 1 时多余父代直接 pass-through.
+
 3. **``per_dim_mutation_multiplier``** = list of 11 non-negative floats, 默认 ``[1.0]*11``.
-   每维独立缩放, 实际 = ``mutation_prob × multiplier[d]`` 截断到 [0, 1].
-   适合某维 entropy 塌缩时**只**加该维 mutation, 其余保持 1.0.
-4. **``tournament_size``** ∈ [2, population_size], 默认 2. 选择压力 (越大压力越强).
-5. **``reseed_bottom_pct``** ∈ [0, 100], 默认 0. 每代往 offspring 注入 X% 随机
-   arch (drastic restart, 适合种群完全塌缩).
+   每维独立缩放, 实际每维 mutation 概率 = ``mutation_prob × multiplier[d]`` 截断到
+   [0, 1]. ``[1.0]*11`` 等价 identity (每维同 mutation_prob).
+
+4. **``tournament_size``** ∈ [2, population_size], 默认 2 (binary tournament).
+   每次选择从 K 个候选里挑最优父代.
+
+5. **``reseed_bottom_pct``** ∈ [0, 100], 默认 0.
+   每代 offspring 配额内的 X% 用全空间随机采样替代 (drastic restart 机制).
+
+6. **``local_search_pareto_neighbors``** ∈ [0, population_size], 默认 0.
+   每代 offspring 配额内的 K 个用 1-flip 邻居替代 (memetic local search).
+   邻居取自 history_archive 当前非支配集成员 (按 crowding distance 排序优先取
+   多样性高的成员), 枚举单基因翻到该维另一合法值的所有邻居, 去重后取前 K 个.
+   K=0 时不触发, 与标准 NSGA-II 行为一致.
+
+7. **``parent_pool_source``** ∈ {{"current_pop", "history_pareto", "mixed_50_50"}},
+   默认 ``"current_pop"`` (标准 NSGA-II 行为, 父代仅从当前种群选).
+   ``"history_pareto"`` 用 history_archive 全量评估子网算非支配集作为父代池;
+   ``"mixed_50_50"`` 是两者并集去重. 切换不消耗额外评估预算, 仅改变 selection
+   的输入候选集.
+
+8. **``frozen_dims``** = list of dim indices ⊂ [0..10], 默认 ``[]``.
+   命中维度的 mutation 概率强制为 0 (无视 mutation_prob 与 per_dim_multiplier).
+   适合声明"这些维度已确定收敛, 不再 mutation 探索, 把概率预算让给其他维".
+   可逆: 后续 invocation 把该维从 frozen_dims 移除即重新解锁.
 
 # YOUR INPUT
 
-- ``current_state``: 5 lever 当前数值
+- ``current_state``: 8 lever 当前数值
 - ``recent_metrics``: 最近 8 行 generation_metrics.csv. 列名:
   ``HV / hv_improvement_rate_3gen / mean_crowding_distance /
   gene_entropy_dim_0..10 / rank1_saturation / stagnation_best_epe /
   stagnation_best_fps / stagnation_hv / largest_gap_fps_low /
   largest_gap_fps_high / largest_gap_epe_low / largest_gap_epe_high /
   duplicate_rate / duplicate_rate_3gen_avg``.
-  各 metric 的语义你自己根据列名判断, 我们不预设"什么算异常".
+  各 metric 的语义由你根据列名判断, 我们不预设"什么算异常".
 - ``current_pareto_summary``: Pareto 端点 + 大小
 - ``current_insights_md``: Phase 3 最新输出 (可能空)
 - ``supervisor_log``: 你过去的调整历史 (before/after/rationale/expected_effect/review_after_gen)
@@ -277,22 +301,26 @@ insights, 决定要不要调 NSGA-II 搜索参数.
 # OUTPUT FORMAT [JSON Only]
 
 {{
-  "rationale": "解释为什么这组动作 (或 no_change), 引用具体 metric 数值. 进 supervisor_log",
+  "rationale": "解释这组动作 (或 no_change). 引用 metric 数值. 进 supervisor_log",
   "actions": {{
-    "mutation_prob": 0.13,
-    "crossover_prob": 0.85,
-    "per_dim_mutation_multiplier": [1.0, 1.0, 2.0, 1.0, 1.0, 1.5, 1.0, 1.0, 1.0, 1.0, 1.0],
-    "tournament_size": 3,
-    "reseed_bottom_pct": 10
+    "mutation_prob": null,
+    "crossover_prob": null,
+    "per_dim_mutation_multiplier": null,
+    "tournament_size": null,
+    "reseed_bottom_pct": null,
+    "local_search_pareto_neighbors": null,
+    "parent_pool_source": null,
+    "frozen_dims": null
   }},
   "expected_effect": "下一个 review 节点希望看到的指标变化",
-  "review_after_gen": 5
+  "review_after_gen": <int>
 }}
 
 # HARD CONSTRAINTS
 
-- 每个 lever 落在数学合法范围
-- ``per_dim_mutation_multiplier`` 长度 11 且每元素 ≥ 0
+- 每个 lever 落在其数学合法范围 (见 ACTION SPACE 各项)
+- ``per_dim_mutation_multiplier`` 必须长度 11 且元素全部 ≥ 0
+- ``frozen_dims`` 元素必须 ∈ [0, 10] 且互不重复
 - 严格 JSON
 
 非法值会被工程层拒绝 (其他合法 lever 照常应用), rejection 进 supervisor_log.

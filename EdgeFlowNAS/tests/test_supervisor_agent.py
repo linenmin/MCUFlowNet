@@ -115,6 +115,41 @@ class TestMutateArchWithMultiplier(unittest.TestCase):
                          search_space=self.space, per_dim_multiplier=[1.0] * 11)
         self.assertEqual(c1, c2)
 
+    def test_frozen_dims_skips_mutation(self) -> None:
+        # search_hybrid_v1: frozen_dims 命中维度 mutation 概率强制为 0
+        rng = random.Random(42)
+        for _ in range(200):
+            child = mutate_arch(
+                self.arch, rng=rng, mutation_prob=0.99,
+                search_space=self.space,
+                frozen_dims=[3, 7, 9],
+            )
+            self.assertEqual(child[3], 0)
+            self.assertEqual(child[7], 0)
+            self.assertEqual(child[9], 0)
+
+    def test_frozen_dims_overrides_high_multiplier(self) -> None:
+        # 即使 per_dim_multiplier 给该维很大值, frozen_dims 仍然压成 0
+        rng = random.Random(0)
+        multiplier = [1.0] * 11
+        multiplier[5] = 100.0
+        for _ in range(100):
+            child = mutate_arch(
+                self.arch, rng=rng, mutation_prob=0.5,
+                search_space=self.space,
+                per_dim_multiplier=multiplier,
+                frozen_dims=[5],
+            )
+            self.assertEqual(child[5], 0)
+
+    def test_empty_frozen_dims_no_op(self) -> None:
+        rng = random.Random(0)
+        c1 = mutate_arch(self.arch, rng=random.Random(0), mutation_prob=0.5,
+                         search_space=self.space)
+        c2 = mutate_arch(self.arch, rng=random.Random(0), mutation_prob=0.5,
+                         search_space=self.space, frozen_dims=[])
+        self.assertEqual(c1, c2)
+
 
 # ---------------------------------------------------------------------------
 # current_supervisor_state + apply_supervisor_actions
@@ -132,6 +167,10 @@ class TestSupervisorState(unittest.TestCase):
         self.assertEqual(state["tournament_size"], 2)
         self.assertEqual(state["per_dim_mutation_multiplier"], [1.0] * 11)
         self.assertEqual(state["reseed_bottom_pct"], 0)
+        # search_hybrid_v1: 3 个新 lever 的 identity default
+        self.assertEqual(state["local_search_pareto_neighbors"], 0)
+        self.assertEqual(state["parent_pool_source"], "current_pop")
+        self.assertEqual(state["frozen_dims"], [])
 
 
 class TestApplySupervisorActions(unittest.TestCase):
@@ -215,6 +254,117 @@ class TestApplySupervisorActions(unittest.TestCase):
         result = self.runner.apply_supervisor_actions("not a dict")
         self.assertIn("_global", result["rejected"])
         self.assertEqual(result["applied"], {})
+
+
+# ---------------------------------------------------------------------------
+# search_hybrid_v1: 3 个新 lever 的校验
+# ---------------------------------------------------------------------------
+
+class TestNewLeversValidation(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.mkdtemp()
+        self.runner = _make_runner(self.tmp)
+
+    # local_search_pareto_neighbors ------------------------------------
+    def test_local_search_legal(self) -> None:
+        result = self.runner.apply_supervisor_actions(
+            {"local_search_pareto_neighbors": 5}
+        )
+        self.assertIn("local_search_pareto_neighbors", result["applied"])
+        self.assertEqual(self.runner._local_search_pareto_neighbors, 5)
+
+    def test_local_search_zero_legal_default(self) -> None:
+        result = self.runner.apply_supervisor_actions(
+            {"local_search_pareto_neighbors": 0}
+        )
+        self.assertIn("local_search_pareto_neighbors", result["applied"])
+        self.assertEqual(self.runner._local_search_pareto_neighbors, 0)
+
+    def test_local_search_negative_rejected(self) -> None:
+        result = self.runner.apply_supervisor_actions(
+            {"local_search_pareto_neighbors": -1}
+        )
+        self.assertIn("local_search_pareto_neighbors", result["rejected"])
+        self.assertEqual(self.runner._local_search_pareto_neighbors, 0)
+
+    def test_local_search_above_pop_size_rejected(self) -> None:
+        result = self.runner.apply_supervisor_actions(
+            {"local_search_pareto_neighbors": self.runner.population_size + 1}
+        )
+        self.assertIn("local_search_pareto_neighbors", result["rejected"])
+
+    # parent_pool_source -----------------------------------------------
+    def test_parent_pool_source_current_pop_legal(self) -> None:
+        result = self.runner.apply_supervisor_actions(
+            {"parent_pool_source": "current_pop"}
+        )
+        self.assertIn("parent_pool_source", result["applied"])
+        self.assertEqual(self.runner._parent_pool_source, "current_pop")
+
+    def test_parent_pool_source_history_pareto_legal(self) -> None:
+        result = self.runner.apply_supervisor_actions(
+            {"parent_pool_source": "history_pareto"}
+        )
+        self.assertIn("parent_pool_source", result["applied"])
+        self.assertEqual(self.runner._parent_pool_source, "history_pareto")
+
+    def test_parent_pool_source_mixed_legal(self) -> None:
+        result = self.runner.apply_supervisor_actions(
+            {"parent_pool_source": "mixed_50_50"}
+        )
+        self.assertIn("parent_pool_source", result["applied"])
+
+    def test_parent_pool_source_unknown_rejected(self) -> None:
+        result = self.runner.apply_supervisor_actions(
+            {"parent_pool_source": "random_archive"}
+        )
+        self.assertIn("parent_pool_source", result["rejected"])
+        self.assertEqual(self.runner._parent_pool_source, "current_pop")
+
+    def test_parent_pool_source_non_string_rejected(self) -> None:
+        result = self.runner.apply_supervisor_actions(
+            {"parent_pool_source": 42}
+        )
+        self.assertIn("parent_pool_source", result["rejected"])
+
+    # frozen_dims ------------------------------------------------------
+    def test_frozen_dims_legal(self) -> None:
+        result = self.runner.apply_supervisor_actions(
+            {"frozen_dims": [7, 9]}
+        )
+        self.assertIn("frozen_dims", result["applied"])
+        self.assertEqual(self.runner._frozen_dims, [7, 9])
+
+    def test_frozen_dims_dedup_and_sort(self) -> None:
+        # dup and unsorted input gets deduped and sorted
+        result = self.runner.apply_supervisor_actions(
+            {"frozen_dims": [9, 7, 7, 3]}
+        )
+        self.assertEqual(self.runner._frozen_dims, [3, 7, 9])
+
+    def test_frozen_dims_empty_legal(self) -> None:
+        result = self.runner.apply_supervisor_actions({"frozen_dims": []})
+        self.assertIn("frozen_dims", result["applied"])
+        self.assertEqual(self.runner._frozen_dims, [])
+
+    def test_frozen_dims_out_of_range_rejected(self) -> None:
+        result = self.runner.apply_supervisor_actions(
+            {"frozen_dims": [3, 11]}  # 11 is out of [0, 10]
+        )
+        self.assertIn("frozen_dims", result["rejected"])
+        self.assertEqual(self.runner._frozen_dims, [])
+
+    def test_frozen_dims_negative_rejected(self) -> None:
+        result = self.runner.apply_supervisor_actions(
+            {"frozen_dims": [-1, 3]}
+        )
+        self.assertIn("frozen_dims", result["rejected"])
+
+    def test_frozen_dims_non_list_rejected(self) -> None:
+        result = self.runner.apply_supervisor_actions(
+            {"frozen_dims": "7,9"}
+        )
+        self.assertIn("frozen_dims", result["rejected"])
 
 
 # ---------------------------------------------------------------------------

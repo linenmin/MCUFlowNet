@@ -114,17 +114,24 @@ def mutate_arch(
     search_space: Optional[SearchSpaceAdapter] = None,
     *,
     per_dim_multiplier: Optional[Sequence[float]] = None,
+    frozen_dims: Optional[Sequence[int]] = None,
 ) -> List[int]:
     """Mutate one architecture with per-gene categorical mutation.
 
     Phase 4: optional ``per_dim_multiplier`` 给每维独立 mutation_prob 缩放系数.
     实际每维 mutation 概率 = ``mutation_prob × multiplier[d]``, 截断到 [0, 1].
     长度不足或 None 时退化为均匀 mutation_prob (Phase 1 行为).
+
+    search_hybrid_v1: optional ``frozen_dims`` 是一组维度 index, 命中时本维 mutation
+    概率强制为 0 (无论 per_dim_multiplier 如何). 默认 None 等价无冻结.
     """
     space = search_space or load_search_space()
     child = [int(value) for value in arch_code]
     base_prob = float(mutation_prob)
+    frozen_set = set(int(d) for d in frozen_dims) if frozen_dims else set()
     for block_idx in range(space.num_blocks()):
+        if block_idx in frozen_set:
+            continue
         effective_prob = base_prob
         if per_dim_multiplier is not None and block_idx < len(per_dim_multiplier):
             try:
@@ -305,12 +312,17 @@ class NSGA2SearchRunner:
         self._scientist_llm = scientist_llm
         self._scientist_interval = max(1, int(scientist_interval))
         self._scientist_sandbox_timeout = int(scientist_sandbox_timeout)
-        # Phase 4: 5-lever 可变状态 (Supervisor 通过 apply_supervisor_actions 调整)
-        # mutation_prob / crossover_prob 已在上面用 self.* 存; tournament_size /
-        # per_dim_multiplier / reseed_bottom_pct 是 Phase 4 新增.
+        # Phase 4: 8-lever 可变状态 (Supervisor 通过 apply_supervisor_actions 调整)
+        # 前 5 个: mutation_prob / crossover_prob (上面 self.* 存) + tournament_size /
+        # per_dim_multiplier / reseed_bottom_pct.
+        # 后 3 个 (search_hybrid_v1 扩展): local_search_pareto_neighbors /
+        # parent_pool_source / frozen_dims. 默认值都让算法行为还原标准 NSGA-II.
         self._tournament_size: int = 2
         self._per_dim_mutation_multiplier: List[float] = [1.0] * self.search_space.num_blocks()
         self._reseed_bottom_pct: int = 0
+        self._local_search_pareto_neighbors: int = 0
+        self._parent_pool_source: str = "current_pop"
+        self._frozen_dims: List[int] = []
         self._supervisor_llm: Optional[Any] = supervisor_llm
 
     def run(self) -> None:
@@ -363,19 +375,37 @@ class NSGA2SearchRunner:
                 else:
                     candidate_arches, duplicate_count = self._sample_unique_random_arches(needed)
             else:
-                # Phase 4 lever 5: reseed_bottom_pct 把 needed 拆成 offspring +
-                # random injection 两部分.
+                # search_hybrid_v1: needed 在 8 个 lever 影响下被拆成 3 段:
+                #   n_reseed  (lever 5: reseed_bottom_pct)
+                #   n_local   (lever 6: local_search_pareto_neighbors)
+                #   n_offspring = needed - n_reseed - n_local  (常规 crossover/mutation)
+                # 所有 default 值 (reseed=0, local=0, parent_source="current_pop",
+                # frozen_dims=[]) 让该分支退化为标准 NSGA-II.
                 reseed_pct = max(0, min(100, int(self._reseed_bottom_pct or 0)))
                 n_reseed = int(round(needed * reseed_pct / 100.0)) if reseed_pct > 0 else 0
-                n_offspring = max(0, needed - n_reseed)
+                n_local = max(0, min(int(self._local_search_pareto_neighbors or 0), needed - n_reseed))
+                n_offspring = max(0, needed - n_reseed - n_local)
                 candidate_arches = []
                 duplicate_count = 0
                 if n_offspring > 0:
+                    parent_pool = self._build_parent_pool(current_population)
                     offspring, dup1 = self._generate_offspring_arches(
-                        current_population, n_offspring,
+                        parent_pool, n_offspring,
                     )
                     candidate_arches.extend(offspring)
                     duplicate_count += dup1
+                if n_local > 0:
+                    neighbors, dup_local = self._generate_pareto_neighbor_offspring(
+                        n_local, extra_seen=set(candidate_arches),
+                    )
+                    candidate_arches.extend(neighbors)
+                    duplicate_count += dup_local
+                    logger.info(
+                        "[LocalSearch] gen=%d injected %d Pareto-neighbor arches "
+                        "(K=%d, total=%d)",
+                        generation, len(neighbors),
+                        int(self._local_search_pareto_neighbors), len(candidate_arches),
+                    )
                 if n_reseed > 0:
                     reseed_arches, dup2 = self._sample_unique_random_arches(
                         n_reseed, extra_seen=set(candidate_arches),
@@ -495,13 +525,16 @@ class NSGA2SearchRunner:
     # ===============================================================
 
     def current_supervisor_state(self) -> Dict[str, Any]:
-        """返回 5 个 lever 的当前数值, 给 Supervisor agent 看自己上次调了啥."""
+        """返回 8 个 lever 的当前数值, 给 Supervisor agent 看自己上次调了啥."""
         return {
             "mutation_prob": float(self.mutation_prob),
             "crossover_prob": float(self.crossover_prob),
             "tournament_size": int(self._tournament_size),
             "per_dim_mutation_multiplier": list(self._per_dim_mutation_multiplier),
             "reseed_bottom_pct": int(self._reseed_bottom_pct),
+            "local_search_pareto_neighbors": int(self._local_search_pareto_neighbors),
+            "parent_pool_source": str(self._parent_pool_source),
+            "frozen_dims": list(self._frozen_dims),
         }
 
     def apply_supervisor_actions(self, actions: Dict[str, Any]) -> Dict[str, Any]:
@@ -606,6 +639,53 @@ class NSGA2SearchRunner:
             except (TypeError, ValueError) as e:
                 rejected["reseed_bottom_pct"] = f"invalid: {e}"
 
+        # local_search_pareto_neighbors (search_hybrid_v1)
+        if actions.get("local_search_pareto_neighbors") is not None:
+            try:
+                v = int(actions["local_search_pareto_neighbors"])
+                if v < 0 or v > self.population_size:
+                    rejected["local_search_pareto_neighbors"] = (
+                        f"out of [0, {self.population_size}]: {v}"
+                    )
+                else:
+                    self._local_search_pareto_neighbors = v
+                    applied["local_search_pareto_neighbors"] = v
+            except (TypeError, ValueError) as e:
+                rejected["local_search_pareto_neighbors"] = f"invalid: {e}"
+
+        # parent_pool_source (search_hybrid_v1)
+        if actions.get("parent_pool_source") is not None:
+            v = actions["parent_pool_source"]
+            allowed_sources = {"current_pop", "history_pareto", "mixed_50_50"}
+            if not isinstance(v, str) or v not in allowed_sources:
+                rejected["parent_pool_source"] = (
+                    f"must be one of {sorted(allowed_sources)}, got {v!r}"
+                )
+            else:
+                self._parent_pool_source = v
+                applied["parent_pool_source"] = v
+
+        # frozen_dims (search_hybrid_v1)
+        if actions.get("frozen_dims") is not None:
+            raw = actions["frozen_dims"]
+            num_dims = self.search_space.num_blocks()
+            if not isinstance(raw, list):
+                rejected["frozen_dims"] = (
+                    f"must be a list of dim indices, got {type(raw).__name__}"
+                )
+            else:
+                try:
+                    parsed = sorted({int(x) for x in raw})
+                    if any(d < 0 or d >= num_dims for d in parsed):
+                        rejected["frozen_dims"] = (
+                            f"all indices must be in [0, {num_dims - 1}]"
+                        )
+                    else:
+                        self._frozen_dims = parsed
+                        applied["frozen_dims"] = parsed
+                except (TypeError, ValueError) as e:
+                    rejected["frozen_dims"] = f"invalid: {e}"
+
         return {
             "applied": applied,
             "rejected": rejected,
@@ -654,11 +734,13 @@ class NSGA2SearchRunner:
                     child_a, rng=self._rng, mutation_prob=self.mutation_prob,
                     search_space=self.search_space,
                     per_dim_multiplier=self._per_dim_mutation_multiplier,
+                    frozen_dims=self._frozen_dims,
                 ),
                 mutate_arch(
                     child_b, rng=self._rng, mutation_prob=self.mutation_prob,
                     search_space=self.search_space,
                     per_dim_multiplier=self._per_dim_mutation_multiplier,
+                    frozen_dims=self._frozen_dims,
                 ),
             ):
                 arch_text = arch_to_text(child)
@@ -680,6 +762,125 @@ class NSGA2SearchRunner:
             duplicate_count += fallback_duplicates
 
         return batch_arches, duplicate_count
+
+    def _build_parent_pool(
+        self,
+        current_population: Sequence[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Lever 7 (parent_pool_source): 决定 _generate_offspring_arches 用哪批
+        rows 当父代候选池.
+
+          - "current_pop": 标准 NSGA-II 行为, 直接返回 current_population.
+          - "history_pareto": 从 history_archive 全量评估子网中算非支配集,
+            把整个历史 Pareto 当父代池. 通常 ≥ current_pop 的 rank-1 子集,
+            带回早期被丢弃的多样基因型.
+          - "mixed_50_50": current_population ∪ history_pareto 去重合并.
+        """
+        source = str(self._parent_pool_source or "current_pop")
+        if source == "current_pop" or not current_population:
+            return list(current_population)
+
+        history = _file_io().read_history(self.exp_dir)
+        if history.empty:
+            return list(current_population)
+        history_rows = history.to_dict("records")
+        # Only rows with valid epe/fps participate in Pareto computation.
+        valid_rows = [
+            r for r in history_rows
+            if r.get("epe") is not None and r.get("fps") is not None
+        ]
+        if not valid_rows:
+            return list(current_population)
+        objective_values = [_row_to_objectives(r) for r in valid_rows]
+        fronts = fast_non_dominated_sort(objective_values)
+        if not fronts or not fronts[0]:
+            return list(current_population)
+        history_pareto = [valid_rows[i] for i in fronts[0]]
+
+        if source == "history_pareto":
+            return history_pareto
+        # mixed_50_50: 合并去重 (按 arch_code)
+        merged: Dict[str, Dict[str, Any]] = {}
+        for row in current_population:
+            merged[str(row["arch_code"])] = row
+        for row in history_pareto:
+            merged[str(row["arch_code"])] = row
+        return list(merged.values())
+
+    def _generate_pareto_neighbor_offspring(
+        self,
+        target_count: int,
+        extra_seen: Optional[Iterable[str]] = None,
+    ) -> Tuple[List[str], int]:
+        """Lever 6 (local_search_pareto_neighbors): 生成 1-flip 邻居作为 offspring.
+
+        从 history_archive 全量子网算当前非支配集 (rank-1 Pareto 前沿), 取每个
+        Pareto 成员的所有 1-flip 邻居 (单基因翻到该维另一合法值), 去重后返回前
+        target_count 个未评估的. 不重新评估已 in archive 的邻居 (cache hit).
+
+        如果 history Pareto 不存在或邻居枚举不够数, 用 random sample 补齐.
+        """
+        evaluated_arches = _file_io().get_evaluated_arch_codes(self.exp_dir)
+        seen = set(extra_seen or [])
+        batch: List[str] = []
+        duplicate_count = 0
+
+        history = _file_io().read_history(self.exp_dir)
+        pareto_archs: List[str] = []
+        if not history.empty:
+            history_rows = history.to_dict("records")
+            valid_rows = [
+                r for r in history_rows
+                if r.get("epe") is not None and r.get("fps") is not None
+            ]
+            if valid_rows:
+                obj = [_row_to_objectives(r) for r in valid_rows]
+                fronts = fast_non_dominated_sort(obj)
+                if fronts and fronts[0]:
+                    # crowding-distance-ranked: pick most-spread Pareto first
+                    crowding = crowding_distance(fronts[0], obj)
+                    ranked = sorted(
+                        fronts[0],
+                        key=lambda i: -crowding.get(i, 0.0),
+                    )
+                    pareto_archs = [str(valid_rows[i]["arch_code"]) for i in ranked]
+
+        # Enumerate 1-flip neighbors of each Pareto arch in spread-priority order.
+        space = self.search_space
+        for parent_code in pareto_archs:
+            if len(batch) >= target_count:
+                break
+            try:
+                parent = text_to_arch(parent_code, search_space=space)
+            except Exception:
+                continue
+            for dim in range(space.num_blocks()):
+                if len(batch) >= target_count:
+                    break
+                num_choices = space.num_choices(dim)
+                for new_val in range(num_choices):
+                    if new_val == parent[dim]:
+                        continue
+                    neighbor = list(parent)
+                    neighbor[dim] = new_val
+                    arch_text = arch_to_text(neighbor)
+                    if arch_text in evaluated_arches or arch_text in seen:
+                        duplicate_count += 1
+                        continue
+                    batch.append(arch_text)
+                    seen.add(arch_text)
+                    if len(batch) >= target_count:
+                        break
+
+        # Fallback: not enough unique neighbors, top up with random.
+        if len(batch) < target_count:
+            fallback, dup_fb = self._sample_unique_random_arches(
+                target_count - len(batch),
+                extra_seen=seen,
+            )
+            batch.extend(fallback)
+            duplicate_count += dup_fb
+        return batch, duplicate_count
 
     def _consume_external_initial_population(
         self,
