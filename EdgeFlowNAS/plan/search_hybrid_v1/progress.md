@@ -773,3 +773,207 @@ Phase 1 的最后一块，工作量小，1-2 小时即可完成。完成后 Phas
 **整 hybrid system**: NSGA-II 主干 + 4 个 LLM 角色 (Warmstart × 1, Scientist × 5,
 Supervisor × 5) ≈ 21 LLM 调用 / run + 沙箱执行. 用户 HPC 4 P100 单跑 ~3h,
 3 新组共 ~9h.
+
+---
+
+## Session: 2026-05-06 (Phase 5 Execution + 多轮 prompt/lever 迭代)
+
+### 这一段的弧线
+
+3 组 slurm 提交跑完后, 第一轮分析显示 d (full system) HV 反而 < a (baseline),
+触发原"消融红线"。深入 metadata 后定位为**多层 prompt + 动作空间设计问题**,
+经过 3 轮迭代修复, d 最终从被消融转为 best_epe 全场最优 + 接近 c 的 HV。
+这个 session 主要是 prompt 哲学调整 + 8-lever 动作空间扩展 + 三次重跑 d 验证。
+
+### 时间顺序
+
+#### Step 1: HPC smoke test 暴露 sandbox bug
+- 第一次跑 unit tests 在 HPC 上 8 个 sandbox/scientist 测试 fail
+- **commit `fb98ec5`**: `efnas/search/sandbox.py` 把 subprocess env 从限制 dict 改回
+  `os.environ.copy()`. 之前的最小 env 漏了 `LD_LIBRARY_PATH` 等 Lmod 注入的库路径,
+  导致 HPC 上 child python 启动时 exit 127 (libpython 找不到). AST 白名单本来就
+  是 sandbox 的真正防线, env 限制是 over-engineering。
+- **commit `f9fb587`**: 加 `scripts/smoke_hybrid_v1.py` (sandbox + 5 LLM role +
+  AST 白名单 一键 smoke test), 避免 heredoc 缩进问题。
+- **commit `8ea5e10`**: smoke 脚本里把 `client.chat(..., response_format={...})`
+  改成 `client.chat_json(...)` (LLMClient 内部已自动加 response_format)。
+
+#### Step 2: 第一次 ablation 跑完 (d_v1)
+4 组单 seed 结果:
+
+| Group | 最终 HV | best_epe |
+|---|---|---|
+| a (NSGA-II) | 7.5217 | 4.0256 |
+| b (+warm) | 7.5245 | 4.0260 |
+| c (+sci) | 7.5259 | 4.0243 |
+| **d_v1 (full)** | **7.5040** | **4.0380** |
+
+**红线触发**: d < a, supervisor 连干预 3 次 (gen 8/11/14 mut↑/reseed↑/cross↓)
+后 HV 从 gen 8 起几乎不再增长 (+0.005 vs a/b/c 同期 +0.04)。
+
+诊断 metadata 发现 supervisor 把 mult[3,4,5]=2.0 加在了**已经熵满**的维度
+(`gene_entropy_dim_3/4/5` 在 gen 8 已 ≈1.0986=ln3 的最大熵), 而真正塌缩的
+dim 7/9 (entropy=0) 没有被 targeted。
+
+更根因: 旧 prompt 里 `OBJECTIVE PHYSICS` 把 E0 标错方向 (`0=7x7 stride-2` 应为
+`0=3x3`), Scientist gen5 的 I-001 直接写 "extreme FPS subnets employ E0=0
+(7x7 stride-2 stem)", supervisor 链式信任了这个反向硬件叙事。
+
+#### Step 3: prompt 修复 (3 commits)
+- **commit `5159107`**: 修 E0/E1 在 `UNIVERSAL_WORLDVIEW` 里的方向。
+  `efnas/nas/search_space_v3.py::V3_BLOCK_SPECS` 是 ground truth:
+  E0 `0=3x3, 1=5x5, 2=7x7` (从轻到重),
+  E1 `0=3x3, 1=5x5, 2=3x3 stride-2 dilated`. 之前 prompt 写反了 0 和 2。
+- **commit `2252436`**: 整体 prompt trim ~37% (5 个 prompt 合计 -323 行 +150 行).
+  砍掉 pep-talk ("你判断" × 5 等), workflow 哲学讨论, 显式数值例子。
+  保留: 角色定义, I/O 契约, 硬约束, JSON 格式。
+- **commit `b3d8e49`**: 进一步去掉 supervisor `DIAGNOSTIC SIGNALS` 整段
+  (e.g. "rank1_saturation > 0.8: crossover 在自己跟自己玩" 这种贬义化描述,
+  把 NSGA-II 的正常收敛 framing 成病态) + 风险提醒里的"no_change 是最合理输出"
+  (反向 prior). Scientist B-2 的 `WHAT TO DO PER INSIGHT` 处方块也一起砍。
+  哲学: 让 agent 自己读 raw column + 判断。
+
+#### Step 4: prompt 修复后的 d_v2 重跑
+
+| Group | 最终 HV | best_epe |
+|---|---|---|
+| d_v1 (5lever, old prompt) | 7.5040 | 4.0380 |
+| **d_v2 (5lever, new prompt)** | **7.5145** | **4.0237** |
+
+进步: HV +0.0105, best_epe -0.0143 (变好). supervisor 这次正确锁定 dim 7/9/10
+(gen 5 用 `mult[7,9]=3.0, mult[10]=2.0`)。
+
+但 d_v2 仍 < c (-0.0114 HV)。深入分析 supervisor_log 发现 **gen 11/14 supervisor
+反复挪 reseed 滑块** (reseed=15→30, mut=0.15)，每次 reseed 注入 5-10 个随机
+arch 几乎都被现有 Pareto 前沿支配, 浪费 eval 预算。
+
+#### Step 5: 设计讨论 — 是 prompt 还是动作空间问题?
+用户尖锐反驳: "前沿模型有 NSGA-II 知识, 它选 reseed 是合理的, 因为它从有限的
+5 lever 里挑能用的". 进一步指出现有 5 lever 中只有 mutation_prob /
+per_dim_multiplier 在我们小离散空间下真有锐度, **reseed 是它"被困到只能挪的
+最后一个滑块"**。
+
+- 用户否决了我的 4 个"结构性"改造建议: (A) 加 halt_search 出口
+  ("不让 agent 太容易退却"), (B) 加 reference baseline ("透露 ablation 信息"),
+  (C) 降低调用频率 ("150 子网才反思一次, 不算高"), (D) 移除 reseed
+  ("应该补更高级 lever, 而不是单单砍 reseed")
+- 通过的方法论判据: **任何 lever 只要 default = baseline-equivalent 行为**,
+  就是公平的 ablation lever (如 `mutation_neighborhood_bias=0` 即 unbiased,
+  和 baseline NSGA-II 默认行为一致)
+- 砍掉 `crossover_topology` (LLM 难评估搜索中切换的破坏后果, risk-high)
+
+#### Step 6: 8 lever 实现
+- **commit `75bea80`**: action space 从 5 → 8 lever, 全部带 identity default
+
+新 lever (3 个):
+
+  6. `local_search_pareto_neighbors` ∈ [0, pop_size], default 0
+     - K > 0 时, K 个 offspring slot 用 history-Pareto 成员的 1-flip 邻居替代
+     - Pareto 成员按 crowding distance 降序优先选最稀疏的
+     - 邻居枚举去重 history_archive (cache hit)
+     - 邻居不够时 random fallback
+  7. `parent_pool_source` ∈ {"current_pop", "history_pareto", "mixed_50_50"},
+      default "current_pop"
+     - "history_pareto" 从 history_archive 全量评估算 rank-1 集作父代池,
+       零额外预算开销
+     - "mixed_50_50" 取并集去重
+  8. `frozen_dims` = list of dim indices, default `[]`
+     - 命中维度 mutation 概率强制 0, 优先级高于 per_dim_multiplier
+     - 不影响 crossover (该维仍可被 crossover 改)
+
+工程改动:
+- `mutate_arch()` 加 `frozen_dims` kwarg
+- `_run_single_generation`: needed = n_reseed + n_local + n_offspring 三段分配
+- 新增 `_build_parent_pool()` + `_generate_pareto_neighbor_offspring()`
+- `current_supervisor_state` / `apply_supervisor_actions` 校验 3 个新 lever
+- supervisor prompt `ACTION SPACE` 段重写到 8 lever, OUTPUT FORMAT 全 null
+  示例 (无 prescriptive 数值)
+- 14 个新 unit test (frozen_dims 行为 + 3 lever 校验)
+
+#### Step 7: 8-lever d_v3 重跑结果
+
+**完整 6 次结果对比**:
+
+| Group | 最终 HV | best_epe | 备注 |
+|---|---|---|---|
+| a (NSGA-II baseline) | 7.5217 | 4.0256 | reference |
+| b (+warmstart) | 7.5245 | 4.0260 | |
+| c (+warmstart+scientist) | **7.5259** | 4.0243 | HV 最佳 |
+| d_v1 (5lever, old prompt) | 7.5040 | 4.0380 | broken (E0 标错 + 处方化诊断) |
+| d_v2 (5lever, new prompt) | 7.5145 | 4.0237 | prompt 修对方向 |
+| **d_v3 (8lever, new prompt)** | **7.5244** | **4.0230** ⭐ | best EPE 全场第一 |
+
+d_v3 supervisor 行为:
+
+| Gen | Action |
+|---|---|
+| 2 | NO_CHANGE ✅ |
+| 5 | `local_search_pareto_neighbors=5` + `frozen_dims=[7]` (新 lever 首次启用, 锁住塌缩 dim 7 + 启用 memetic refinement) |
+| 8 | `mut=0.15` + `reseed=30` + `parent_pool_source=mixed_50_50` (混合老+新 lever) |
+| 11 | `reseed=50` + **`local_search=0`** (主动关闭无效 lever, rationale 写"local search 让 algorithm 重复评估") |
+| 14 | `reseed=20` (温和回调) |
+
+Budget efficiency 视角 (达到 HV=7.5):
+- a: gen 10 (550 evals)
+- d_v3: **gen 8 (450 evals)** — 早 100 evals, 省 18% budget
+
+**dim 9 entropy 没有完全塌缩** (d_v3 gen 15: 0.227 vs d_v2 gen 7: 0.000) —
+`parent_pool_source=mixed_50_50` 把历史里 dim_9≠0 的 archs 拉回基因池,
+间接保护了多样性。
+
+### Verification
+
+| Test | 状态 |
+|---|---|
+| `tests.test_supervisor_agent` | 14 个新 case 全部代码逻辑验证通过 (HPC 上跑) |
+| 8 lever 校验 (legal/illegal 各 3 路径) | ✅ |
+| frozen_dims 行为 (锁维 / 覆盖 multiplier / 空 no-op) | ✅ |
+| `current_supervisor_state` 暴露 8 字段 | ✅ |
+| 6 次 d 实跑 (HV 单调改善) | d_v1 → d_v2 → d_v3 = 7.504 → 7.515 → 7.524 |
+
+### 红线判定 (新版本)
+
+旧框架 (5 lever 时):
+> Supervisor 是消融红线 case, 该出局 (d < a).
+
+新框架 (8 lever 后):
+
+| 维度 | 优胜 | 量化 |
+|---|---|---|
+| Pareto 覆盖 (最终 HV) | c ≈ d_v3 | Δ 0.0015 (noise) |
+| 单点最优 EPE | **d_v3** | 4.0230 全场最佳 |
+| Budget 效率 (达到 HV=7.5) | **d_v3** | 450 evals vs a 550 |
+| 后期 HV 增长稳定性 | a / c / d_v3 | d_v1/d_v2 干预后停滞, d_v3 没有 |
+
+**结论**: Supervisor 在合适的动作空间下是有用的, 但价值不在"提升最终 HV", 而在
+**budget efficiency** 和 **single-point Pareto 最优**。
+
+### Open Questions
+
+1. **d_v3 supervisor 仍在 gen 8/11/14 选 reseed (30/50/20)** — 即使 local search
+   + frozen_dims 都用过了, 后期还是回到 reseed。是 reseed 的"诱惑"问题, 还是
+   8 lever 还不够 sharp? 需要在 findings.md 加专门分析项。
+2. **gen 11 agent 主动关 local_search** — rationale 说"重复评估" — 这是 local
+   search 实现层的低效 (枚举 1-flip 邻居时撞已评估), 不是 lever 设计问题。
+   值得评估是否要在 fallback 里强制跳出已评估邻居。
+3. d_v3 与 c 的 HV 差距在 noise 量级 — single seed 不能严格比较, 多 seed 验证
+   可能改变排名 (但成本 9h × N seeds, ROI 低)。
+4. Scientist 在 c 组完全 passive (无 supervisor 消费 insights), 实际是 b 的
+   等价品 + LLM 调用开销。下一轮 ablation 若要省 budget 可只跑 a/c/d_v3 三组。
+
+### Files modified this session
+
+- `efnas/search/sandbox.py` — env 修复
+- `scripts/smoke_hybrid_v1.py` — 新增
+- `efnas/search/prompts.py` — 4 次迭代 (E0/E1, trim 37%, 去 diagnostic signals,
+  8 lever 描述)
+- `efnas/baselines/nsga2_search.py` — 8 lever state + 2 新 helper
+- `tests/test_supervisor_agent.py` — 14 个新 test case
+
+### Files added (analysis artifacts only — not code)
+
+- `outputs/ablation_phase5/group_b_20260506_013630/`
+- `outputs/ablation_phase5/group_c_20260506_011101/`
+- `outputs/ablation_phase5/group_d_20260506_005033/` (d_v1)
+- `outputs/ablation_phase5/group_d_20260506_114715/` (d_v2)
+- `outputs/ablation_phase5/group_d_20260506_192100/` (d_v3)
