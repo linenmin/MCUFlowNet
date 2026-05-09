@@ -130,3 +130,36 @@ The cleanest ablation implementation is not to keep extending the old 9D `FixedA
 | Jointly training all four variants may exceed A100 memory | Four full models plus optimizer slots can be heavy at FC2 352x480 or FT3D 480x640. | Start with graph/memory smoke test; split jobs if needed. |
 | Sintel proxy during training is expensive | Evaluating four models every few epochs may dominate wall time. | Use configurable cadence or max samples for early smoke, full evaluation for final runs. |
 | A0 direct original wrapper may not share checkpoint/eval contracts | Hard to compare with A1-A3. | Prefer behavior-matched EdgeFlowNAS implementation unless direct original parity is required. |
+
+## 2026-05-09 Skeleton Mismatch vs Supernet V3 (ECA / gate4x placement)
+
+Ablation V1 is intended to ablate the fixed backbone of Supernet V3, so A2/A3 must wire ECA and the 1/4 global gate at the same graph positions as `efnas/network/MultiScaleResNet_supernet_v3.py`. They currently do not.
+
+### Helper functions are identical
+- `_eca_block` and `_global_broadcast_gate` in `efnas/network/ablation_edgeflownet_v1.py` (lines 106-136) and in `efnas/network/MultiScaleResNet_supernet_v3.py` (lines 78-110) are byte-for-byte equivalent (mean -> reshape-1d -> 1xK conv -> sigmoid -> scale; and mean -> 1x1 conv -> sigmoid -> multiply).
+
+### `eca_bottleneck` is at different stages
+- Supernet V3 (`MultiScaleResNet_supernet_v3.py:176-178`): ECA is applied to `net_low` immediately after `DB0`, i.e. at the encoder's deepest 1/16 feature, before any decoder upsampling. `bottleneck_context` is set from this same deep tensor.
+- Ablation V1 (`ablation_edgeflownet_v1.py:148-164`): the encoder ResBlock+Down stack and the decoder ResBlock+Upsample stack both run first. Only after the entire decoder stack does the variant set `net = _eca_block(net)` and `bottleneck_context = net`. The tensor named "bottleneck" in the ablation code is actually `feat_low`, the input of `OutLow` (the 1/4 head), not the encoder bottleneck.
+
+### `global_gate_4x` covers a different output head
+- Supernet V3 (`MultiScaleResNet_supernet_v3.py:185-196`): the gate modulates `net_high` after `Up2`, which is the 1/4-stride feature feeding `H0Out` (the `out_1_4` head). Context is the deep `bottleneck_context` from after `DB0`. Context resolution is far smaller than target resolution, so the broadcast is genuine.
+- Ablation V1 (`ablation_edgeflownet_v1.py:167-180`): `out_1_4 = OutLow(net)` is emitted before any gating; the gate is applied to the `UpMid` output and feeds `out_1_2`, not `out_1_4`. The context (`feat_low`) is at the same resolution as the gated target's predecessor, so the "global" broadcast collapses to a same-or-near-same-resolution gating.
+
+### Consequence
+A2 and A3 in `outputs/ablation_v1_fc2/` were trained against this mis-aligned skeleton:
+- `ablation_v1_fc2_run1_p100_edgeflownet_bilinear_eca`
+- `ablation_v1_fc2_run1_p100_edgeflownet_bilinear_eca_gate4x`
+
+Their results do not isolate the ECA-at-bottleneck and 1/4-broadcast-gate behaviors that Supernet V3 is built around. A1 (`edgeflownet_bilinear`) and A0 (`edgeflownet_deconv`) are unaffected because they set `bottleneck_eca=False` and `gate_4x=False`.
+
+### Required fix
+Re-wire `ABlationEdgeFlowNetV1.build` so the encoder/decoder layout mirrors Supernet V3:
+1. Build a true encoder bottleneck (deepest feature before any decoder upsampling), apply `_eca_block` there, and snapshot `bottleneck_context` from this deep tensor.
+2. Continue the decoder up to the 1/4 stage. Apply `_global_broadcast_gate(context_inputs=bottleneck_context, target_inputs=<1/4 feature>)` before the 1/4 head reads from it.
+3. Emit `out_1_4` after the gate, then continue upsampling to 1/2 and 1/1 heads as before.
+4. Keep `_eca_block` / `_global_broadcast_gate` helper bodies unchanged; only their call sites move.
+
+### Retraining
+- A0 (`edgeflownet_deconv`) and A1 (`edgeflownet_bilinear`): no retraining needed (skeleton change does not affect their graphs).
+- A2 (`edgeflownet_bilinear_eca`) and A3 (`edgeflownet_bilinear_eca_gate4x`): must be retrained from scratch under the corrected skeleton. The existing checkpoints under `outputs/ablation_v1_fc2/...edgeflownet_bilinear_eca[_gate4x]/` are not weight-compatible with the new placement (different parent feature, different channel widths at gate sites) and should be archived rather than fine-tuned.

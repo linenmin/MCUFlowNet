@@ -150,6 +150,10 @@ class ABlationEdgeFlowNetV1(BaseLayers):
                 num_filters = int(num_filters * self.expansion_factor)
                 net = self.conv(inputs=net, filters=num_filters, kernel_size=(3, 3), activation=None, name=f"Down{idx}")
 
+            if self.bottleneck_eca:
+                net = self._eca_block(inputs=net, kernel_size=3, name="eca_bottleneck")
+            bottleneck_context = net
+
             for idx in range(self.num_sub_blocks):
                 if self.upsample_mode == "deconv":
                     net = self._res_block_transpose(inputs=net, filters=num_filters, name=f"DecoderRes{idx}")
@@ -158,9 +162,13 @@ class ABlationEdgeFlowNetV1(BaseLayers):
                 num_filters = int(num_filters / self.expansion_factor)
                 net = self._decoder_block(inputs=net, filters=num_filters, name=f"Up{idx}")
 
-            if self.bottleneck_eca:
-                net = self._eca_block(inputs=net, kernel_size=3, name="eca_bottleneck")
-            bottleneck_context = net
+            if self.gate_4x:
+                net = self._global_broadcast_gate(
+                    context_inputs=bottleneck_context,
+                    target_inputs=net,
+                    target_filters=num_filters,
+                    name="global_gate_4x",
+                )
             feat_low = net
             out_1_4 = self._head_same_scale(inputs=net, filters=self.num_out, kernel_size=(7, 7), name="OutLow")
 
@@ -169,13 +177,6 @@ class ABlationEdgeFlowNetV1(BaseLayers):
             if self.upsample_mode == "bilinear":
                 net = self.bn(inputs=net, name="UpMid_bn")
                 net = self.relu(inputs=net, name="UpMid_relu")
-            if self.gate_4x:
-                net = self._global_broadcast_gate(
-                    context_inputs=bottleneck_context,
-                    target_inputs=net,
-                    target_filters=num_filters,
-                    name="global_gate_4x",
-                )
             feat_mid = net
             out_1_2 = self._head_same_scale(inputs=net, filters=self.num_out, kernel_size=(7, 7), name="OutMid")
 

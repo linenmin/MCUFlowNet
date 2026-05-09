@@ -125,3 +125,18 @@
    - FC2 multi-worker provider
    - staged FC2/FT3D trainer
    - Sintel-best checkpointing
+
+## 2026-05-09
+
+### Skeleton mismatch vs Supernet V3 discovered
+
+- Compared `efnas/network/ablation_edgeflownet_v1.py` against `efnas/network/MultiScaleResNet_supernet_v3.py`.
+- `_eca_block` and `_global_broadcast_gate` helper bodies are identical, but the call sites differ:
+  - V3 puts ECA at the encoder bottleneck (after `DB0`, 1/16 stride) and gates the 1/4 feature feeding `H0Out`.
+  - Ablation V1 puts ECA after the entire decoder stack (so the snapshot named `bottleneck_context` is actually `feat_low`, the 1/4 head input) and gates the 1/2 head input (`UpMid` output) instead of the 1/4 head.
+- Recorded full analysis in `findings.md` under the dated section.
+
+### Decision
+
+- A2 (`edgeflownet_bilinear_eca`) and A3 (`edgeflownet_bilinear_eca_gate4x`) results in `outputs/ablation_v1_fc2/` are not aligned with the V3 backbone they were meant to ablate.
+- Plan: re-wire `ABlationEdgeFlowNetV1.build` to match V3 placement, then retrain A2 and A3 only. A0 (`edgeflownet_deconv`) and A1 (`edgeflownet_bilinear`) stay as-is because they do not use ECA or gate. Existing A2/A3 run directories will be archived (e.g. renamed with `_misaligned` suffix) instead of overwritten.
