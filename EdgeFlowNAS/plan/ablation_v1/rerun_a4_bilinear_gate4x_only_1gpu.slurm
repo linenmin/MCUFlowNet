@@ -26,9 +26,14 @@
 # context, applied to the 1/4 feature feeding OutLow). See
 # plan/ablation_v1/findings.md (2026-05-09 section).
 #
-# Shares experiment_name with the A2/A3 skeleton-aligned rerun so all
-# corrected runs land under the same parent prefix in
-# outputs/ablation_v1_fc2/.
+# Uses its OWN experiment_name (suffix _a4) so it does NOT share train.log /
+# trainer_state.json / comparison.csv / run_manifest.json with the A2/A3
+# rerun job (which uses ablation_v1_fc2_run2_p100_skeleton_aligned). Per-
+# variant model_* checkpoint subdirs would not collide either way, but the
+# experiment-level bookkeeping files would be overwritten by concurrent
+# processes. Output lands in:
+#   outputs/ablation_v1_fc2/ablation_v1_fc2_run2_p100_skeleton_aligned_a4/
+#     model_edgeflownet_bilinear_gate4x/
 
 cd $VSC_DATA/test/MCUFlowNet/EdgeFlowNAS/
 
@@ -41,7 +46,7 @@ export OPENBLAS_NUM_THREADS=1
 
 python wrappers/run_ablation_v1_fc2.py \
   --config configs/ablation_v1_fc2.yaml \
-  --experiment_name ablation_v1_fc2_run2_p100_skeleton_aligned \
+  --experiment_name ablation_v1_fc2_run2_p100_skeleton_aligned_a4 \
   --variants edgeflownet_bilinear_gate4x \
   --gpu_device 0 \
   --num_epochs 400 \
