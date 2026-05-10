@@ -16,6 +16,10 @@ variants:
     upsample_mode: "bilinear"
     bottleneck_eca: true
     gate_4x: false
+  - name: "edgeflownet_bilinear_gate4x"
+    upsample_mode: "bilinear"
+    bottleneck_eca: false
+    gate_4x: true
   - name: "edgeflownet_bilinear_eca_gate4x"
     upsample_mode: "bilinear"
     bottleneck_eca: true

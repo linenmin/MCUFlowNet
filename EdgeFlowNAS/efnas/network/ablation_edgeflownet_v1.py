@@ -11,6 +11,7 @@ DEFAULT_ABLATION_VARIANTS: List[Dict[str, object]] = [
     {"name": "edgeflownet_deconv", "upsample_mode": "deconv", "bottleneck_eca": False, "gate_4x": False},
     {"name": "edgeflownet_bilinear", "upsample_mode": "bilinear", "bottleneck_eca": False, "gate_4x": False},
     {"name": "edgeflownet_bilinear_eca", "upsample_mode": "bilinear", "bottleneck_eca": True, "gate_4x": False},
+    {"name": "edgeflownet_bilinear_gate4x", "upsample_mode": "bilinear", "bottleneck_eca": False, "gate_4x": True},
     {"name": "edgeflownet_bilinear_eca_gate4x", "upsample_mode": "bilinear", "bottleneck_eca": True, "gate_4x": True},
 ]
 
