@@ -137,3 +137,27 @@
 4. `eval_epe_history.csv`
 5. `train_manifest.json`（记录 seed、配置、commit、输入分辨率）
 6. `supernet_training_report.md`
+
+## 10. 口径变更说明（归档保留）
+
+1. 旧版文档曾将验证来源写为 `FC2_test` 或 `code/dataset_paths/FC2_test.txt`，该口径已在后续修订中废弃。
+2. 当前保留口径是 `val_dir` 的 folders-only 扫描结果，原因见 `08_Supernet_Retrospective.md`。
+3. 旧版文档曾使用另一套 head kernel 编码顺序（`0=7x7,1=5x5,2=3x3`）；当前文档以现行实现为准：`0=3x3,1=5x5,2=7x7`。
+4. 若回看 2026-02 的旧日志或草稿，必须先确认其编码/验证集口径，再与当前结果对比。
+
+## 11. 单模型训练命令兼容（归档保留）
+
+首轮为了保持 wrapper 风格一致，曾参考以下单模型训练命令：
+
+```bash
+python wrappers/run_train.py --gpu_device 0 --num_epochs 400 --batch_size 32 --lr 1e-4 --network_module sramTest.network.MultiScaleResNet_bilinear --load_checkpoint --resume_experiment_name multiscaleresnet_bilinear_fc2_20260212_150419_fast --experiment_name multiscaleresnet_bilinear_fc2_20260212_150419_fast --fast_mode
+```
+
+说明：
+1. 该命令仅作为“参数风格兼容设计”的历史参考。
+2. 当前 supernet 训练链路中，`fast_mode` 已从主流程移除；请以现行 wrapper 帮助信息为准。
+
+## 12. 后续可选优化（非阻塞，归档保留）
+1. 以 train-holdout 或更大覆盖 eval 替换当前小规模固定 eval，对比排序一致性。
+2. 增加 Kendall tau 或等价排名稳定性 spot-check，验证超网排序保真度。
+3. 追加第二随机种子重复实验，评估排名稳定性。

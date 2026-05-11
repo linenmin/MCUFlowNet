@@ -227,6 +227,59 @@
 3. 训练 `random crop`、评估 `center crop` 的口径差异，会放大“train loss 改善但 eval 指标不动”的观感。
 4. 日志没有把 per-arch 历史曲线结构化落盘（目前主要在 `arch_rank_12` 字符串），后续定位慢子网瓶颈成本高。
 
+### P2（可选增强，归档保留）
+1. 每 step 的 3 子网当前共用同一 batch，可考虑轻量改造为“子网间错位 micro-slice”，进一步提高样本多样性利用率。
+2. 在保持高频小 eval 的同时，增加低频大 eval（例如每 5~10 epoch 用更大 `eval_batches_per_arch`）做纠偏。
+
+---
+
+## 5. 改进选项（归档保留）
+
+### 选项 A：全遍历 epoch（无放回 + 每 epoch shuffle）
+做法：
+1. 增加 `train_sampling_mode=shuffle_no_replacement`。
+2. 每 epoch 遍历全 train（`steps_per_epoch=ceil(N/batch)`）。
+
+优点：
+1. epoch 语义清晰。
+2. 数据利用充分，统计更稳定。
+
+缺点：
+1. 超网耗时显著增加。
+2. 同等总训练时长下可跑 epoch 数变少。
+
+### 选项 B：保持 fixed steps，但提高步数（例如 50 -> 150/200）
+优点：
+1. 实现改动最小。
+2. 显著提升每 epoch 覆盖率。
+
+缺点：
+1. 仍是有放回随机，重复样本仍多。
+2. epoch 仍不等于全遍历。
+
+### 选项 C：混合模式（当时推荐）
+做法：
+1. 增加 `epoch_mode`：`fixed_steps` / `full_pass` / `by_samples`。
+2. 增加 `train_samples_per_epoch`（例如 `0.3N / 0.5N / 1.0N`）。
+3. 采样策略支持 `random_with_replacement` 与 `shuffle_no_replacement`。
+
+优点：
+1. 兼顾算力预算与数据利用率。
+2. 可平滑迁移，不需要一次性切到最重配置。
+
+缺点：
+1. 实现稍复杂。
+2. 需要配套日志与默认值设计。
+
+### 选项 D：维持现状
+优点：
+1. 风险最小。
+2. 与历史结果完全同口径。
+
+缺点：
+1. 每 epoch 覆盖率低的问题持续存在。
+2. 调参与训练信号质量受限。
+
 ## 6. 推荐执行路线（建议按阶段）
 
 ### 阶段 1（已完成：工程一致性）

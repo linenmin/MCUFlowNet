@@ -46,3 +46,41 @@
 1. 同一 checkpoint 的重复 eval 方差显著下降。
 2. 训练日志的 `loss/grad_norm` 可稳定反映 epoch 趋势。
 3. 不影响当前 `run1_folder` 的断点恢复与继续训练。
+
+---
+
+## 4. 归档执行细节（保留 2026-02 长版说明）
+
+### 4.1 当时确认过的范围映射
+1. 旧口径问题在 `run1_folder` 恢复训练后不再作为第一优先级。
+2. eval 需要尽量固定到确定 batch，优先考虑 `/val` 顺序取前若干 batch。
+3. CPU 并发评估不再考虑。
+4. `loss/grad_norm` 改为 epoch 均值。
+5. `bn_recal_batches` 机制保持不变。
+6. 需要基于子网池 `per_arch_epe` 计算 Kendall tau 或等价排名稳定性指标。
+7. eval 改用固定 center crop。
+
+### 4.2 当时拟定的执行顺序
+1. 先做固定 eval batch。
+2. 再做 eval center crop。
+3. 再做 epoch 平均训练日志。
+4. 再补排名稳定性指标。
+5. 保持 `bn_recal_batches` 机制不变，先观察收益。
+
+### 4.3 关于 micro-batch 的旧纠偏结论
+1. `micro_batch_size` 不是纯显存参数，也会影响训练动力学。
+2. 旧实现下 BN 统计依赖 micro-batch 前向过程，微批大小变化会改变统计量。
+3. 当时的梯度裁剪若在 micro-step 粒度执行，也不等价于“大 batch 一次求梯度再裁剪”。
+4. 因而要做可比实验，`batch_size` 与 `micro_batch_size` 都需要固定。
+
+### 4.4 深度选项的包含关系（归档结论）
+1. `Deep1/Deep2/Deep3` 在实现上是递进包含关系，不是互相独立的三套完全分离分支。
+2. 旧代码解释为：
+- `out1 = deep1(inputs)`
+- `out2 = deep2(out1)`
+- `out3 = deep3(out2)`
+- 最终按索引在 `[out1, out2, out3]` 中选择
+3. 这意味着：
+- 选项 `1` 包含选项 `0` 的计算路径
+- 选项 `2` 包含选项 `1` 和 `0` 的计算路径
+4. 当时结论是不建议在恢复训练链路中改掉这一结构，因为那会破坏 checkpoint 的直接兼容性。
