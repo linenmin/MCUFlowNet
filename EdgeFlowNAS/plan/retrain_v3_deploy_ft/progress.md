@@ -6,24 +6,35 @@ Append entries with the most recent at the top. Don't rewrite history.
 
 ## Next Action
 
-**Close out Phase 1 (Plan & Design) by answering Key Questions §1–3 (mainline metadata).**
+**Phase 1 closed; proceed to Phase 2 (Code Implementation) after user reviews the plan.**
 
-Concretely:
-1. Open `D:\Dataset\MCUFlowNet\EdgeFlowNet\code\train_sintel.py` (or whatever the training entry is) and read:
-   - default `--patch_dim_0`, `--patch_dim_1`, `--patch_channels`
-   - whether `flow_divisor` (or any `/ N` operation on GT) appears in the data loader
-   - what dataset (Sintel-only, FT3D-only, mixed) is iterated
-   - augmentation settings
-2. Open `EdgeFlowNet/wrappers/run_train.py` to see how the production training was launched.
-3. Record findings in `findings.md §6` (replace the "Verification still needed" subsection).
-4. Re-decide §12 risk on mainline FT data: if mainline was trained on Sintel, propose alternative FT data (e.g., Sintel train Clean + 80/20 hold-out, or FT3D + small Sintel mix).
-5. Once Key Q §1–3 are answered AND the in-training val policy (Key Q §4 → tentative Option A) is locked, mark Phase 1 complete in `task_plan.md` and move to Phase 2 (code implementation).
+User instruction was "开始写 fine-tune 计划". The plan is now complete (Phase 1 done). Awaiting confirmation before starting code work.
 
-Estimated time: 30–60 min for the metadata investigation, then proceed to Phase 2.
+Phase 2 starting tasks (drop into EdgeFlowNAS source after user approval):
+1. `efnas/network/edgeflownet_mainline.py` — wrap EdgeFlowNet `MultiScaleResNet` (transpose-conv decoder, UncType="LinearSoftplus"). Verify the wrapper restores `EdgeFlowNet/checkpoints/best.ckpt` cleanly (variable scopes must match).
+2. `efnas/engine/deploy_ft_trainer.py` — arch_family-aware fine-tune trainer; reuse FT3D dataloader, sintel-eval runtime, ckpt manager.
+3. `configs/retrain_v3_deploy_ft.yaml` — input 157×203, epochs 5-10, LR 1e-6 → 1e-7 cosine, aug knobs per findings §9.
+4. `wrappers/run_deploy_ft_batch.py` — multi-candidate dispatcher (mirror `run_retrain_v3_batch.py`).
+5. `plan/retrain_v3_deploy_ft/retrain_v3_deploy_ft_candidates.csv` — 4 rows.
+6. `plan/retrain_v3_deploy_ft/retrain_v3_deploy_ft_4gpu.slurm` — copy + modify from `plan/retrain_v3/retrain_v3_ft3d_3gpu.slurm`.
+7. Smoke test locally with `--limit-batches 2 --num-epochs 1` before HPC submission.
 
 ---
 
-## 2026-05-11 — Day 0: Plan Created
+## 2026-05-11 — Day 0: Plan Created + Phase 1 closed
+
+**Phase 1 close-out (mainline metadata investigation):**
+- Read `EdgeFlowNet/code/train.py`, `wrappers/run_train.py`, `misc/DataHandling.py`, `misc/utils.py`.
+- Answered Key Q §1-§3:
+  - mainline trained on **FT3D** (same as v3)
+  - mainline patch size **480×640** (hardcoded in `SetupAll`, same as v3)
+  - mainline `flow_divisor = 1.0` (no GT division in `get_sintel_batch`; only clip ±50)
+- **Big finding**: v3 and mainline have IDENTICAL training data + input size; the Δ_downsample gap (v3 +2.86~+5.02 vs mainline +1.40) is **architectural**, not data. v3's bilinear-ResizeConv + ECA-bottleneck + global-broadcast-gate stack is more sensitive to spatial-scale than mainline's transpose-conv decoder.
+- Implication: mainline + v3 can share the same FT3D data pipeline at 157×203. No domain shift.
+- §12 risk "Domain shift for mainline FT" marked RESOLVED in findings.md.
+- task_plan Phase 1 marked complete; Current Phase advanced to Phase 2.
+
+
 
 **Done:**
 - Created `D:\Dataset\MCUFlowNet\EdgeFlowNAS\plan\retrain_v3_deploy_ft\` and the three pi-planning files (task_plan / findings / progress).

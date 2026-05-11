@@ -8,18 +8,18 @@ End state = updated `sintel_best.ckpt`-family checkpoints under a new `retrain_v
 
 ## Current Phase
 
-Phase 1
+Phase 2 (Code Implementation) — Phase 1 closed
 
 ## Phases
 
-### Phase 1: Plan & Design — **in_progress**
+### Phase 1: Plan & Design — **complete**
 
-- [ ] Confirm hard facts about mainline checkpoint (training data, input size, flow_divisor) — see Key Questions §1-3
-- [ ] Decide Sintel-leakage policy for in-training val (Key Q §4)
-- [ ] Lock final hyperparameter set: epochs, LR schedule, batch size, aug scaling, early-stop criterion
-- [ ] Lock code structure: where new trainer / network module / config / wrapper / slurm live
-- [ ] Output: this file + findings.md + progress.md fully filled
-- **Status:** in_progress
+- [x] Confirm hard facts about mainline checkpoint (training data, input size, flow_divisor) — Key Q §1-3 all answered: FT3D / 480×640 / no divisor (findings §6)
+- [x] Decide Sintel-leakage policy for in-training val (Key Q §4 → Option A: FT3D TEST split for val, Sintel Final eval offline-only)
+- [x] Lock final hyperparameter set (findings §9)
+- [x] Lock code structure (findings §11)
+- [x] Output: this file + findings.md + progress.md fully filled
+- **Status:** complete
 
 ### Phase 2: Code Implementation
 
@@ -65,9 +65,9 @@ Phase 1
 
 ## Key Questions
 
-1. Did EdgeFlowNet mainline training apply a flow_divisor like the v3 path does? (Need to read `EdgeFlowNet/code/train_sintel.py` or similar.) Default assumption: NO; the user's 6.31 baseline matches `test_sintel.py --uncertainity` without `pred *= 12.5`. Confirm before writing the mainline branch.
-2. What dataset was mainline trained on (Sintel-only? FT3D-only? mixed?) — determines whether FT3D fine-tune is the right move for it. If mainline was Sintel-only, fine-tuning on FT3D is a domain shift; may need to fine-tune on a non-overlapping Sintel-clean subset or mixed FT3D + Sintel-clean.
-3. What input size was mainline originally trained at? `test_sintel.py` defaults to 416×1024 patch; assumed training was the same. Confirm.
+1. ~~Did EdgeFlowNet mainline training apply a flow_divisor?~~ **NO** — confirmed by reading `EdgeFlowNet/code/misc/utils.py` (only `np.clip(gt, -50, 50)`, no division). Mainline FT uses `flow_divisor=1.0`.
+2. ~~What dataset was mainline trained on?~~ **FT3D** at hardcoded patch **480×640** (per `DataHandling.SetupAll`). Same as v3. No domain shift.
+3. ~~What input size was mainline trained at?~~ **480×640** for FT3D path (hardcoded in `SetupAll`).
 4. **Sintel leakage policy**: We evaluate on Sintel **train Final** 1041 frames. For in-training val we want a labeled set the model has never seen flow GT for.
    - Option A: Use a held-out subset of FT3D val (`TEST` split per `ft3d_dataset.py`). No leakage but val and eval distributions differ.
    - Option B: Use Sintel **train Clean** for val. Different visual pass but same scene geometry → mild leakage; commonly accepted in literature.

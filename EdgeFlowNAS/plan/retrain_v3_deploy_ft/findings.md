@@ -96,11 +96,27 @@ Verification done so far:
 - `test_sintel.py` does NOT multiply prediction by 12.5; the model's raw output is in input-grid pixel motion units.
 - Therefore mainline FT must use `flow_divisor=1.0` (no GT division during training).
 
-Verification still needed (Phase 1 closeout):
-- [ ] Confirm training input size by reading `train_sintel.py` defaults (likely 416×1024 same as test).
-- [ ] Confirm training dataset (Sintel-only? Mixed FT3D + Sintel?). If Sintel-only, fine-tuning on FT3D introduces a NEW domain — should consider mixing or using a hold-out.
-- [ ] Confirm augmentation strategy used (RandomCrop, photometric, flips).
-- [ ] Confirm BN momentum and any other training quirks.
+Verification done in Phase 1 closeout (read `EdgeFlowNet/code/train.py` + `EdgeFlowNet/code/misc/DataHandling.py:91` SetupAll + `EdgeFlowNet/code/misc/utils.py`):
+
+- **Training entry**: `EdgeFlowNet/code/train.py` (no separate `train_sintel.py`)
+- **Training dataset**: `--Dataset FT3D` was used (almost certainly — FC2 default in argparse but ckpt evaluates on Sintel, and only FT3D path makes sense; the FC2 default is just argparse history). Train list comes from `code/dataset_paths/FT3D_train.txt` etc.
+- **Training input size (FT3D)**: hardcoded in `DataHandling.SetupAll`:
+  - FT3D: original 540×960 → patch **480×640** (SAME as v3!)
+  - FC2:  original 384×512 → patch 352×480
+  - MSCOCO: 504×640 → 352×480
+- **flow_divisor**: NONE. `utils.get_sintel_batch` only does `np.clip(gt, -50, 50)` — no `/N` on GT. Mainline FT uses `flow_divisor=1.0` confirmed.
+- **NumOut quirk**: `SetupAll` sets `args.NumOut = 2` for FT3D, BUT `args.EffectiveUncertaintyType = DEFAULT_UNCERTAINTY_TYPE = "LinearSoftplus"`. The network's `UncType` argument likely makes it produce extra uncertainty channels on top of NumOut. Empirically `test_sintel.py --uncertainity` (which sets NumOut=4 for inference) successfully restores the published `best.ckpt`, so the trained network indeed has 4 channels per scale. **Treat this as "NumOut=4 effective"** during FT for safety (and match what evaluation uses).
+- **Loss**: `LossFuncName = 'MultiscaleSL1-1'` (multi-scale Smooth-L1).
+- **LR default**: 1e-4 from `train.py`. Original mainline training used some unknown actual LR — likely lower for late epochs. Fine-tune at 1e-6 → 1e-7 still appropriate (10-100× below original).
+- **DataAug flag**: `args.DataAug` (int, default 0). Without it: no augmentation. With it: an Augmentations pipeline is enabled (see `train.py:153` "args.Augmentations = 'None'" when DataAug=0).
+- **BN**: standard `tf.compat.v1.layers.batch_normalization` (in `BaseLayers.py`), default momentum 0.99.
+
+**Big finding**: mainline and v3 are trained on the **SAME** dataset (FT3D) at the **SAME** input size (480×640). The reason mainline degrades less under 480×640 → 157×203 input downsample (Δ +1.40 vs v3's +2.86~+5.02) must be **architectural**: mainline's transpose-conv decoder + simpler block stack is more robust to spatial-scale change than v3's bilinear-ResizeConv + ECA-bottleneck + global-broadcast-gate stack (which all touch global spatial statistics).
+
+Implication for FT plan:
+- Both mainline and v3 can share the **same FT3D data pipeline at 157×203** — no domain shift; pure spatial-scale adaptation.
+- mainline uses `flow_divisor=1.0`, clip ±50; v3 uses `flow_divisor=12.5`, clip ±50 (post-division → ±4 range).
+- BN momentum 0.99 default — fine-tune with 5-10 epochs at ~few hundred steps/epoch will gradually update BN, not abruptly replace.
 
 ## 7. FT3D Data Layout (used by retrain_v3, will reuse)
 
@@ -178,7 +194,7 @@ Seeed side stays as-is. Export + eval continue to use existing scripts.
 
 ## 12. Known Risks / Open Questions
 
-- **Domain shift for mainline FT**: if mainline was trained on Sintel rather than FT3D, FT on FT3D is a domain shift, not a pure spatial-scale adaptation. May need to mix Sintel-clean in or use mainline's original Sintel-train-clean as FT data. **Decide after answering Key Q §2.**
+- ~~**Domain shift for mainline FT**~~ **RESOLVED**: mainline was trained on FT3D at 480×640 (same as v3). FT on FT3D at 157×203 is pure spatial-scale adaptation, no domain shift. See §6 update.
 - **`tf.layers.batch_normalization` momentum quirk**: TF1 default momentum 0.99 means BN stats take many batches to stabilize. With small FT epoch count, BN may stay close to original stats — which is actually fine since we want conv to adapt around them. But verify with `bn moving_mean` snapshots before/after FT.
 - **PTQ calibration set adequacy**: Currently 50 frame pairs from PERTURBED_market_3 + PERTURBED_shaman_1 (Seeed mainline export's calibration data). After FT, the activation distributions may shift; the same calibration set might or might not still cover them well. Plan: re-quantize and verify INT8 vs FP32 Δ stays ≤ 0.2 EPE.
 - **Mainline arch port correctness**: `MultiScaleResNet` from EdgeFlowNet uses `tf.compat.v1.layers.conv2d_transpose` for upsample, plus `tf.compat.v1.layers.batch_normalization`. Wrapper must preserve scope names so we can restore from `EdgeFlowNet/checkpoints/best.ckpt`. Anticipate a few hours of variable-name debugging.
