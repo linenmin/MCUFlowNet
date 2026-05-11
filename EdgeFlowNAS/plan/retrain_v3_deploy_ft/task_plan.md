@@ -8,7 +8,7 @@ End state = updated `sintel_best.ckpt`-family checkpoints under a new `retrain_v
 
 ## Current Phase
 
-Phase 2 (Code Implementation) — Phase 1 closed
+Phase 3 (V3 fine-tune on HPC) — Phase 2 closed, awaiting `sbatch` from user
 
 ## Phases
 
@@ -21,21 +21,20 @@ Phase 2 (Code Implementation) — Phase 1 closed
 - [x] Output: this file + findings.md + progress.md fully filled
 - **Status:** complete
 
-### Phase 2: Code Implementation
+### Phase 2: Code Implementation — **complete**
 
-- [ ] `efnas/network/edgeflownet_mainline.py`: wrap EdgeFlowNet `MultiScaleResNet` (transpose-conv decoder) behind the same `build()` interface used by `FixedArchModelV3`
-- [ ] `efnas/engine/deploy_ft_trainer.py`: deploy-res fine-tune trainer with `arch_family ∈ {fixed_v3, edgeflownet_mainline}` switch
-  - reuses `efnas.data.dataloader_builder.build_ft3d_provider` for data
-  - reuses `efnas.engine.checkpoint_manager` for ckpt I/O
-  - reuses `efnas.engine.distill_or_not_sintel_runtime.evaluate_v3_checkpoint_dir_on_sintel` for in-training Sintel-Final eval (with `arch_family` dispatch)
-  - explicit support for `init_ckpt_path` override (load from arbitrary external ckpt prefix)
-  - explicit support for per-family `flow_divisor` (12.5 for v3, 1.0 for mainline)
-- [ ] `configs/retrain_v3_deploy_ft.yaml`: config template (input 157×203, FT3D data, low LR, fine-tune epoch budget, aug scaled down)
-- [ ] `wrappers/run_deploy_ft_batch.py`: dispatch one trainer process per candidate per GPU (mirror of `run_retrain_v3_batch.py`)
-- [ ] `plan/retrain_v3_deploy_ft/retrain_v3_deploy_ft_candidates.csv`: 4 rows (v3_acc, v3_efn_fps, v3_light, mainline) with `arch_family`, `init_ckpt_path`, `flow_divisor`
-- [ ] `plan/retrain_v3_deploy_ft/retrain_v3_deploy_ft_4gpu.slurm`: slurm script for HPC submission
-- [ ] Smoke test on local CPU / single GPU with `--limit-batches 2 --num-epochs 1` to validate end-to-end before HPC submit
-- **Status:** pending
+- [x] `efnas/network/edgeflownet_mainline.py`: self-contained port of `MultiScaleResNet` + BaseLayers + Decorators. Local smoke restored EdgeFlowNet/best.ckpt cleanly (86 fwd vars).
+- [x] `efnas/engine/deploy_ft_trainer.py`: arch_family-aware fine-tune trainer. Reuses `_build_graph` (v3) and adds `_build_mainline_graph`. Constant-LR + early-stopping support.
+- [x] `efnas/engine/deploy_ft_sintel_runtime.py`: family-aware Sintel eval dispatcher (v3 → existing helper, mainline → new `evaluate_mainline_checkpoint_on_sintel`).
+- [x] `configs/retrain_v3_deploy_ft.yaml`: input 157×203, FT3D data, LR 1e-6 constant, 20 epoch / 5 patience, spatial aug scaled down (see findings §9).
+- [x] `wrappers/run_deploy_ft_one.py`: single-candidate runner with arch_family + init_mode flags.
+- [x] `wrappers/run_deploy_ft_batch.py`: 4-GPU dispatcher reading the candidates CSV.
+- [x] `plan/retrain_v3_deploy_ft/retrain_v3_deploy_ft_candidates.csv`: 4 rows (v3_acc / v3_efn_fps / v3_light / mainline), with per-row `arch_family` / `init_mode` / `init_ckpt_*` / `flow_divisor`.
+- [x] `plan/retrain_v3_deploy_ft/retrain_v3_deploy_ft_4gpu.slurm`: HPC slurm (4× p100, 36 cores, 180G, 24h cap, 1 candidate per GPU parallel).
+- [x] Smoke: dry-run of batch launcher prints correct child commands for all 4 candidates.
+- [x] Smoke: both v3 and mainline graphs build + restore from their respective ckpts on local CPU.
+- [x] Smoke: 1-step training on synthetic data passes for both families (loss / grad accum / train_op / EPE all run without error).
+- **Status:** complete
 
 ### Phase 3: V3 Subnets Fine-Tune (HPC)
 
@@ -83,8 +82,10 @@ Phase 2 (Code Implementation) — Phase 1 closed
 | Fine-tune input = 157×203 | Match deploy res exactly. Decided not to try 172×224 (can't compare to mainline fairly). |
 | Include mainline in same fine-tune sweep | Mainline original ckpt was trained at 416×1024; comparing FT-v3 vs unFT-mainline would be unfair. |
 | One unified trainer file (`deploy_ft_trainer.py`) with `arch_family` switch | Avoid polluting `retrain_v3_trainer.py`; keep mainline + v3 paths converged. |
-| LR start 1e-6, cosine to 1e-7 | Original retrain_v3 used 1e-5; fine-tune typically uses 1/10 that. |
-| 5-10 epochs | Original 50 epochs from scratch; fine-tune mostly needs BN-stat re-adjustment + late-layer tweaks. |
+| LR constant 1e-6 (no cosine) | User decision; simple + matches retrain_v3's tail-end LR. |
+| 20 epochs max, 5-epoch early-stop on FT3D val EPE | User decision; HPC time-budget is comfortable. |
+| Final ckpt selection = FT3D val `best.ckpt` | User decision. `sintel_best.ckpt` is also saved for reference but NOT used for ckpt selection (avoid Sintel-eval-pressure on selection). |
+| Sintel Final eval every 2 epochs during training | User decision; quick on P100, mainly diagnostic. |
 | Spatial aug scaled down | At 157×203 a `min_scale=-0.4 max_scale=0.8` crop produces ~94×122 to ~283×366 effective — too aggressive; drop `spatial_aug_prob` to 0.3, `max_stretch` to 0.05, disable eraser. |
 | Photometric aug kept full strength | Doesn't depend on spatial size. |
 | In-training val = FT3D TEST split (Option A in §4) | Avoid any Sintel leakage; final Sintel Final eval is offline-only. |

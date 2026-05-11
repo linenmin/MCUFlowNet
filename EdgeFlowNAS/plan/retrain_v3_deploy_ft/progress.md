@@ -6,7 +6,31 @@ Append entries with the most recent at the top. Don't rewrite history.
 
 ## Next Action
 
-**Phase 1 closed; proceed to Phase 2 (Code Implementation) after user reviews the plan.**
+**Phase 2 done; submit on HPC.**
+
+Steps for HPC (user does this):
+1. `git pull` in `$VSC_DATA/test/MCUFlowNet/EdgeFlowNAS/` to sync new files.
+2. Verify FT3D paths exist: `ls ../Datasets/FlyingThings3D/frames_cleanpass/TRAIN/`.
+3. Verify Sintel paths exist (for in-training Sintel eval): `ls ../Datasets/Sintel/training/final/`.
+4. Verify EdgeFlowNet ckpt is at `../EdgeFlowNet/checkpoints/best.ckpt` relative to EdgeFlowNAS root.
+5. Submit:
+   ```
+   sbatch plan/retrain_v3_deploy_ft/retrain_v3_deploy_ft_4gpu.slurm
+   ```
+6. Monitor:
+   ```
+   squeue -u $USER
+   tail -f outputs/retrain_v3_deploy_ft/retrain_v3_deploy_ft_run1/launcher_logs/v3_efn_fps.log
+   tail -f outputs/retrain_v3_deploy_ft/retrain_v3_deploy_ft_run1/launcher_logs/mainline.log
+   ```
+7. Expected timeline (rough): ~30 min/epoch × ~10 epochs (early stop) ≈ 5 hours per candidate; all 4 run in parallel so wall clock ~5h total.
+
+After training completes (Phase 3 / Phase 4 done), Phase 5 kicks in:
+- Sync fine-tuned ckpts to local
+- Re-export INT8 via Seeed `tools/model_export/edgeflownas_v3/run_export.py` (need a small flag for ckpt-path override per candidate)
+- For mainline FT, add a parallel export entry in Seeed tools
+- Sintel Final eval at 157×203 + 416×1024 to fill findings.md §10 deliverable table
+- Pick the winner and flash to board
 
 User instruction was "开始写 fine-tune 计划". The plan is now complete (Phase 1 done). Awaiting confirmation before starting code work.
 
@@ -21,7 +45,27 @@ Phase 2 starting tasks (drop into EdgeFlowNAS source after user approval):
 
 ---
 
-## 2026-05-11 — Day 0: Plan Created + Phase 1 closed
+## 2026-05-11 — Day 0: Plan Created + Phase 1 closed + Phase 2 complete
+
+**Phase 2 (code implementation) done in one session.** Smoke tests pass for both arch families.
+
+New files (all committed):
+- `efnas/network/edgeflownet_mainline.py` — self-contained port of MultiScaleResNet + BaseLayers + Decorators (no cross-repo sys.path tricks). Verified `EdgeFlowNet/checkpoints/best.ckpt` restores cleanly (86 fwd vars).
+- `efnas/engine/deploy_ft_trainer.py` — arch_family-aware FT trainer with constant LR + early stopping. Reuses `_build_graph` (v3) + adds `_build_mainline_graph` (mainline, no outer scope, BN inference mode).
+- `efnas/engine/deploy_ft_sintel_runtime.py` — Sintel eval dispatcher; mainline uses no flow_scale (matches training).
+- `configs/retrain_v3_deploy_ft.yaml` — input 157×203, FT3D, LR 1e-6 constant, 20 ep / 5 patience.
+- `wrappers/run_deploy_ft_one.py`, `wrappers/run_deploy_ft_batch.py` — runner + 4-GPU dispatcher.
+- `plan/retrain_v3_deploy_ft/retrain_v3_deploy_ft_candidates.csv` — 4 rows (v3_acc / v3_efn_fps / v3_light / mainline).
+- `plan/retrain_v3_deploy_ft/retrain_v3_deploy_ft_4gpu.slurm` — 4× p100 / 36 cores / 180G / 24h.
+
+Smoke results:
+- Dry-run: 4-candidate commands generated correctly.
+- Build+restore: v3_efn_fps (136 fwd vars from sintel_best.ckpt) ✓, mainline (86 fwd vars from EdgeFlowNet/best.ckpt) ✓.
+- 1-step training on synthetic data: both families forward + loss + grad accum + train_op + EPE ✓.
+
+---
+
+## 2026-05-11 — Day 0 earlier: Plan Created + Phase 1 closed
 
 **Phase 1 close-out (mainline metadata investigation):**
 - Read `EdgeFlowNet/code/train.py`, `wrappers/run_train.py`, `misc/DataHandling.py`, `misc/utils.py`.

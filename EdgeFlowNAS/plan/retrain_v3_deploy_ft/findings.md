@@ -140,10 +140,10 @@ On HPC the base path is `../Datasets/FlyingThings3D/...`. On local it should res
 
 ## 9. Hyperparameter Plan (fine-tune-specific deltas vs retrain_v3 baseline)
 
-| Knob | retrain_v3 (from scratch) | fine-tune (proposed) | rationale |
+| Knob | retrain_v3 (from scratch) | fine-tune (LOCKED) | rationale |
 |---|---|---|---|
-| epochs | 50 | 5–10 | only need spatial-scale adaptation; not new representation learning |
-| LR | 1e-5 → 1e-6 cosine | **1e-6 → 1e-7 cosine** | 10× lower; standard FT discipline |
+| epochs | 50 | **20 max, early stop after 5 epochs no improvement on FT3D val** | HPC time comfortable; let early stop decide |
+| LR | 1e-5 → 1e-6 cosine | **constant 1e-6** | match retrain_v3's tail-end LR; no schedule needed at this scale |
 | input_height | 480 | **157** | deploy res |
 | input_width  | 640 | **203** | deploy res |
 | batch_size | 32 | 32 (likely fine; small input) | unchanged |
@@ -157,7 +157,9 @@ On HPC the base path is `../Datasets/FlyingThings3D/...`. On local it should res
 | optimizer | adam | adam | unchanged |
 | weight_decay | 0.0 | 0.0 | unchanged |
 | grad_clip_global_norm | 200.0 | 50.0 (proposed lower) | FT loss should be small; tighten clip to prevent rare large updates |
-| early_stop_patience | 0 (off) | 3 epochs on FT3D val EPE | catch overfit / divergence |
+| early_stop_patience | 0 (off) | **5 epochs on FT3D val EPE** | user decision |
+| Sintel eval cadence | every 2 epochs | **every 2 epochs (kept)** | quick on P100, diagnostic only — does NOT drive ckpt selection |
+| ckpt selection metric | FT3D val EPE | **FT3D val EPE** | unchanged; `sintel_best.ckpt` saved for reference but final deploy uses `best.ckpt` |
 
 These are starting points; expect tuning if first run misbehaves.
 

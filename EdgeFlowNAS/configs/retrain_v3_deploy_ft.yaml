@@ -1,0 +1,102 @@
+# Deploy-resolution fine-tune for retrain_v3 subnets + EdgeFlowNet mainline.
+# Cross-ref: plan/retrain_v3_deploy_ft/{task_plan,findings}.md
+runtime:
+  experiment_name: "retrain_v3_deploy_ft_run1"
+  output_root: "outputs/retrain_v3_deploy_ft"
+  seed: 42
+
+# arch_family is set per-candidate by the batch wrapper (csv "arch_family").
+# Defaults below are the v3 settings; mainline overrides go via candidate config.
+
+train:
+  gpu_device: 0
+  num_epochs: 20
+  batch_size: 32
+  micro_batch_size: 32
+  lr: 1.0e-6                       # constant — see lr_schedule
+  lr_min: 1.0e-6
+  lr_schedule: "constant"
+  weight_decay: 0.0
+  grad_clip_global_norm: 50.0
+  train_sampling_mode: "shuffle_no_replacement"
+  train_crop_mode: "random"
+  early_stop_patience: 5
+  early_stop_min_delta: 1.0e-4
+
+data:
+  dataset: "FT3D"
+  base_path: "../Datasets"
+  ft3d_frames_base_paths:
+    - "../Datasets/FlyingThings3D/frames_cleanpass"
+    - "../Datasets/FlyingThings3D/frames_finalpass"
+  ft3d_flow_base_path: "../Datasets/FlyingThings3D/optical_flow"
+  train_dir: "TRAIN"
+  val_dir: "TEST"
+  ft3d_frames_subdir: ""
+  ft3d_flow_subdir: ""
+  ft3d_directions: ["into_future", "into_past"]
+  ft3d_flow_divisor: 12.5          # overridden to 1.0 by batch wrapper for mainline
+  ft3d_num_workers: 6
+  ft3d_eval_num_workers: 2
+  prefetch_batches: 2
+  eval_prefetch_batches: 0
+  # Excluded corrupted .pfm files (same list as retrain_v3 run_manifest).
+  ft3d_excluded_flow_paths:
+    - "../Datasets/FlyingThings3D/optical_flow/TEST/A/0085/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0012/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0096/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0186/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0441/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0456/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0483/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0728/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/B/0459/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/C/0031/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/C/0080/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/C/0140/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/C/0260/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+    - "../Datasets/FlyingThings3D/optical_flow/TRAIN/C/0323/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+  # Scaled-down spatial aug for the 157x203 input regime (findings §9).
+  ft3d_train_augment:
+    enabled: true
+    min_scale: -0.4
+    max_scale: 0.8
+    spatial_aug_prob: 0.3          # was 0.8 at original 480x640
+    stretch_prob: 0.8
+    max_stretch: 0.05              # was 0.2
+    do_flip: true
+    h_flip_prob: 0.5
+    v_flip_prob: 0.1
+    photometric_aug_prob: 1.0      # unchanged — spatial-independent
+    brightness: 0.4
+    contrast: 0.4
+    saturation: 0.4
+    asymmetric_color_aug_prob: 0.2
+    eraser_aug_prob: 0.0           # was 0.5 — eraser too aggressive at 157x203
+    eraser_min_size: 50
+    eraser_max_size: 100
+  # Deploy resolution (board's max input given the 1432 KiB SRAM arena).
+  input_height: 157
+  input_width: 203
+  flow_channels: 2
+
+eval:
+  eval_every_epoch: 1
+  eval_batches: 0                  # full FT3D val pass each epoch
+  sintel:
+    dataset_root: "../Datasets/Sintel"
+    sintel_list: "EdgeFlowNet/code/dataset_paths/MPI_Sintel_Final_train_list.txt"
+    patch_size: "416,1024"         # for diagnostic Sintel eval only
+    eval_every_epoch: 2            # diagnostic, NOT used for ckpt selection
+    max_samples: null
+    ckpt_name: "last"
+
+# checkpoint section is filled in per-candidate by run_deploy_ft_batch.py.
+# Two init_mode values are supported:
+#   experiment_dir + init_experiment_dir + init_ckpt_name  (v3 subnets)
+#   explicit_path  + init_ckpt_path                         (mainline)
+checkpoint:
+  init_mode: "experiment_dir"
+  init_experiment_dir: "outputs/retrain_v3_ft3d/retrain_v3_ft3d_run1"
+  init_ckpt_name: "sintel_best"
+  load_checkpoint: false

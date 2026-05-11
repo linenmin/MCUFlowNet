@@ -1,0 +1,5 @@
+model_name,arch_family,arch_code,role,init_mode,init_experiment_dir,init_ckpt_name,init_ckpt_path,flow_divisor
+v3_acc,fixed_v3,"0,1,2,2,2,2,0,0,0,0,1",strongest_predicted_accuracy,experiment_dir,outputs/retrain_v3_ft3d/retrain_v3_ft3d_run1,sintel_best,,12.5
+v3_efn_fps,fixed_v3,"2,0,0,2,2,1,0,0,0,0,0",edgeflownet_fps_match,experiment_dir,outputs/retrain_v3_ft3d/retrain_v3_ft3d_run1,sintel_best,,12.5
+v3_light,fixed_v3,"0,0,0,0,0,0,0,0,0,0,0",lightest_pareto_endpoint,experiment_dir,outputs/retrain_v3_ft3d/retrain_v3_ft3d_run1,sintel_best,,12.5
+mainline,edgeflownet_mainline,,edgeflownet_original_transpose_conv,explicit_path,,,EdgeFlowNet/checkpoints/best.ckpt,1.0
