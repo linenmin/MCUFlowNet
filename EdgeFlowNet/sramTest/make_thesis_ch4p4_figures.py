@@ -24,10 +24,8 @@ import matplotlib.pyplot as plt
 
 
 _FC2_EPE_YLIM = (2.9, 3.8)
-_SINTEL_EPE_YLIM = (5.3, 6.8)
 
 _FC2_METRIC = "best_epe"
-_SINTEL_METRIC = "best_sintel_epe"
 
 _OUTPUTS = Path(r"D:/Dataset/MCUFlowNet/EdgeFlowNAS/outputs/ablation_v1_fc2")
 _OUT_FIG = Path(
@@ -107,7 +105,6 @@ VARIANTS: List[VariantSpec] = [
 def _read_history(csv_path: Path) -> Dict[str, List[float]]:
     epochs: List[float] = []
     fc2_best: List[float] = []
-    sintel_best: List[float] = []
     with csv_path.open("r", newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
         for row in reader:
@@ -119,11 +116,9 @@ def _read_history(csv_path: Path) -> Dict[str, List[float]]:
                 continue
             epochs.append(epoch)
             fc2_best.append(float(row.get("best_epe") or "nan"))
-            sintel_best.append(float(row.get("best_sintel_epe") or "nan"))
     return {
         "epoch": epochs,
         "best_epe": fc2_best,
-        "best_sintel_epe": sintel_best,
     }
 
 
@@ -176,28 +171,18 @@ def _draw(ax, xs, ys, ylim, spec: VariantSpec) -> None:
 
 def _plot(records: Dict[str, Dict[str, List[float]]]) -> None:
     _configure_style()
-    fig, axes = plt.subplots(1, 2, figsize=(14.5, 5.2))
-    ax_fc2, ax_sin = axes
+    fig, ax_fc2 = plt.subplots(1, 1, figsize=(10.5, 5.2))
 
     for spec in VARIANTS:
         h = records[spec.label]
         _draw(ax_fc2, h["epoch"], h[_FC2_METRIC], _FC2_EPE_YLIM, spec)
-        _draw(ax_sin, h["epoch"], h[_SINTEL_METRIC], _SINTEL_EPE_YLIM, spec)
 
     ax_fc2.set_title("Best FC2 validation EPE")
     ax_fc2.set_xlabel("Epoch")
     ax_fc2.set_ylabel("Best EPE")
     ax_fc2.set_ylim(*_FC2_EPE_YLIM)
     ax_fc2.set_xlim(0, _MAX_EPOCH)
-
-    ax_sin.set_title("Best Sintel EPE (cross-domain probe)")
-    ax_sin.set_xlabel("Epoch")
-    ax_sin.set_ylabel("Best EPE")
-    ax_sin.set_ylim(*_SINTEL_EPE_YLIM)
-    ax_sin.set_xlim(0, _MAX_EPOCH)
-
-    for ax in axes:
-        ax.tick_params(axis="both", which="both", length=0)
+    ax_fc2.tick_params(axis="both", which="both", length=0)
 
     handles, labels = ax_fc2.get_legend_handles_labels()
     fig.legend(
@@ -205,7 +190,7 @@ def _plot(records: Dict[str, Dict[str, List[float]]]) -> None:
         loc="lower center", ncol=len(labels),
         frameon=False, bbox_to_anchor=(0.5, -0.04),
     )
-    fig.tight_layout(rect=(0.0, 0.07, 1.0, 1.0))
+    fig.tight_layout(rect=(0.0, 0.08, 1.0, 1.0))
 
     fig.savefig(_OUT_FIG)
     plt.close(fig)
