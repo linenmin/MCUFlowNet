@@ -161,11 +161,14 @@ def _draw(ax, xs, ys, ylim, spec: VariantSpec) -> None:
         color=spec.color, linestyle=spec.linestyle, marker=spec.marker,
         markersize=5.5, linewidth=1.9, alpha=0.95,
     )
+    # off-scale eval points: render in neutral grey so they are not mistaken
+    # for the colour-coded curves (they share the variant's epoch but the
+    # actual EPE is above the panel cap).
     if over_x:
         ax.plot(
             over_x, [high] * len(over_x),
             linestyle="none", marker="^",
-            markersize=9, color=spec.color, alpha=0.9, clip_on=False,
+            markersize=8, color="#888888", alpha=0.55, clip_on=False,
         )
 
 
@@ -183,6 +186,12 @@ def _plot(records: Dict[str, Dict[str, List[float]]]) -> None:
     ax_fc2.set_ylim(*_FC2_EPE_YLIM)
     ax_fc2.set_xlim(0, _MAX_EPOCH)
     ax_fc2.tick_params(axis="both", which="both", length=0)
+    # annotate the off-scale markers
+    ax_fc2.text(
+        _MAX_EPOCH * 0.98, _FC2_EPE_YLIM[1] - 0.05,
+        r"$\blacktriangle$ off-scale eval (EPE above panel cap)",
+        ha="right", va="top", fontsize=11, color="#666666",
+    )
 
     handles, labels = ax_fc2.get_legend_handles_labels()
     fig.legend(
