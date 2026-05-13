@@ -534,10 +534,15 @@ def train_deploy_ft(config: Dict[str, Any]) -> int:
                 if sintel_every > 0 and do_eval and (
                     epoch_idx % sintel_every == 0 or epoch_idx == num_epochs
                 ):
+                    # Pass flow_scale EXPLICITLY (12.5 for FT3D-trained V3,
+                    # 1.0 for mainline). Bypasses the broken
+                    # _resolve_prediction_flow_scale path-hint fallback.
+                    sintel_flow_scale = float(data_cfg.get("ft3d_flow_divisor", 12.5))
                     sintel_result = run_sintel_for_deploy_ft(
                         model_dir=model_dir, config=config,
                         epoch_idx=epoch_idx, ckpt_name="last",
                         arch_family=arch_family,
+                        flow_scale=sintel_flow_scale,
                     )
                     if sintel_result is not None:
                         sintel_epe = float(sintel_result["sintel_epe"])

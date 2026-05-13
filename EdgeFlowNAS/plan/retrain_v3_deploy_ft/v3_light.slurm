@@ -1,5 +1,5 @@
 #!/bin/bash -l
-#SBATCH --job-name=deployFT_v3_efn_fps
+#SBATCH --job-name=deployFT_v3_light
 #SBATCH --clusters=genius
 #SBATCH --account=lp_embaivision
 #SBATCH --partition=gpu_p100
@@ -26,9 +26,9 @@ export OPENBLAS_NUM_THREADS=1
 python wrappers/run_deploy_ft_one.py \
   --config configs/retrain_v3_deploy_ft.yaml \
   --experiment_name retrain_v3_deploy_ft_run1 \
-  --model_name v3_efn_fps \
+  --model_name v3_light \
   --arch_family fixed_v3 \
-  --arch_code "2,0,0,2,2,1,0,0,0,0,0" \
+  --arch_code "0,0,0,0,0,0,0,0,0,0,0" \
   --init_mode experiment_dir \
   --init_experiment_dir outputs/retrain_v3_ft3d/retrain_v3_ft3d_run1 \
   --init_ckpt_name sintel_best \
@@ -36,7 +36,7 @@ python wrappers/run_deploy_ft_one.py \
   --num_epochs 20 \
   --batch_size 32 \
   --micro_batch_size 32 \
-  --lr 1.0e-6 \
+  --lr 1.0e-5 \
   --lr_schedule constant \
   --early_stop_patience 5 \
   --grad_clip_global_norm 50.0 \

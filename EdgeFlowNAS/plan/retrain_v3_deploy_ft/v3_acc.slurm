@@ -1,12 +1,12 @@
 #!/bin/bash -l
-#SBATCH --job-name=deployFT_v3_1gpu
+#SBATCH --job-name=deployFT_v3_acc
 #SBATCH --clusters=genius
 #SBATCH --account=lp_embaivision
-#SBATCH --partition=gpu_v100
+#SBATCH --partition=gpu_p100
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=80G
+#SBATCH --cpus-per-task=9
+#SBATCH --mem=45000M
 #SBATCH --gpus-per-node=1
 #SBATCH --time=24:00:00
 #SBATCH --output=slurm-%x-%j.out
@@ -23,29 +23,34 @@ export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 
-# Single V100 fallback: 4 candidates run SEQUENTIALLY on one GPU
-# (max_workers=1). Per-candidate wall time on V100 ≈ 2× faster than P100
-# (~2.5h estimated), so 4 candidates × ~2.5h ≈ 10h, well within the
-# 24h cap. dataloader workers reduced to fit 4 CPU cores.
-python wrappers/run_deploy_ft_batch.py \
+# Single-P100 deploy_ft for v3_acc. Output:
+#   outputs/retrain_v3_deploy_ft/retrain_v3_deploy_ft_run1/model_v3_acc/
+# LR 1e-5 (matches retrain_v3 base; prior 1e-6 was too low and barely
+# moved FT3D val EPE). Sintel eval uses EXPLICIT flow_scale=12.5 now.
+python wrappers/run_deploy_ft_one.py \
   --config configs/retrain_v3_deploy_ft.yaml \
-  --candidates_csv plan/retrain_v3_deploy_ft/retrain_v3_deploy_ft_candidates.csv \
-  --experiment_name retrain_v3_deploy_ft_run1_v100 \
-  --gpu_devices 0 \
-  --max_workers 1 \
+  --experiment_name retrain_v3_deploy_ft_run1 \
+  --model_name v3_acc \
+  --arch_family fixed_v3 \
+  --arch_code "0,1,2,2,2,2,0,0,0,0,1" \
+  --init_mode experiment_dir \
+  --init_experiment_dir outputs/retrain_v3_ft3d/retrain_v3_ft3d_run1 \
+  --init_ckpt_name sintel_best \
+  --flow_divisor 12.5 \
   --num_epochs 20 \
   --batch_size 32 \
   --micro_batch_size 32 \
-  --lr 1.0e-6 \
+  --lr 1.0e-5 \
   --lr_schedule constant \
   --early_stop_patience 5 \
   --grad_clip_global_norm 50.0 \
   --input_height 157 \
   --input_width 203 \
-  --ft3d_num_workers 2 \
-  --ft3d_eval_num_workers 1 \
-  --prefetch_batches 2 \
+  --ft3d_num_workers 6 \
+  --ft3d_eval_num_workers 2 \
+  --prefetch_batches 4 \
   --eval_prefetch_batches 0 \
   --ft3d_eval_every_epoch 1 \
   --sintel_eval_every_epoch 2 \
+  --gpu_device 0 \
   --seed 42

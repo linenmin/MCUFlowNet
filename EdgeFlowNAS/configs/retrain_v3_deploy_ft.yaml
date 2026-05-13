@@ -13,7 +13,10 @@ train:
   num_epochs: 20
   batch_size: 32
   micro_batch_size: 32
-  lr: 1.0e-6                       # constant — see lr_schedule
+  lr: 1.0e-5                       # bumped from 1e-6 — prior runs at 1e-6
+                                   # barely moved FT3D val EPE (2.39 -> 2.355
+                                   # over 15 epochs). 1e-5 matches retrain_v3
+                                   # base LR and should actually adapt the model.
   lr_min: 1.0e-6
   lr_schedule: "constant"
   weight_decay: 0.0

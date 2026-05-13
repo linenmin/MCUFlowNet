@@ -1,5 +1,5 @@
 #!/bin/bash -l
-#SBATCH --job-name=deployFT_v3_light
+#SBATCH --job-name=deployFT_mainline
 #SBATCH --clusters=genius
 #SBATCH --account=lp_embaivision
 #SBATCH --partition=gpu_p100
@@ -23,20 +23,22 @@ export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 
+# Mainline differences vs v3:
+#   - arch_family=edgeflownet_mainline (no arch_code)
+#   - init from EdgeFlowNet/checkpoints/best.ckpt via explicit_path
+#   - flow_divisor=1.0 (mainline training never divided GT)
 python wrappers/run_deploy_ft_one.py \
   --config configs/retrain_v3_deploy_ft.yaml \
   --experiment_name retrain_v3_deploy_ft_run1 \
-  --model_name v3_light \
-  --arch_family fixed_v3 \
-  --arch_code "0,0,0,0,0,0,0,0,0,0,0" \
-  --init_mode experiment_dir \
-  --init_experiment_dir outputs/retrain_v3_ft3d/retrain_v3_ft3d_run1 \
-  --init_ckpt_name sintel_best \
-  --flow_divisor 12.5 \
+  --model_name mainline \
+  --arch_family edgeflownet_mainline \
+  --init_mode explicit_path \
+  --init_ckpt_path EdgeFlowNet/checkpoints/best.ckpt \
+  --flow_divisor 1.0 \
   --num_epochs 20 \
   --batch_size 32 \
   --micro_batch_size 32 \
-  --lr 1.0e-6 \
+  --lr 1.0e-5 \
   --lr_schedule constant \
   --early_stop_patience 5 \
   --grad_clip_global_norm 50.0 \
