@@ -33,7 +33,7 @@ python wrappers/run_deploy_ft_one.py \
   --model_name mainline \
   --arch_family edgeflownet_mainline \
   --init_mode explicit_path \
-  --init_ckpt_path EdgeFlowNet/checkpoints/best.ckpt \
+  --init_ckpt_path ../EdgeFlowNet/checkpoints/best.ckpt \
   --flow_divisor 1.0 \
   --num_epochs 20 \
   --batch_size 32 \
