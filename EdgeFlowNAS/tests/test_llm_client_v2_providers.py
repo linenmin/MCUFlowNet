@@ -16,6 +16,7 @@ from efnas.search.llm_client import (
     LLMClient,
     _detect_provider,
     _is_gemini_3_or_newer,
+    _is_overload_or_transient,
 )
 
 
@@ -336,6 +337,118 @@ class TestBackwardCompat(unittest.TestCase):
         # 不调用 — 只看签名存在
         self.assertTrue(callable(client.chat))
         self.assertTrue(callable(client.chat_json))
+
+
+# ===================================================================
+# Transient error retry (Anthropic 529 / OpenAI 429)
+# ===================================================================
+
+class TestIsOverloadOrTransient(unittest.TestCase):
+    def test_anthropic_529_overloaded(self):
+        exc = RuntimeError(
+            'AnthropicError - {"type":"error","error":{"type":"overloaded_error",'
+            '"message":"Overloaded"},"request_id":"req_xxx"}'
+        )
+        self.assertTrue(_is_overload_or_transient(exc))
+
+    def test_litellm_internal_server_error(self):
+        exc = RuntimeError("litellm.InternalServerError: Overloaded")
+        self.assertTrue(_is_overload_or_transient(exc))
+
+    def test_rate_limit(self):
+        exc = RuntimeError("RateLimitError: Too many requests")
+        self.assertTrue(_is_overload_or_transient(exc))
+
+    def test_timeout(self):
+        exc = RuntimeError("Request timed out after 60s")
+        self.assertTrue(_is_overload_or_transient(exc))
+
+    def test_503(self):
+        exc = RuntimeError("Server error '503 Service Unavailable'")
+        self.assertTrue(_is_overload_or_transient(exc))
+
+    def test_auth_error_not_transient(self):
+        exc = RuntimeError("AuthenticationError: Invalid API key")
+        self.assertFalse(_is_overload_or_transient(exc))
+
+    def test_bad_request_not_transient(self):
+        exc = RuntimeError("BadRequestError: model not found")
+        self.assertFalse(_is_overload_or_transient(exc))
+
+
+class TestChatRetryBehavior(unittest.TestCase):
+    """验证 chat() 在 transient 错误下指数退避重试 / non-transient 立刻 fail."""
+
+    def _build_client(self):
+        cfg = {
+            "llm": {
+                "models": {
+                    "warmstart_agent": "anthropic/claude-opus-4-7",
+                    "scientist_stage_a": "anthropic/claude-opus-4-7",
+                    "scientist_stage_b1": "anthropic/claude-opus-4-7",
+                    "scientist_stage_b2": "anthropic/claude-opus-4-7",
+                    "supervisor_agent": "anthropic/claude-opus-4-7",
+                },
+                "temperature": 1.0,
+                "max_retries": 0,
+            }
+        }
+        return LLMClient(cfg)
+
+    def _make_response(self, content):
+        return types.SimpleNamespace(
+            choices=[types.SimpleNamespace(
+                message=types.SimpleNamespace(content=content)
+            )],
+            usage=None,
+        )
+
+    def test_transient_error_retries_then_succeeds(self):
+        """529 第一次失败, 第二次成功 -> chat() 返回内容."""
+        client = self._build_client()
+        # 把 sleep 替换成 no-op 以加快测试
+        with patch("efnas.search.llm_client.time.sleep") as mock_sleep, \
+             patch("efnas.search.llm_client.litellm.completion") as mock_completion:
+            mock_completion.side_effect = [
+                RuntimeError("AnthropicError - overloaded_error 529"),
+                self._make_response('{"ok": true}'),
+            ]
+            out = client.chat("warmstart_agent", "sys", "user", force_json=False)
+        self.assertEqual(out, '{"ok": true}')
+        # 一次失败 + 一次成功 = 总 2 次 completion 调用
+        self.assertEqual(mock_completion.call_count, 2)
+        # 触发了 1 次 sleep
+        self.assertEqual(mock_sleep.call_count, 1)
+        # 首次 sleep 用第一档延迟 30s
+        mock_sleep.assert_called_with(30)
+
+    def test_non_transient_error_no_retry(self):
+        """auth error 不应重试, 立刻抛."""
+        client = self._build_client()
+        with patch("efnas.search.llm_client.time.sleep") as mock_sleep, \
+             patch("efnas.search.llm_client.litellm.completion") as mock_completion:
+            mock_completion.side_effect = RuntimeError(
+                "AuthenticationError: Invalid API key"
+            )
+            with self.assertRaises(RuntimeError):
+                client.chat("warmstart_agent", "sys", "user", force_json=False)
+        # 只调用 1 次 (不重试)
+        self.assertEqual(mock_completion.call_count, 1)
+        # 完全没 sleep
+        mock_sleep.assert_not_called()
+
+    def test_all_transient_retries_exhausted_raises(self):
+        """如果所有 transient 重试都失败, 最终抛最后的异常."""
+        client = self._build_client()
+        with patch("efnas.search.llm_client.time.sleep"), \
+             patch("efnas.search.llm_client.litellm.completion") as mock_completion:
+            mock_completion.side_effect = RuntimeError(
+                "AnthropicError - overloaded_error 529"
+            )
+            with self.assertRaises(RuntimeError):
+                client.chat("warmstart_agent", "sys", "user", force_json=False)
+        # 初次 + 5 档退避重试 = 6 次调用
+        self.assertEqual(mock_completion.call_count, 6)
 
 
 if __name__ == "__main__":

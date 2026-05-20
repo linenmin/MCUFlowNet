@@ -31,12 +31,33 @@ Per-role config 示例 (configs/nsga2_*.yaml):
 import json
 import logging
 import os
+import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import litellm
 
 logger = logging.getLogger(__name__)
+
+
+# ===================================================================
+# Overload retry settings (Anthropic 529 / OpenAI 429 / Gemini quota)
+# ===================================================================
+# Anthropic 529 ("Overloaded") 错误典型持续 30s - 10min. LiteLLM 默认
+# num_retries=3 + 间隔 ~5s 远远等不到服务恢复. 我们在外层加自己的退避.
+_OVERLOAD_RETRY_DELAYS_SEC = (30, 60, 120, 300, 600)  # 总等待 ~18 分钟
+
+
+def _is_overload_or_transient(exc: BaseException) -> bool:
+    """识别 transient 错误 (529 / 503 / rate-limit / network) 应该重试."""
+    msg = str(exc).lower()
+    keywords = (
+        "overloaded", "529", "503", "502", "504",
+        "rate limit", "rate_limit", "ratelimiterror",
+        "timeout", "timed out", "connection",
+        "internalservererror", "service unavailable",
+    )
+    return any(k in msg for k in keywords)
 
 
 # ===================================================================
@@ -320,15 +341,49 @@ class LLMClient:
             role, model_id, _detect_provider(model_id), force_json,
         )
 
-        try:
-            response = litellm.completion(**kwargs)
-            content = response.choices[0].message.content.strip()
-            self._track_cost(role, model_id, response)
-            logger.debug("LLM 返回 [%s]: %s...", role, content[:200])
-            return content
-        except Exception:
-            logger.exception("LLM 调用失败: 角色=%s, 模型=%s", role, model_id)
-            raise
+        # 外层 retry: LiteLLM 自身的 num_retries 用 ~5s 快速间隔, 对 Anthropic
+        # 529 "Overloaded" (典型持续 30s-10min) 完全等不到回血. 这里再包一层
+        # 指数退避 retry: 30s / 60s / 120s / 300s / 600s = 总 ~18 分钟.
+        last_exc: Optional[BaseException] = None
+        for attempt_idx, delay in enumerate((0,) + _OVERLOAD_RETRY_DELAYS_SEC):
+            if delay > 0:
+                logger.warning(
+                    "LLM transient 错误重试 %d/%d, 等待 %ds 后重试 (角色=%s, 模型=%s)",
+                    attempt_idx, len(_OVERLOAD_RETRY_DELAYS_SEC),
+                    delay, role, model_id,
+                )
+                time.sleep(delay)
+            try:
+                response = litellm.completion(**kwargs)
+                content = response.choices[0].message.content.strip()
+                self._track_cost(role, model_id, response)
+                logger.debug("LLM 返回 [%s]: %s...", role, content[:200])
+                return content
+            except Exception as exc:
+                last_exc = exc
+                if not _is_overload_or_transient(exc):
+                    # 非 transient 错误 (auth / model_not_found / bad_request 等)
+                    # 重试也没用, 立刻 fail-fast
+                    logger.exception(
+                        "LLM 调用失败 (非 transient, 不重试): 角色=%s, 模型=%s",
+                        role, model_id,
+                    )
+                    raise
+                logger.warning(
+                    "LLM transient 错误 (尝试 %d/%d): %s",
+                    attempt_idx + 1,
+                    len(_OVERLOAD_RETRY_DELAYS_SEC) + 1,
+                    type(exc).__name__,
+                )
+
+        # 所有退避重试都用完了
+        logger.exception(
+            "LLM 调用失败 (transient 重试已耗尽): 角色=%s, 模型=%s",
+            role, model_id,
+        )
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("LLM call failed without exception (impossible)")
 
     def chat_json(
         self,
