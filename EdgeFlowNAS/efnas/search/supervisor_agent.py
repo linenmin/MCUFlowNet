@@ -1,21 +1,26 @@
-"""Phase 4 (search_hybrid_v1): Supervisor Agent —— NSGA-II 5-lever 监督.
+"""Phase 4 (search_hybrid_v2): Supervisor Agent —— NSGA-II 8-lever 监督.
 
 每 K 代触发一次 (默认 K=3, 与 Scientist 同频, Scientist 之后立即跑).
 
 单次调用流程:
-  1. 读 current_state (5 个 lever 的当前值) + 最近 metrics + 最新 insights +
-     supervisor_log (自己的历史)
-  2. 调 LLM 一次, 输出 actions (5 个 lever 任意组合)
+  1. 读 current_state (8 个 lever 的当前值) + budget_progress + 最近 metrics +
+     最新 insights + supervisor_log (自己的历史)
+  2. 调 LLM 一次, 输出 actions (8 个 lever 任意组合)
   3. 调 NSGA2SearchRunner.apply_supervisor_actions 应用 actions; runner 只做
      数学合法性校验 (策略层完全交给 agent)
   4. 把这次调用的 (rationale, before, after, applied, rejected, expected_effect,
      review_after_gen) 追加到 supervisor_log.json
 
 设计原则:
-- 5-lever 动作空间, 无策略边界, 仅合法性校验
-- agent 知道当前状态 + 历史调整 → 自我纠偏
+- 8-lever 动作空间, 无策略边界, 仅合法性校验
+- agent 知道当前状态 + budget 进度 + 历史调整 → 自我纠偏 + 后期自动收敛
 - 失败兜底: LLM 调用失败 / 输出非法 → log warning, 不调任何 lever, 不阻断
   NSGA-II 主搜索
+
+v2 改动 (2026-05-20):
+- 新增 budget_progress 输入字段 (F-PROMPT-004 修复, 让 agent 知道
+  当前 N/T 代和已用/总 evals)
+- prompt 砍了 "完全由你判断" "非法值会被工程层拒绝" 等填充
 """
 
 import json
@@ -76,6 +81,7 @@ def invoke_supervisor_agent(
     llm: LLMClient,
     *,
     current_state: Dict[str, Any],
+    budget_progress: Optional[Dict[str, Any]] = None,
     recent_metrics_df: pd.DataFrame,
     current_pareto_summary: str,
     current_insights_md: str,
@@ -83,6 +89,13 @@ def invoke_supervisor_agent(
     role: str = "supervisor_agent",
 ) -> Optional[Dict[str, Any]]:
     """单次 LLM 调用, 返回 actions / rationale / expected_effect / review_after_gen.
+
+    Args:
+        budget_progress: 可选 dict, 形如
+            ``{"evals_used": 250, "evals_total": 800,
+               "gen_current": 4, "gen_total": 16}``.
+            None 时 user_msg 显示 "(unknown)" 占位. v2 后必传, 用于让 agent
+            做 budget-aware 决策 (F-PROMPT-004 修复).
 
     Returns:
         - dict 含上述四字段; LLM 失败 / 输出非 dict / 缺关键字段 → None
@@ -97,9 +110,27 @@ def invoke_supervisor_agent(
         indent=2,
     )
 
+    if budget_progress:
+        evals_used = budget_progress.get("evals_used", "?")
+        evals_total = budget_progress.get("evals_total", "?")
+        gen_current = budget_progress.get("gen_current", "?")
+        gen_total = budget_progress.get("gen_total", "?")
+        try:
+            gen_remaining = int(gen_total) - int(gen_current) - 1
+        except (TypeError, ValueError):
+            gen_remaining = "?"
+        budget_block = (
+            f"evals: {evals_used} / {evals_total} used  |  "
+            f"generation: {gen_current} / {gen_total} (remaining {gen_remaining} gen)"
+        )
+    else:
+        budget_block = "(unknown)"
+
     user_msg = (
-        f"# Current 5-Lever State\n"
+        f"# Current 8-Lever State\n"
         f"```json\n{json.dumps(current_state, ensure_ascii=False, indent=2)}\n```\n\n"
+        f"# Budget Progress\n"
+        f"```\n{budget_block}\n```\n\n"
         f"# Recent Search Health Metrics (generation_metrics.csv tail-8)\n"
         f"```csv\n{metrics_csv or '(empty)'}\n```\n\n"
         f"# Current Pareto Front Summary\n"
@@ -109,7 +140,7 @@ def invoke_supervisor_agent(
         f"# Your Supervisor Log (last 5 entries)\n"
         f"```json\n{log_summary}\n```\n\n"
         f"请根据上面所有信号, 判断要不要调整 NSGA-II 参数. 输出 JSON 含\n"
-        f"`rationale`, `actions` (5 字段, 允许 null), `expected_effect`,\n"
+        f"`rationale`, `actions` (8 字段, 允许 null), `expected_effect`,\n"
         f"`review_after_gen` 四个键. 不调任何 lever 时, actions 全部设 null."
     )
 
@@ -191,6 +222,7 @@ def supervisor_pipeline(
     runner: Any,
     *,
     generation: int,
+    budget_progress: Optional[Dict[str, Any]] = None,
     role: str = "supervisor_agent",
 ) -> Dict[str, Any]:
     """完整 Supervisor 调用 (1 LLM call + apply_actions + log).
@@ -200,6 +232,10 @@ def supervisor_pipeline(
         exp_dir: 实验输出根
         runner: NSGA2SearchRunner 实例 (供 current_state 读 / actions 应用)
         generation: 当前代号 (用于 log)
+        budget_progress: 可选 dict, 形如
+            ``{"evals_used": int, "evals_total": int,
+               "gen_current": int, "gen_total": int}``.
+            None 时 supervisor 看不到 budget 进度 (F-PROMPT-004 修复后应必传).
         role: LLM client role 名
 
     Returns:
@@ -239,6 +275,7 @@ def supervisor_pipeline(
     response = invoke_supervisor_agent(
         llm,
         current_state=current_state,
+        budget_progress=budget_progress,
         recent_metrics_df=metrics_df,
         current_pareto_summary=pareto_summary,
         current_insights_md=insights_md,

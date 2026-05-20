@@ -491,10 +491,14 @@ class NSGA2SearchRunner:
             logger.exception("[Scientist] pipeline 异常 (不阻断主搜索)")
 
     def _maybe_invoke_supervisor(self, generation: int) -> None:
-        """Phase 4: 每 K=scientist_interval 代后触发 Supervisor (5-lever 调参).
+        """Phase 4: 每 K=scientist_interval 代后触发 Supervisor (8-lever 调参).
 
         触发频率与 Scientist 同步 (K=3), 在 Scientist 跑完之后立即跑, 让
         Supervisor 能消费 fresh insights.md.
+
+        v2: 传 budget_progress 给 supervisor_pipeline 让 agent 能做 budget-aware
+        决策 (F-PROMPT-004 修复). evals_used 算法: 当前完成 generation 是 N,
+        则已评估 (N+1) * population_size 个 arch (gen 0..N 都跑完了).
 
         失败兜底: supervisor_pipeline 任何环节失败都不抛异常, 不阻断 NSGA-II
         主搜索. 失败时 supervisor_log 仍会记录一条 "LLM failed" 条目.
@@ -503,11 +507,18 @@ class NSGA2SearchRunner:
             return
         if (generation + 1) % self._scientist_interval != 0:
             return
+        budget_progress = {
+            "evals_used": int((generation + 1) * self.population_size),
+            "evals_total": int(self.total_evaluations),
+            "gen_current": int(generation),
+            "gen_total": int(self.total_generations),
+        }
         try:
             from efnas.search.supervisor_agent import supervisor_pipeline
             summary = supervisor_pipeline(
                 self._supervisor_llm, self.exp_dir, self,
                 generation=generation,
+                budget_progress=budget_progress,
             )
             logger.info(
                 "[Supervisor] gen=%d success=%s applied=%s rejected=%s %s",
