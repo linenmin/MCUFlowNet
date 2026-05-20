@@ -1,0 +1,78 @@
+# EdgeFlowNAS NSGA-II + hybrid LLM agent config (V4, search_hybrid_v2).
+# Phase 5+ ablation: 全栈使用 Anthropic Claude Opus 4.7 (2026-04-16 发布).
+# 与 nsga2_v3.yaml 的差异:
+#   - 5 个 LLM role 全部从 gemini/gemini-3.1-pro-preview → anthropic/claude-opus-4-7
+#   - prompts.py 已升级到 v2 (TASK SEMANTICS / OPTIMIZATION OBJECTIVE / 8-lever supervisor)
+#   - supervisor 现在接收 budget_progress 字段
+# 需要环境变量: ANTHROPIC_API_KEY
+# LiteLLM 路由: anthropic/<model_id> 走官方 Anthropic API.
+
+search:
+  total_evaluations: 800
+  population_size: 50
+  seed: 2026
+  crossover_prob: 0.9
+  mutation_prob: null
+  duplicate_retry_factor: 20
+  search_space_size: 23328
+  search_space_module: "efnas.nas.search_space_v3"
+
+# Phase 2-4 LLM 5 个角色, 全栈 Opus 4.7.
+# (a) baseline 不读这一段; (b/c/d) 按需用对应 role.
+llm:
+  models:
+    warmstart_agent:    "anthropic/claude-opus-4-7"
+    scientist_stage_a:  "anthropic/claude-opus-4-7"
+    scientist_stage_b1: "anthropic/claude-opus-4-7"
+    scientist_stage_b2: "anthropic/claude-opus-4-7"
+    supervisor_agent:   "anthropic/claude-opus-4-7"
+  # Opus 4.7 接受 temperature, 1.0 是 API 默认值. 保持 1.0 让 v3 (Gemini 强制 1.0)
+  # 和 v4 (Opus 自选 1.0) 的对照最干净 -- 唯一变量是模型本身, 不掺温度差异.
+  temperature:
+    warmstart_agent:    1.0
+    scientist_stage_a:  1.0
+    scientist_stage_b1: 1.0
+    scientist_stage_b2: 1.0
+    supervisor_agent:   1.0
+  # thinking_budget (extended thinking): Opus 4.7 支持但暂不启用.
+  # 第一轮跑 baseline Opus, 若结果好再 ablation 加 thinking. 解开下面注释启用:
+  # thinking_budget:
+  #   warmstart_agent:    8192
+  #   scientist_stage_a:  4096
+  #   scientist_stage_b1: 8192
+  #   scientist_stage_b2: 4096
+  #   supervisor_agent:   8192
+  max_tokens: 8192
+  request_timeout: 240   # Opus 4.7 在 thinking 模式下偶有 > 180s; 留余量
+  max_retries: 3
+  # cost_log_path: 可选, 每次 LLM call 记录 token + 美元成本到 JSONL. 留空则不记录.
+  # 设置时建议指向 metadata 目录, 与 supervisor_log.json 平行:
+  # cost_log_path: "outputs/search_hybrid_v2/group_d_v4/metadata/llm_cost_log.jsonl"
+
+concurrency:
+  max_workers: 6
+  gpu_devices: "0,1,2,3,4,5"
+
+evaluation:
+  eval_script: "wrappers/run_supernet_subnet_distribution_v3.py"
+  supernet_config: "configs/supernet_v3_fc2_172x224.yaml"
+  supernet_experiment_dir: ""
+  checkpoint_type: "best"
+  enable_vela: true
+  vela_mode: "verbose"
+  vela_keep_artifacts: true
+  vela_prune_tflite_after_reduce: true
+  per_layer_csv_max_rows: 500
+  bn_recal_batches: 32
+  batch_size: 32
+  eval_batches_per_arch: null
+  max_fc2_val_samples: null
+  num_workers: 2
+  prefetch_batches: 2
+
+paths:
+  output_root: "outputs/search_hybrid_v2"
+
+files:
+  state_json: "nsga2_state.json"
+  pareto_csv: "pareto_front.csv"
