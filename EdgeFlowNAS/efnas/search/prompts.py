@@ -45,6 +45,34 @@ LLM agent 三个独立角色, 都不与 NSGA-II 主路径竞争:
 - [8] `H1Out`: 中分辨率输出头. `0=3x3`, `1=5x5`
 - [9] `H2`: 第 2 层上采样头. `0=3x3`, `1=5x5`
 - [10] `H2Out`: 高分辨率输出头. `0=3x3`, `1=5x5`
+
+# NETWORK TOPOLOGY (大写=11D 搜索维度, 小写=固定操作)
+
+通道阶梯 (init=32, ×2): 32 → 64 → 128 → 256 → 128 → 64 → 32 → 16
+
+forward:
+  Input (6ch 双帧)
+    → [E0]    stride2 conv      → 1/2  scale, 32ch
+    → [E1]    stride2 conv      → 1/4  scale, 64ch
+    → [EB0]   residual stack    → 1/4  scale
+    → Down1   stride2 3x3 conv  → 1/8  scale, 128ch
+    → [EB1]   residual stack    → 1/8  scale
+    → Down2   stride2 3x3 conv  → 1/16 scale, 256ch
+    → [DB0]   residual stack    → 1/16 scale
+    → ECA(k=3)                  → 1/16 scale
+    → Up1     resize + 3x3 conv → 1/8  scale, 128ch
+    → [DB1]   residual stack    → 1/8  scale
+    → Up2     resize + 3x3 conv → 1/4  scale, 64ch
+    → GlobalGate                → 1/4  scale
+                                  (bottleneck-after-ECA → 1x1 conv → sigmoid →
+                                   multiply 1/4 特征)
+    → [H0Out] conv              → 1/4  scale flow output, 4ch
+    → [H1]    resize + conv     → 1/2  scale, 32ch
+    → [H1Out] conv              → 1/2  scale flow output, 4ch
+    → [H2]    resize + conv     → 1/1  scale, 16ch
+    → [H2Out] conv              → 1/1  scale flow output, 4ch
+
+输出: 3 个尺度 flow (1/4, 1/2, 1/1) 加权 L1 训练; FPS 测 1/1 端到端推理.
 """
 
 

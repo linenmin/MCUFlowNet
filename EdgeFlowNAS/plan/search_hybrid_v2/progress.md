@@ -333,3 +333,92 @@ Phase 3 LLM 层完成. 进 Phase 4 前需要选模型 + 写 config:
 ## Errors Encountered
 
 (none yet)
+
+---
+
+## Session: 2026-05-20 (NETWORK TOPOLOGY + thinking_budget 增强)
+
+### Status
+
+- **Status**: Phase 4 v4 baseline 跑完后, 用户决定加 2 个增强:
+  1. UNIVERSAL_WORLDVIEW 加 NETWORK TOPOLOGY 客观结构描述
+  2. 3 个战略性 agent 启用 Anthropic extended thinking (统一 16384 budget)
+
+### v4 baseline 实测结果总结 (gen 15, 800 evals)
+
+| Run | HV | best_epe | Pareto |
+|---|---:|---:|---:|
+| 🥇 v2 d_v4 Opus | **7.5264** | 4.0237 | 50 |
+| 🥈 v1 b Gemini | 7.5245 | 4.0260 | 54 |
+| 🥉 v1 d_v3 Gemini | 7.5244 | **4.0230** | 48 |
+| v1 a NSGA-II | 7.5217 | 4.0256 | 51 |
+| v2 b_v4 Opus | 7.5164 | 4.0296 | 49 |
+
+关键: v2 d_v4 final HV 全场第一 (+0.002 vs v1 d_v3), 但 v2 b_v4 反而 -0.008
+拖后腿. 说明 **Opus 单独 warmstart 不如 Gemini, 但 Opus + Scientist + Supervisor
+组合发挥出优势**. 用户读到 Scientist 第一次反思 (gen 2) 已经写出统计学严谨
+的 5 条 insights (vs v1 d_v3 跑完 15 代只 3 条), 决定推进增强.
+
+### 用户的两个关键判断 (重要)
+
+1. **NETWORK TOPOLOGY 应该是客观描述**: prompt 不应有 "U-Net 风格"、"唯一跳跃"、
+   "纯 encoder-decoder + ECA bottleneck" 这种比较/评价语言. 只描述每层的
+   scale / channels / 操作类型, 让 agent 自己判断含义.
+2. **thinking 该给战略性 agent, 不该给执行性 agent**: 写 Python (b1) 和写
+   markdown (b2) 是机械任务, 现代 LLM 不需深度思考即可正确执行. 真正需要
+   thinking 的是 warmstart (50 arch 战略分配) / scientist_a (模式归纳与
+   假设草稿) / supervisor (8 lever × 6 类输入综合决策) 这种 macro-level
+   reasoning. 这是对我最初方案 (我建议把 thinking 给 b1+b2+sup) 的修正.
+
+### Files modified
+
+- `efnas/search/prompts.py`: UNIVERSAL_WORLDVIEW 末尾追加 `# NETWORK TOPOLOGY` 段
+  (~28 行, 270 词). 描述固定路径 + 通道阶梯 + ECA(k=3) bottleneck + GlobalGate
+  (1x1 conv + sigmoid + multiply 1/4) + 3 个多尺度 head. 全部客观 (无比较/解释).
+- `tests/test_llm_client_v2_providers.py`: 加 3 个 TestAnthropicThinkingFormatCompose
+  测试, 覆盖 thinking + response_format 同时启用的 kwargs 构造.
+
+### Files added
+
+- `configs/nsga2_v4_thinking.yaml`: v4 + thinking 启用版.
+  - 3 个战略 role thinking_budget=16384
+  - max_tokens 8192 → **20000** (Anthropic 硬约束: max_tokens > budget_tokens)
+  - request_timeout 240 → **360** (thinking 模式可能慢 2-5x)
+- `plan/search_hybrid_v2/run_group_b_v4_thinking.slurm`: warmstart only +
+  thinking, 预算 < $1
+- `plan/search_hybrid_v2/run_group_d_v4_thinking.slurm`: 全栈 + 3 角色 thinking,
+  预算 $7-19
+
+### Key constraint discovered
+
+**Anthropic API thinking 模式的硬约束** (实现前确认):
+- temperature 必须为 1.0 (我们 v4 配置已经是)
+- max_tokens 必须 > thinking.budget_tokens (我们 budget=16384, max_tokens=8192
+  会被拒. **已修复**: max_tokens=20000)
+- top_p / top_k 必须保持默认值 (我们不设)
+
+### Verification
+
+- prompt 自检: 11/11 内容断言通过 (NETWORK TOPOLOGY 标题 / 通道阶梯 / E0 行 /
+  ECA / GlobalGate / 砍掉的"通道注意力"/"U-Net"/"cost volume"/"唯一跳跃" 等)
+- `tests.test_llm_client_v2_providers + test_llm_json_retry + test_warmstart_agent
+  + test_supervisor_agent + test_scientist_agent`: **133/133** passed
+  (130 旧 + 3 新 TestAnthropicThinkingFormatCompose)
+
+### Next Action (用户操作)
+
+在 HPC 上:
+```bash
+cd $VSC_DATA/test/MCUFlowNet/EdgeFlowNAS
+git pull origin master   # 拉这次的 commit
+
+# 跑新一组 thinking 版本对照
+sbatch plan/search_hybrid_v2/run_group_b_v4_thinking.slurm
+sbatch plan/search_hybrid_v2/run_group_d_v4_thinking.slurm
+```
+
+跑完后会有 4-way 对照矩阵:
+| 维度 | v3 Gemini | v4 Opus baseline | v4 Opus + thinking |
+|---|---|---|---|
+| b (warmstart only) | 7.5245 | 7.5164 | ? |
+| d (full system) | 7.5244 | 7.5264 | ? |

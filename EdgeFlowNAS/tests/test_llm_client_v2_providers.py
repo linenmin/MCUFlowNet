@@ -142,6 +142,78 @@ class TestBuildKwargsGemini3(unittest.TestCase):
         self.assertNotIn("reasoning_effort", kwargs)
 
 
+class TestAnthropicThinkingFormatCompose(unittest.TestCase):
+    """验证 thinking + response_format 同时启用时 kwargs 构造正确 (Opus 4.7 thinking 场景)."""
+
+    def _build_client(self, max_tokens=20000):
+        cfg = {
+            "llm": {
+                "models": {
+                    "warmstart_agent": "anthropic/claude-opus-4-7",
+                    "scientist_stage_a": "anthropic/claude-opus-4-7",
+                    "scientist_stage_b1": "anthropic/claude-opus-4-7",
+                    "scientist_stage_b2": "anthropic/claude-opus-4-7",
+                    "supervisor_agent": "anthropic/claude-opus-4-7",
+                },
+                "temperature": 1.0,
+                "thinking_budget": {
+                    "warmstart_agent": 16384,
+                    "scientist_stage_a": 16384,
+                    "supervisor_agent": 16384,
+                },
+                "max_tokens": max_tokens,
+                "max_retries": 0,
+            }
+        }
+        return LLMClient(cfg)
+
+    def test_thinking_enabled_role_gets_both_thinking_and_response_format(self):
+        client = self._build_client()
+        kwargs = client._build_kwargs(
+            "warmstart_agent",
+            "anthropic/claude-opus-4-7",
+            messages=[],
+            force_json=True,
+            temperature_override=None,
+            max_tokens_override=None,
+        )
+        self.assertIn("thinking", kwargs)
+        self.assertEqual(kwargs["thinking"]["budget_tokens"], 16384)
+        self.assertIn("response_format", kwargs)
+        self.assertEqual(kwargs["response_format"]["type"], "json_object")
+        # Anthropic thinking 硬约束: temperature must be 1.0
+        self.assertEqual(kwargs["temperature"], 1.0)
+        # Anthropic thinking 硬约束: max_tokens > budget_tokens
+        self.assertGreater(kwargs["max_tokens"], 16384)
+
+    def test_non_thinking_role_gets_response_format_but_no_thinking(self):
+        """scientist_stage_b1 不在 thinking_budget 列表 -> 不应该有 thinking 字段."""
+        client = self._build_client()
+        kwargs = client._build_kwargs(
+            "scientist_stage_b1",
+            "anthropic/claude-opus-4-7",
+            messages=[],
+            force_json=True,
+            temperature_override=None,
+            max_tokens_override=None,
+        )
+        self.assertNotIn("thinking", kwargs)
+        self.assertIn("response_format", kwargs)
+
+    def test_supervisor_role_thinking_present(self):
+        client = self._build_client()
+        kwargs = client._build_kwargs(
+            "supervisor_agent",
+            "anthropic/claude-opus-4-7",
+            messages=[],
+            force_json=True,
+            temperature_override=None,
+            max_tokens_override=None,
+        )
+        self.assertIn("thinking", kwargs)
+        self.assertEqual(kwargs["thinking"]["budget_tokens"], 16384)
+
+
 class TestBuildKwargsAnthropic(unittest.TestCase):
     def test_anthropic_preserves_temperature(self):
         client = _make_client(

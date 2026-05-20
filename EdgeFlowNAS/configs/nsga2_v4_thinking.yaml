@@ -1,0 +1,84 @@
+# EdgeFlowNAS NSGA-II + hybrid LLM agent config (V4 + extended thinking).
+# 在 nsga2_v4.yaml 的基础上为 3 个"战略性" agent 启用 Anthropic extended thinking.
+#
+# 增量 vs nsga2_v4.yaml:
+#   - llm.thinking_budget map 启用 3 个 role (warmstart/scientist_a/supervisor)
+#   - request_timeout 240 -> 360 (thinking 模式下单次调用可能变慢)
+#
+# 区分逻辑:
+#   - 战略决策 (THINK): warmstart_agent / scientist_stage_a / supervisor_agent
+#     -- 这三个都是 "决定做什么" 的 macro-level reasoning, thinking 收益高
+#   - 机械产出 (NO THINK): scientist_stage_b1 / scientist_stage_b2
+#     -- 写 Python 沙箱代码 / 写 markdown, 现代 LLM 不需深度推理即可正确执行
+#
+# 单次 d_v4_thinking run 预算 (vs nsga2_v4.yaml baseline ~$3-15):
+#   - warmstart × 1 × 16K thinking + scientist_a × 5 × 16K + supervisor × 5 × 16K
+#   - 额外 ~176K thinking tokens × $25/M = ~$4.4
+#   - 总成本: ~$7-19
+#
+# 需要环境变量: ANTHROPIC_API_KEY
+# LiteLLM 路由: anthropic/<model_id> 走官方 Anthropic API.
+
+search:
+  total_evaluations: 800
+  population_size: 50
+  seed: 2026
+  crossover_prob: 0.9
+  mutation_prob: null
+  duplicate_retry_factor: 20
+  search_space_size: 23328
+  search_space_module: "efnas.nas.search_space_v3"
+
+llm:
+  models:
+    warmstart_agent:    "anthropic/claude-opus-4-7"
+    scientist_stage_a:  "anthropic/claude-opus-4-7"
+    scientist_stage_b1: "anthropic/claude-opus-4-7"
+    scientist_stage_b2: "anthropic/claude-opus-4-7"
+    supervisor_agent:   "anthropic/claude-opus-4-7"
+  temperature:
+    warmstart_agent:    1.0
+    scientist_stage_a:  1.0
+    scientist_stage_b1: 1.0
+    scientist_stage_b2: 1.0
+    supervisor_agent:   1.0
+  # 关键: 仅为 3 个战略性 role 启用 thinking, 统一 16384 budget.
+  # scientist_stage_b1/b2 不在此 map 中 = thinking 关闭.
+  thinking_budget:
+    warmstart_agent:    16384
+    scientist_stage_a:  16384
+    supervisor_agent:   16384
+  # Anthropic 硬约束: max_tokens > thinking.budget_tokens.
+  # 我们 budget=16384, 所以 max_tokens 必须 > 16384. 用 20000 留余量.
+  # 对非 thinking role (b1/b2) 也用 20000, 它们不会真生成这么多 token, 只是 cap.
+  max_tokens: 20000
+  request_timeout: 360   # thinking 模式下单次调用可能慢 2-5x; 留余量
+  max_retries: 3
+
+concurrency:
+  max_workers: 6
+  gpu_devices: "0,1,2,3,4,5"
+
+evaluation:
+  eval_script: "wrappers/run_supernet_subnet_distribution_v3.py"
+  supernet_config: "configs/supernet_v3_fc2_172x224.yaml"
+  supernet_experiment_dir: ""
+  checkpoint_type: "best"
+  enable_vela: true
+  vela_mode: "verbose"
+  vela_keep_artifacts: true
+  vela_prune_tflite_after_reduce: true
+  per_layer_csv_max_rows: 500
+  bn_recal_batches: 32
+  batch_size: 32
+  eval_batches_per_arch: null
+  max_fc2_val_samples: null
+  num_workers: 2
+  prefetch_batches: 2
+
+paths:
+  output_root: "outputs/search_hybrid_v2"
+
+files:
+  state_json: "nsga2_state.json"
+  pareto_csv: "pareto_front.csv"
