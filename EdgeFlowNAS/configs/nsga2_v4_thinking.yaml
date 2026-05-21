@@ -1,23 +1,32 @@
-# EdgeFlowNAS NSGA-II + hybrid LLM agent config (V4 + extended thinking).
-# 在 nsga2_v4.yaml 的基础上为 3 个"战略性" agent 启用 Anthropic extended thinking.
+# EdgeFlowNAS NSGA-II + hybrid LLM agent config (V4 + Anthropic adaptive thinking).
+# 在 nsga2_v4.yaml 的基础上为 3 个"战略性" agent 启用 Anthropic Opus 4.7 adaptive
+# thinking (xhigh effort, 即 Opus 4.7 独占的深度探索档).
 #
 # 增量 vs nsga2_v4.yaml:
-#   - llm.thinking_budget map 启用 3 个 role (warmstart/scientist_a/supervisor)
-#   - request_timeout 240 -> 360 (thinking 模式下单次调用可能变慢)
+#   - llm.reasoning_effort map 启用 3 个 role (warmstart/scientist_a/supervisor),
+#     全部用 "xhigh" (Opus 4.7 独占的深度档, 介于 high 和 max 之间)
+#   - request_timeout 240 -> 360 (adaptive thinking 单次调用可能变慢 2-5x)
+#   - max_tokens 8192 -> 20000 (Opus 4.7 max_tokens 含 thinking+text 总量)
 #
 # 区分逻辑:
-#   - 战略决策 (THINK): warmstart_agent / scientist_stage_a / supervisor_agent
+#   - 战略决策 (THINK xhigh): warmstart_agent / scientist_stage_a / supervisor_agent
 #     -- 这三个都是 "决定做什么" 的 macro-level reasoning, thinking 收益高
 #   - 机械产出 (NO THINK): scientist_stage_b1 / scientist_stage_b2
 #     -- 写 Python 沙箱代码 / 写 markdown, 现代 LLM 不需深度推理即可正确执行
 #
-# 单次 d_v4_thinking run 预算 (vs nsga2_v4.yaml baseline ~$3-15):
-#   - warmstart × 1 × 16K thinking + scientist_a × 5 × 16K + supervisor × 5 × 16K
-#   - 额外 ~176K thinking tokens × $25/M = ~$4.4
-#   - 总成本: ~$7-19
+# Anthropic Opus 4.7 thinking 关键变化 (2026-04-16+):
+#   - 老 schema (thinking={"type":"enabled", "budget_tokens":N}) 被服务端拒 400
+#   - 新 schema: thinking={"type":"adaptive"} + output_config={"effort":...}
+#   - 我们传 reasoning_effort, LiteLLM 自动翻译 (per Anthropic Effort docs)
+#   - max_tokens 现在覆盖 thinking + response 总量 (不再有 budget_tokens 这个概念)
+#
+# 单次 d_v4_thinking run 成本估算 (xhigh effort 比 high 略贵):
+#   - warmstart × 1 + scientist_a × 5 + supervisor × 5 = 11 个 thinking 调用
+#   - 估计 ~150-250K thinking tokens × $25/M = ~$4-6
+#   - 总成本: ~$8-21
 #
 # 需要环境变量: ANTHROPIC_API_KEY
-# LiteLLM 路由: anthropic/<model_id> 走官方 Anthropic API.
+# 需要 LiteLLM >= 1.83.3-stable.opus-4.7 (Opus 4.7 day-0 support)
 
 search:
   total_evaluations: 800
@@ -42,15 +51,17 @@ llm:
     scientist_stage_b1: 1.0
     scientist_stage_b2: 1.0
     supervisor_agent:   1.0
-  # 关键: 仅为 3 个战略性 role 启用 thinking, 统一 16384 budget.
-  # scientist_stage_b1/b2 不在此 map 中 = thinking 关闭.
-  thinking_budget:
-    warmstart_agent:    16384
-    scientist_stage_a:  16384
-    supervisor_agent:   16384
-  # Anthropic 硬约束: max_tokens > thinking.budget_tokens.
-  # 我们 budget=16384, 所以 max_tokens 必须 > 16384. 用 20000 留余量.
-  # 对非 thinking role (b1/b2) 也用 20000, 它们不会真生成这么多 token, 只是 cap.
+  # 关键: 仅为 3 个战略性 role 启用 thinking, 统一 xhigh effort.
+  # scientist_stage_b1/b2 不在此 map 中 = thinking 关闭 (LiteLLM 不发 reasoning_effort).
+  # 5 个 effort 等级: low / medium / high / xhigh / max (xhigh 是 Opus 4.7 独占).
+  # LiteLLM 把 reasoning_effort 翻译成 Anthropic 的 thinking=adaptive + effort=xhigh.
+  reasoning_effort:
+    warmstart_agent:    "xhigh"
+    scientist_stage_a:  "xhigh"
+    supervisor_agent:   "xhigh"
+  # Opus 4.7 max_tokens 现在含 thinking + text 总量. Anthropic 官方示例用 16000,
+  # 我们留余量到 20000 防止 thinking 输出 token 触顶 (stop_reason=max_tokens).
+  # 对非 thinking role (b1/b2) 也用 20000, 它们自然不会真生成这么多 token, 只是 cap.
   max_tokens: 20000
   request_timeout: 360   # thinking 模式下单次调用可能慢 2-5x; 留余量
   max_retries: 3

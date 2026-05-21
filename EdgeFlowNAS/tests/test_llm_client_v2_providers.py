@@ -142,8 +142,13 @@ class TestBuildKwargsGemini3(unittest.TestCase):
         self.assertNotIn("reasoning_effort", kwargs)
 
 
-class TestAnthropicThinkingFormatCompose(unittest.TestCase):
-    """验证 thinking + response_format 同时启用时 kwargs 构造正确 (Opus 4.7 thinking 场景)."""
+class TestAnthropicOpus47AdaptiveThinking(unittest.TestCase):
+    """Opus 4.7 adaptive thinking 通过 reasoning_effort 传, LiteLLM 自动翻译.
+
+    Opus 4.7 (2026-04-16+) 不再接受 thinking={"type":"enabled","budget_tokens":N},
+    服务端 400. 新 schema: thinking={"type":"adaptive"} + output_config.effort.
+    我们让 LiteLLM 做翻译, 只传 reasoning_effort.
+    """
 
     def _build_client(self, max_tokens=20000):
         cfg = {
@@ -156,10 +161,10 @@ class TestAnthropicThinkingFormatCompose(unittest.TestCase):
                     "supervisor_agent": "anthropic/claude-opus-4-7",
                 },
                 "temperature": 1.0,
-                "thinking_budget": {
-                    "warmstart_agent": 16384,
-                    "scientist_stage_a": 16384,
-                    "supervisor_agent": 16384,
+                "reasoning_effort": {
+                    "warmstart_agent":   "xhigh",
+                    "scientist_stage_a": "xhigh",
+                    "supervisor_agent":  "xhigh",
                 },
                 "max_tokens": max_tokens,
                 "max_retries": 0,
@@ -167,7 +172,8 @@ class TestAnthropicThinkingFormatCompose(unittest.TestCase):
         }
         return LLMClient(cfg)
 
-    def test_thinking_enabled_role_gets_both_thinking_and_response_format(self):
+    def test_strategic_role_passes_reasoning_effort_not_thinking(self):
+        """warmstart_agent 配了 effort -> kwargs 含 reasoning_effort, 不含 thinking."""
         client = self._build_client()
         kwargs = client._build_kwargs(
             "warmstart_agent",
@@ -177,17 +183,18 @@ class TestAnthropicThinkingFormatCompose(unittest.TestCase):
             temperature_override=None,
             max_tokens_override=None,
         )
-        self.assertIn("thinking", kwargs)
-        self.assertEqual(kwargs["thinking"]["budget_tokens"], 16384)
+        self.assertIn("reasoning_effort", kwargs)
+        self.assertEqual(kwargs["reasoning_effort"], "xhigh")
+        # 关键: 不能含 thinking 字段 (Opus 4.7 会 400)
+        self.assertNotIn("thinking", kwargs)
+        # response_format 仍然要有
         self.assertIn("response_format", kwargs)
         self.assertEqual(kwargs["response_format"]["type"], "json_object")
-        # Anthropic thinking 硬约束: temperature must be 1.0
+        # temperature=1.0 是 adaptive thinking 隐式要求
         self.assertEqual(kwargs["temperature"], 1.0)
-        # Anthropic thinking 硬约束: max_tokens > budget_tokens
-        self.assertGreater(kwargs["max_tokens"], 16384)
 
-    def test_non_thinking_role_gets_response_format_but_no_thinking(self):
-        """scientist_stage_b1 不在 thinking_budget 列表 -> 不应该有 thinking 字段."""
+    def test_non_strategic_role_no_reasoning_effort(self):
+        """scientist_stage_b1 不在 reasoning_effort map -> kwargs 不含 effort."""
         client = self._build_client()
         kwargs = client._build_kwargs(
             "scientist_stage_b1",
@@ -197,10 +204,11 @@ class TestAnthropicThinkingFormatCompose(unittest.TestCase):
             temperature_override=None,
             max_tokens_override=None,
         )
+        self.assertNotIn("reasoning_effort", kwargs)
         self.assertNotIn("thinking", kwargs)
         self.assertIn("response_format", kwargs)
 
-    def test_supervisor_role_thinking_present(self):
+    def test_supervisor_role_xhigh_effort(self):
         client = self._build_client()
         kwargs = client._build_kwargs(
             "supervisor_agent",
@@ -210,8 +218,8 @@ class TestAnthropicThinkingFormatCompose(unittest.TestCase):
             temperature_override=None,
             max_tokens_override=None,
         )
-        self.assertIn("thinking", kwargs)
-        self.assertEqual(kwargs["thinking"]["budget_tokens"], 16384)
+        self.assertIn("reasoning_effort", kwargs)
+        self.assertEqual(kwargs["reasoning_effort"], "xhigh")
 
 
 class TestBuildKwargsAnthropic(unittest.TestCase):
@@ -229,35 +237,43 @@ class TestBuildKwargsAnthropic(unittest.TestCase):
         )
         self.assertEqual(kwargs["temperature"], 0.7)
 
-    def test_anthropic_thinking_budget_injected(self):
+    def test_anthropic_thinking_budget_ignored(self):
+        """Opus 4.7 拒绝 budget_tokens schema; 我们也不再用 thinking_budget map
+        给 Anthropic 注入 thinking 字段. 配了 thinking_budget 也应该被忽略."""
         client = _make_client(
-            "anthropic/claude-opus-4-5-20250929",
+            "anthropic/claude-opus-4-7",
             thinking_budget={"warmstart_agent": 16384},
         )
         kwargs = client._build_kwargs(
             "warmstart_agent",
-            "anthropic/claude-opus-4-5-20250929",
+            "anthropic/claude-opus-4-7",
             messages=[],
             force_json=False,
             temperature_override=None,
             max_tokens_override=None,
         )
-        self.assertEqual(kwargs["thinking"]["budget_tokens"], 16384)
+        self.assertNotIn("thinking", kwargs)
+        # thinking_budget 配了 reasoning_effort 也没配 -> 都不应该出现
+        self.assertNotIn("reasoning_effort", kwargs)
 
-    def test_anthropic_no_reasoning_effort(self):
+    def test_anthropic_reasoning_effort_honored(self):
+        """Anthropic Opus 4.7+: reasoning_effort 应被透传, LiteLLM 自己翻译成
+        adaptive thinking + output_config.effort."""
         client = _make_client(
-            "anthropic/claude-opus-4-5-20250929",
+            "anthropic/claude-opus-4-7",
             reasoning_effort={"warmstart_agent": "high"},
         )
         kwargs = client._build_kwargs(
             "warmstart_agent",
-            "anthropic/claude-opus-4-5-20250929",
+            "anthropic/claude-opus-4-7",
             messages=[],
             force_json=False,
             temperature_override=None,
             max_tokens_override=None,
         )
-        self.assertNotIn("reasoning_effort", kwargs)
+        self.assertEqual(kwargs["reasoning_effort"], "high")
+        # 关键: 不能含 thinking 字段 (Opus 4.7 服务端会 400)
+        self.assertNotIn("thinking", kwargs)
 
 
 class TestBuildKwargsOpenAI(unittest.TestCase):

@@ -5,26 +5,29 @@
 
 支持的 provider (通过 model_id 前缀自动识别):
   - "gemini/..."     -> Google Gemini (3.x 系列 temperature 强制 1.0;
-                       可选 thinking_budget)
-  - "anthropic/..."  -> Anthropic Claude (支持 temperature + thinking_budget)
-  - "openai/..."     -> OpenAI GPT (支持 temperature + reasoning_effort)
+                       可选 thinking_budget, Gemini 原生参数)
+  - "anthropic/..."  -> Anthropic Claude (支持 temperature + reasoning_effort,
+                       LiteLLM 自动翻译成 adaptive thinking + output_config.effort
+                       per Opus 4.7 schema)
+  - "openai/..."     -> OpenAI GPT (支持 temperature + reasoning_effort 原生)
   - 其他前缀         -> 透传 (LiteLLM 处理)
 
 Per-role config 示例 (configs/nsga2_*.yaml):
   llm:
     models:
-      warmstart_agent: "anthropic/claude-opus-4-5-20250929"
+      warmstart_agent: "anthropic/claude-opus-4-7"
       supervisor_agent: "openai/gpt-5"
     temperature:
-      warmstart_agent: 0.7
+      warmstart_agent: 1.0       # Anthropic adaptive thinking 要求 temperature=1.0
       supervisor_agent: 0.4
-    thinking_budget:           # optional, for Anthropic / Gemini 3+
-      warmstart_agent: 8192
-    reasoning_effort:          # optional, for OpenAI reasoning models
-      supervisor_agent: "high"
+    reasoning_effort:            # 统一用 reasoning_effort 控制 Anthropic + OpenAI
+      warmstart_agent: "xhigh"   # Anthropic Opus 4.7: low/medium/high/xhigh/max
+      supervisor_agent: "high"   # OpenAI: low/medium/high
+    thinking_budget:             # 仅 Gemini 3+ 用 (Gemini 原生 budget_tokens 概念)
+      scientist_stage_a: 8192
     cost_log_path: "outputs/.../metadata/llm_cost_log.jsonl"  # optional
-    max_tokens: 8192
-    request_timeout: 180
+    max_tokens: 20000            # Anthropic adaptive: max_tokens 含 thinking+text 总量
+    request_timeout: 360
     max_retries: 3
 """
 
@@ -232,12 +235,14 @@ class LLMClient:
                 }
         elif provider == "anthropic":
             kwargs["temperature"] = float(temp)
-            tb = self._thinking_budget_map.get(role)
-            if tb is not None:
-                kwargs["thinking"] = {
-                    "type": "enabled",
-                    "budget_tokens": int(tb),
-                }
+            # Anthropic Opus 4.7+ 只支持 adaptive thinking, 不再接受 budget_tokens.
+            # LiteLLM 自动把 reasoning_effort 翻译成 thinking={"type":"adaptive"} +
+            # output_config={"effort":...} (per Anthropic Effort Parameter docs).
+            # 对老模型 (Opus 4.5 及以前) 这条路径不再用 budget_tokens, 因为我们
+            # v4 全栈用 Opus 4.7. 如果将来需要兼容老 Anthropic 模型, 可在此加分支.
+            eff = self._reasoning_effort_map.get(role)
+            if eff is not None:
+                kwargs["reasoning_effort"] = str(eff)
         elif provider == "openai":
             kwargs["temperature"] = float(temp)
             eff = self._reasoning_effort_map.get(role)
