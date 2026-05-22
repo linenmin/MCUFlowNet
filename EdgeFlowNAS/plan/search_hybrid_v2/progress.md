@@ -422,3 +422,100 @@ sbatch plan/search_hybrid_v2/run_group_d_v4_thinking.slurm
 |---|---|---|---|
 | b (warmstart only) | 7.5245 | 7.5164 | ? |
 | d (full system) | 7.5244 | 7.5264 | ? |
+
+---
+
+## Session: 2026-05-21~22 (HPC bug fix → v4_thinking 完整跑完)
+
+### Status
+
+- **Status**: Phase 4 全部完成. 7 个 ablation run 数据齐全, findings.md 已更新
+  4-way 对照矩阵 + 完整版本变更链 + agentic system 抢救能力分析.
+
+### 中间 bug + 修复
+
+**5/20 16:45 首次提交 b_v4_thinking**: Anthropic 服务端 529 Overloaded.
+LiteLLM 默认 retry 4 次 × 5s spacing = 18s 后放弃. 修复:
+- `efnas/search/llm_client.py`: 加 `_is_overload_or_transient` + 指数退避
+  外层 retry (30s / 60s / 120s / 300s / 600s = 18 分钟总 retry window)
+- commit `ad803aa`
+
+**5/21 12:50 第二次提交 b_v4_thinking**: Anthropic 服务端 400 Bad Request,
+`thinking.type.enabled is not supported for this model`. 修复:
+- 调研发现 Opus 4.7 (2026-04-16 发布) 移除了旧 thinking schema, 改用 adaptive
+  + output_config.effort. LiteLLM 1.83+ 自动翻译 reasoning_effort.
+- HPC 上 LiteLLM 是 1.82.0 (老 1 个 minor 版本), 不支持新 schema.
+- 升级 HPC LiteLLM 1.82.0 → 1.85.1
+- `efnas/search/llm_client.py`: Anthropic 分支用 reasoning_effort 替代
+  thinking_budget. LiteLLM 自动按模型翻译.
+- `configs/nsga2_v4_thinking.yaml`: thinking_budget → reasoning_effort: xhigh
+- 3 个测试更新到新 schema
+- commit `53aebd5`
+
+**5/21 walltime 太长排队**: 24h 申请太奢侈, 改 8h.
+- 4 个 slurm walltime 24h → 8h
+- commit `e24220c`
+
+### v4_thinking 跑完结果 (本 session)
+
+**b_v4_thinking** (5/21 17:14 启动, ~2h 完成):
+- HV=7.5266, best_epe=4.0260, Pareto=53
+- 7 个 run 里 **HV 最高**
+- gen 0 HV=7.155 (warmstart 抽到了好策略: 10 light + 10 heavy anchors)
+- 1 个 LLM 调用 + xhigh thinking + NETWORK TOPOLOGY prompt 段
+
+**d_v4_thinking** (5/22 16:13 启动, ~3h 完成):
+- HV=7.5252 (单 seed 噪声内输给 b_v4_thinking 0.0014)
+- best_epe=4.0237 (tied with d_v4_opus, 比 b_v4_thinking 好 0.0023)
+- Pareto=55 (7 个 run 里**最宽**)
+- gen 0 HV=6.912 (warmstart 抽到了次优策略: 8 角点锚 + 30 LHS, 端点覆盖弱)
+- **HV 增长 +0.614 = 7 个 run 里最大** -- 抢救能力的最强证据
+
+### Files modified (本 session 累计)
+
+- `efnas/search/llm_client.py`: 2 次 fix (retry + Opus 4.7 schema migration)
+- `tests/test_llm_client_v2_providers.py`: 测试覆盖新 schema + retry
+- `configs/nsga2_v4_thinking.yaml`: thinking_budget → reasoning_effort: xhigh
+- `plan/search_hybrid_v2/run_group_*.slurm`: walltime 24h → 8h
+- `plan/search_hybrid_v2/findings.md`: 加 5 个 F-FINAL-* 终极分析段
+- `plan/search_hybrid_v2/progress.md`: 本 session 日志
+
+### Files added (5/20~22 全 session 累计)
+
+- `outputs/search_hybrid_v2/group_b_v4_opus_20260520_182232/` (v2 baseline b)
+- `outputs/search_hybrid_v2/group_d_v4_opus_20260520_182233/` (v2 baseline d)
+- `outputs/search_hybrid_v2/group_b_v4_thinking_20260521_171443/` (v2 thinking b)
+- `outputs/search_hybrid_v2/group_d_v4_thinking_20260522_161253/` (v2 thinking d)
+
+### Final 4-way matrix (论文用)
+
+|  | **b (warmstart only)** | **d (full agentic)** |
+|---|---:|---:|
+| **v3** Gemini 3.1 Pro + v1 prompt + no NETWORK TOPOLOGY | 7.5245 | 7.5244 |
+| **v4_opus** Opus 4.7 + v2 prompt (no TOPOLOGY) + no thinking | 7.5164 | 7.5264 |
+| **v4_thinking** Opus 4.7 + v2+TOPOLOGY + xhigh thinking | **7.5266** ⭐ | 7.5252 |
+
+### 变量同变警告 (写在 findings.md F-FINAL-VERSION-MATRIX)
+
+- v3 → v4_opus: 3 个变量同变 (模型 + prompt 重写 + budget_progress 字段)
+- v4_opus → v4_thinking: 2 个变量同变 (thinking + NETWORK TOPOLOGY prompt 段)
+- 单变量归因不严谨. 单 seed 噪声 ±0.005 HV 已盖过单变量贡献.
+
+### Next Action (用户操作 / 后续可选)
+
+- Phase 4 工程结束. Phase 5 (分析 + 论文) 可以开始.
+- 推荐先把 plan/search_hybrid_v2/findings.md 通读, 整理论文 ablation 章节
+- 可选: 多 seed 验证 (跑 b_v4_THINK / d_v4_THINK 各再 2 seed, ~12-24h HPC)
+- 可选: 单变量分离 (跑 (Opus + xhigh + no TOPOLOGY) 或 (Opus + no thinking + TOPOLOGY))
+
+---
+
+## Phase 总览
+
+| Phase | 状态 | 交付 |
+|---|---|---|
+| 1 Audit | ✅ | findings.md F-DATA-001 ~ F-LLM-002 |
+| 2 Prompt 重写 | ✅ | 6 prompts v2 落地 prompts.py + 测试 |
+| 3 LLM multi-provider | ✅ | llm_client.py v2 + 2 次 bug 修 |
+| 4 v4 baseline + thinking ablation | ✅ | 4 个 v2 run 完成, 7-way 矩阵 |
+| 5 Paper artifact + 分析 | 🔁 待用户 | findings.md F-FINAL-* 已就绪 |

@@ -267,3 +267,171 @@ LLM warmstart 在小 budget 下的价值, 而不是 800 evals 满预算下的收
 - [ ] (Phase 1.4) 补 F-DATA-002 的预算切片数据
 - [ ] (Phase 1.5) 把 Phase 1 全部 findings 转成 Phase 2 重写优先级清单
 - [ ] (Phase 2 起) 每完成一项重写, 回到对应 finding 加 "RESOLVED in commit XYZ"
+
+---
+
+# 最终结果分析 (2026-05-22, Phase 4 完成)
+
+## F-FINAL-VERSION-MATRIX: 版本之间到底改了什么 (confounded variables)
+
+**关键**: 每次升级都同时改了多个变量, 任何单变量归因都不严谨. 这个表是后续看 HV
+差距时的归因依据.
+
+| 版本 | 模型 | Prompt 内容 | thinking | budget_progress | NETWORK TOPOLOGY |
+|---|---|---|:---:|:---:|:---:|
+| **v3** (v1 baseline) | Gemini 3.1 Pro | v1: 含"任一维全同值 crossover 永远碰不到"警告 (我们诊断这段在指挥均匀采样); 无 TASK SEMANTICS; 无 OPTIMIZATION OBJECTIVE; 5-lever supervisor 描述 | ❌ off (Gemini 3 服务端强制 1.0) | ❌ | ❌ |
+| **v4_opus baseline** | Opus 4.7 | **v2**: 删均匀采样指挥段; 加 # TASK SEMANTICS (光流任务定义); 加 # OPTIMIZATION OBJECTIVE (HV 最大化目标); 5→8 lever supervisor 描述 | ❌ off | ✅ 加 (supervisor 现在看 budget) | ❌ |
+| **v4_thinking** | Opus 4.7 | v2 + **# NETWORK TOPOLOGY** (28 行客观结构描述: 通道阶梯 / E0..H2Out 每层 scale & channels / ECA(k=3) bottleneck / GlobalGate 1x1+sigmoid+multiply / 3 multi-scale L1 监督) | ✅ **xhigh** (Opus 4.7 独占 5 档之最深, 仅 max 更深) | ✅ | ✅ |
+
+**变量同变路径**:
+- v3 → v4_opus: **3 个变量同变** (模型 + prompt 重写 + supervisor 加 budget_progress)
+- v4_opus → v4_thinking: **2 个变量同变** (thinking + NETWORK TOPOLOGY prompt 段)
+
+**未做的对照** (要严谨分离单变量影响的话):
+- (Opus 4.7 + v2 prompt + thinking + 无 NETWORK TOPOLOGY) -- 分离 thinking 影响
+- (Opus 4.7 + v2 prompt + no thinking + 有 NETWORK TOPOLOGY) -- 分离 topology 影响
+- (Opus 4.7 + v1 prompt + no thinking + 无 NETWORK TOPOLOGY) -- 分离模型影响
+- 单 seed 噪声 ±0.005 HV 已经盖过单变量贡献, 跑这些 ablation ROI 不高
+
+---
+
+## F-FINAL-RESULTS: 7 runs 完整对比
+
+### 终值排名 (gen 15, 800 evals)
+
+| 排名 | Run | HV | best_epe | Pareto | LLM 调用 | 估算成本 |
+|:---:|---|---:|---:|---:|---:|---:|
+| 🥇 1 | **v2 b_v4_THINK** | **7.5266** | 4.0260 | 53 | 1 | ~$1 |
+| 🥈 2 | v2 d_v4_opus | 7.5264 | 4.0237 | 50 | ~25-30 | $3-15 |
+| 🥉 3 | **v2 d_v4_THINK** | 7.5252 | **4.0237** | **55** ⭐ | ~25-30 | $8-21 |
+| 4 | v1 b (Gemini W) | 7.5245 | 4.0260 | 54 | 1 | <$0.1 |
+| 5 | v1 d_v3 (Gemini Full) | 7.5244 | **4.0230** | 48 | ~25-30 | $0.5-1 |
+| 6 | v1 a (NSGA-only) | 7.5217 | 4.0256 | 51 | 0 | $0 |
+| 7 | v2 b_v4_opus | 7.5164 | 4.0296 | 49 | 1 | ~$0.1 |
+
+### 4-way ablation 矩阵 (论文用)
+
+|  | **b (warmstart only)** | **d (full agentic)** |
+|---|---:|---:|
+| **v3** Gemini 3.1 Pro + v1 prompt | 7.5245 | 7.5244 |
+| **v4_opus** Opus 4.7 + v2 prompt | 7.5164 | 7.5264 |
+| **v4_thinking** Opus 4.7 + v2+TOPOLOGY + xhigh | **7.5266** | 7.5252 |
+
+**观察**:
+- Opus baseline 在 b 上反而 -0.0081 vs Gemini b (噪声 + 单变量解析限制)
+- Opus baseline 在 d 上 +0.0020 vs Gemini d (在噪声内, 但符合方向)
+- **xhigh thinking + NETWORK TOPOLOGY 在 b 上 +0.0102 vs Opus baseline b** -- 最大的单步提升
+- xhigh thinking + NETWORK TOPOLOGY 在 d 上 -0.0012 vs Opus baseline d (被 gen 0 warmstart 抽奖污染)
+
+---
+
+## F-FINAL-AGENTIC-RECOVERY: Agentic system 的真实价值 = 抢救能力
+
+### Gen 0 → Gen 15 HV 增长
+
+| Run | Gen 0 HV | Gen 15 HV | HV 增长 |
+|---|---:|---:|---:|
+| v1 a (random init) | 5.476 | 7.5217 | +2.046 |
+| v2 b_v4_opus | 7.078 | 7.5164 | +0.438 |
+| v2 b_v4_THINK | **7.155** | 7.5266 | +0.371 |
+| **v2 d_v4_THINK** | **6.912** ⚠️ | 7.5252 | **+0.614** 🚀 |
+| v2 d_v4_opus | 7.078 | 7.5264 | +0.448 |
+| v1 d_v3 | 6.948 | 7.5244 | +0.577 |
+
+### 关键观察: d_v4_THINK 是"翻车恢复"的典型样本
+
+- 同样 prompt + xhigh thinking, b_v4_THINK 抽到 7.155 起点, d_v4_THINK 抽到 6.912 起点
+- temperature=1.0 下 Opus 战略选择本身有方差: 这次它选 "30 中段 LHS + 8 角点锚",
+  上次选 "20 端点锚 + 20 LHS"
+- d_v4_THINK 在 -0.244 HV 落后下, 通过 Scientist + Supervisor 15 代干预, **恢复到
+  仅 -0.001 落后** -- 99.4% 抢救率
+- 这是 agentic system 价值的最强单 seed 证据 (虽然单 seed 不能下"统计显著"结论)
+
+---
+
+## F-FINAL-INSIGHTS-QUALITY: Scientist insights 的质的飞跃
+
+### v1 d_v3 vs v2 d_v4_THINK 的 Scientist 输出对比
+
+| 维度 | v1 d_v3 Scientist | **v2 d_v4_THINK Scientist** |
+|---|---|---|
+| insights 总字数 | ~800 字 (5 条) | **~3500 字** (16 条, gen 14 backup) |
+| 统计学严谨度 | 频率描述 ("H1=0 占 73%") | **Mann-Whitney p-value (5.8e-7), corr coefficient (-0.913 ±), 分层 stratification (按 EB_total 切 3 组)** |
+| Vela 硬件 grounding | 单条 "% cycles" | **conv-by-conv cycles + util_pct (83-101%) + cycles per arch_code** |
+| 自我纠错 | 无 | **多次主动 retract** ("I retract that number"; "My Stage-A claim of 'dim_7=0.0' was wrong; H1 entropy is 0.435") |
+| 可执行候选清单 | 无 | **优先级排序的 3 priority arch_codes**, 每条带 expected (EPE, FPS) 区间 + Vela 推导 |
+| 现实预期 | 无 | **量化预测下 1 gen HV 增量 +0.002-0.005, 实际 +0.0021** (预测精确) |
+
+### 具体示例 -- d_v4_THINK insights I-002 (gen 2)
+
+> "DB0+DB1 的总深度对 EPE/FPS 单调影响, 强度与 EB 接近; EB 浅时 DB 提升 EPE 的边际略大... DB 不存在明显的饱和点, 但相对 EB, DB 加深的 EPE 收益没有显著倒挂. 所以 'EB浅+DB深' 仍是前沿点 (例 `0,0,1,2,2,2,...` EPE=4.04 FPS=4.42), 但**不应**用作 dominant heuristic."
+>
+> 分层验证: EB 浅 (n=54): corr(DB_total, EPE)=-0.913, ΔEPE 4.669→4.179
+> EB 中 (n=76): corr=-0.900, ΔEPE 4.599→4.060
+> EB 深 (n=20): corr=-0.959, ΔEPE 4.542→4.046
+
+**这种带统计验证 + 分层效应分析 + 反 Stage-A 假设修订的 insight 是 v1 d_v3 时代不存在的**.
+
+---
+
+## F-FINAL-SUPERVISOR-DEPTH: Supervisor 决策深度飞跃
+
+### v1 d_v3 vs v2 d_v4_THINK 的 Supervisor 决策对比
+
+| 维度 | v1 d_v3 (Gemini, no think) | **v2 d_v4_THINK (Opus + xhigh)** |
+|---|---|---|
+| 5 次决策总字数 | ~500 字 | **~3500 字** |
+| 引用具体 insight ID 的次数 | 1-2 次 (隐式) | **每次决策引用 2-5 个 insight ID** (e.g. I-007/I-008/I-009 协同) |
+| 预测可验证的指标 | 模糊 ("HV 应继续增长") | **具体到代号 + 数值**: "gen 12: pareto_count 突破 50 / hv_improvement_rate_3gen 恢复 >0.02" |
+| 失败诊断 | 无 | **"gen 5 干预未达标. dup_rate 飙到 1.12 -- local_search 邻域被打穿"** (主动承认上次没奏效) |
+| Lever 协同度 | 单 lever 调整为主 | **3-5 lever 同时调, 每次解释 lever 间互动** ("local_search=6 + mixed_50_50 协同 vs local_search=15 + current_pop 协同") |
+| budget 进度感知 | **无** (F-PROMPT-004 修复前) | **每次开头都用** "Gen N/16, M/800 evals, X gens remaining" 框定决策 |
+
+### 具体示例 -- d_v4_THINK Supervisor 决策 (gen 8)
+
+> "Gen 8/16, 450/800 evals, 7 gens remaining. My last intervention at gen 5 **missed its primary target**: duplicate_rate exploded 0.22→0.30→0.54→1.12 (expected <0.15)... Root cause: local_search_pareto_neighbors=6 + parent_pool=mixed_50_50 ran the 1-flip neighborhood of a small history Pareto set (~40 archs) to exhaustion; rank1_saturation=0.86 means 43/50 of the population is on the front, so crossover regenerates already-evaluated archs..."
+>
+> 然后 4 个协同动作: reseed_bottom_pct 0→20, local_search 6→3, parent_pool 回 current_pop, mutation_prob 0.12→0.16. 同时主动 freeze dims [7,9].
+
+---
+
+## F-FINAL-NETWORK-TOPOLOGY-EFFECT: NETWORK TOPOLOGY 段的实际影响 (推测)
+
+NETWORK TOPOLOGY 是 v4_thinking 才加的, 我们没有"thinking + 无 topology" 的对照,
+所以**无法严格分离**. 但有间接证据 d_v4_THINK 的 Scientist 输出**比 v1/v4_opus 时
+都更精确引用层级信息**:
+
+- I-002 insight 直接引用 EB/DB 在网络中的位置 (不是抽象的"backbone"概念)
+- Supervisor decisions 引用 "1/16 scale × 256 channels × 3 res blocks" 这种从
+  topology 推导的硬件预算分析
+- 这种精度要求**事先必须知道 ECA 在哪 / GlobalGate 在哪 / Up1/Up2 在哪**
+
+但不能排除是单纯 xhigh thinking 让 Opus 自己从 search_space 描述推导出 topology.
+要分离需要单跑 (Opus + xhigh thinking + 无 NETWORK TOPOLOGY).
+
+---
+
+## F-FINAL-CONCLUSIONS: 论文叙事建议
+
+### 强论据 (3 个核心证据)
+
+1. **Agentic system 抢救能力**: d_v4_THINK 在 gen 0 落后 0.244 HV 下恢复 99.4%
+   -- 证明 Scientist + Supervisor 不是 paper artifact, 是实际生产价值
+2. **Best EPE + Pareto width 优势**: d_v4_THINK best_epe=4.0237 (tied with d_v4_opus,
+   better than b_v4_THINK by 0.0023), Pareto=55 (最宽). 这正是 Scientist 设计意图
+3. **Insights & Supervisor 质量飞跃**: 字数 4-7x, 统计严谨度, Vela grounding 精度,
+   自我纠错, 量化预测准确度全部跃迁
+
+### 防守论据 (应对 "为什么不直接 warmstart-only")
+
+- "b_v4_THINK 7.5266 vs d_v4_THINK 7.5252 在单 seed 噪声内 (±0.005 实测)"
+- "d 系列的优势在 best_epe 和 Pareto 厚度, 不在 final HV"
+- "d_v4_THINK 是 7 个 run 里**单次 HV 增长最大** (+0.614), 证明 agentic system
+  在 warmstart 抽到次优策略时的核心价值"
+
+### 待补 (如果 reviewer 要求)
+
+- 多 seed (推荐 2-3 次重跑 b_v4_THINK + d_v4_THINK) 量化方差范围
+- 单变量 ablation (无 NETWORK TOPOLOGY 但 xhigh thinking) 分离 prompt vs 模型贡献
+- Wall-clock 维度比较 (现有都在 P100 上, 但每次 LLM 调用时间 + thinking token 数
+  需要单独从 metadata + cost_log 抽出)

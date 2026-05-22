@@ -13,7 +13,20 @@ GPT-5 / 其他) 是否能在**相同 800 evals 预算下**把最终 HV 提到 7.
 
 ## Current Phase
 
-Phase 2 — Prompt / Agent 重写 (in_progress; 6 个 prompt 草稿已定稿, 待落地到 prompts.py)
+Phase 5 — Paper artifact + 多 seed 验证 (待用户决策启动)
+Phase 1-4 全部完成: 6 prompts v2 + LLMClient multi-provider + Opus 4.7 adaptive
+thinking + 4 个 v2 run 数据齐. 7-way 对照矩阵 + 完整版本变更链已写到 findings.md
+末尾 F-FINAL-* 区段.
+
+### 关键结果速览
+
+| Run | HV | best_epe | Pareto | 备注 |
+|---|---:|---:|---:|---|
+| v2 b_v4_THINK | **7.5266** ⭐ | 4.0260 | 53 | 单点 HV 冠军, 仅 1 LLM 调用 |
+| v2 d_v4_opus | 7.5264 | 4.0237 | 50 | 无 thinking baseline |
+| v2 d_v4_THINK | 7.5252 | **4.0237** | **55** ⭐ | HV 抢救能力最强 (+0.614) |
+| v1 d_v3 | 7.5244 | **4.0230** | 48 | v1 baseline |
+| v1 a (NSGA-only) | 7.5217 | 4.0256 | 51 | random init baseline |
 
 ## Phases Overview
 
