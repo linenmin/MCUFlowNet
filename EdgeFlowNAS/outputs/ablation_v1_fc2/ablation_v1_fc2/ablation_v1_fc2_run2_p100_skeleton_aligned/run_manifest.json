@@ -1,0 +1,89 @@
+{
+  "variants": [
+    {
+      "name": "edgeflownet_bilinear_gate4x",
+      "upsample_mode": "bilinear",
+      "bottleneck_eca": false,
+      "gate_4x": true
+    }
+  ],
+  "resume_signature": {
+    "variants": [
+      {
+        "name": "edgeflownet_bilinear_gate4x",
+        "upsample_mode": "bilinear",
+        "bottleneck_eca": false,
+        "gate_4x": true
+      }
+    ],
+    "dataset": "FC2",
+    "input_height": 352,
+    "input_width": 480,
+    "flow_channels": 2,
+    "batch_size": 32,
+    "micro_batch_size": 32,
+    "num_epochs": 400,
+    "lr": 0.0001,
+    "lr_min": 1e-06,
+    "grad_clip_global_norm": 200.0,
+    "eval_every_epoch": 5
+  },
+  "config": {
+    "runtime": {
+      "experiment_name": "ablation_v1_fc2_run2_p100_skeleton_aligned",
+      "output_root": "outputs/ablation_v1_fc2",
+      "seed": 42
+    },
+    "variants": [
+      {
+        "name": "edgeflownet_bilinear_gate4x",
+        "upsample_mode": "bilinear",
+        "bottleneck_eca": false,
+        "gate_4x": true
+      }
+    ],
+    "train": {
+      "gpu_device": 0,
+      "num_epochs": 400,
+      "batch_size": 32,
+      "micro_batch_size": 32,
+      "lr": 0.0001,
+      "lr_min": 1e-06,
+      "weight_decay": 0.0,
+      "grad_clip_global_norm": 200.0,
+      "train_sampling_mode": "shuffle_no_replacement",
+      "train_crop_mode": "random",
+      "early_stop_patience": 20,
+      "early_stop_min_delta": 0.0001
+    },
+    "data": {
+      "dataset": "FC2",
+      "base_path": "../",
+      "train_dir": "Datasets/FlyingChairs2/train",
+      "val_dir": "Datasets/FlyingChairs2/val",
+      "input_height": 352,
+      "input_width": 480,
+      "flow_channels": 2,
+      "fc2_num_workers": 8,
+      "fc2_eval_num_workers": 4
+    },
+    "eval": {
+      "eval_every_epoch": 5,
+      "eval_batches": 0,
+      "sintel": {
+        "dataset_root": "../Datasets/Sintel",
+        "sintel_list": "EdgeFlowNet/code/dataset_paths/MPI_Sintel_Final_train_list.txt",
+        "patch_size": "416,1024",
+        "ckpt_name": "sintel_best",
+        "max_samples": null
+      }
+    },
+    "checkpoint": {
+      "load_checkpoint": false,
+      "resume_experiment_name": "",
+      "resume_ckpt_name": "last",
+      "init_mode": "none"
+    }
+  },
+  "git_commit": "32453e02c715bd84069815892883c301ecf41b64"
+}

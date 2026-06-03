@@ -1,0 +1,6 @@
+{
+  "name": "edgeflownet_bilinear",
+  "upsample_mode": "bilinear",
+  "bottleneck_eca": false,
+  "gate_4x": false
+}

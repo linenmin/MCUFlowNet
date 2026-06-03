@@ -82,7 +82,7 @@ def LossMultiscaleUncertainity(Label1PH, prVal, Args):
             lossOpticalAccum = loss_scale*lossOpticali
 
             prLogVarAccum = prVali[...,Args.NumOut:]
-            lossUnc = tf.reduce_mean((1/tf.math.softplus(prLogVarAccum + Eps))*tf.abs(prValAccum - Labeli)) + tf.reduce_mean(tf.math.softplus(prLogVarAccum))
+            lossUnc = tf.reduce_mean((1/tf.maximum(tf.math.softplus(prLogVarAccum + Eps), Eps))*tf.abs(prValAccum - Labeli)) + tf.reduce_mean(tf.math.softplus(prLogVarAccum))
 
             lossUncAccum = loss_scale*lossUnc
             continue
@@ -96,7 +96,7 @@ def LossMultiscaleUncertainity(Label1PH, prVal, Args):
 
         prLogVarAccum = tf.compat.v1.image.resize(prLogVarAccum, [prVali.shape[1], prVali.shape[2]])
         prLogVarAccum += prVali[...,Args.NumOut:]
-        lossUnc = tf.reduce_mean((1/tf.math.softplus(prLogVarAccum + Eps))*tf.abs(prValAccum - Labeli)) + tf.reduce_mean(tf.math.softplus(prLogVarAccum))
+        lossUnc = tf.reduce_mean((1/tf.maximum(tf.math.softplus(prLogVarAccum + Eps), Eps))*tf.abs(prValAccum - Labeli)) + tf.reduce_mean(tf.math.softplus(prLogVarAccum))
         lossUncAccum += loss_scale*lossUnc
 
     lossPhoto = lossOpticalAccum + lossUncAccum
@@ -140,7 +140,7 @@ def LossMB(Label1PH, LabelMB01PH, prVal, Args):
             lossOpticalAccum = loss_scale*lossOpticali
 
             prLogVarAccum = prVali[...,Args.NumOut:2*Args.NumOut]
-            lossUnc = tf.reduce_mean((1/tf.math.softplus(prLogVarAccum + Eps))*tf.abs(prValAccum - Labeli)) + tf.reduce_mean(tf.math.softplus(prLogVarAccum))
+            lossUnc = tf.reduce_mean((1/tf.maximum(tf.math.softplus(prLogVarAccum + Eps), Eps))*tf.abs(prValAccum - Labeli)) + tf.reduce_mean(tf.math.softplus(prLogVarAccum))
             lossUncAccum = loss_scale*lossUnc
 
             prMBAccum = prVali[..., 2*Args.NumOut:]
@@ -157,7 +157,7 @@ def LossMB(Label1PH, LabelMB01PH, prVal, Args):
 
         prLogVarAccum = tf.compat.v1.image.resize(prLogVarAccum, [prVali.shape[1], prVali.shape[2]])
         prLogVarAccum += prVali[...,Args.NumOut:2*Args.NumOut]
-        lossUnc = tf.reduce_mean((1/tf.math.softplus(prLogVarAccum + Eps))*tf.abs(prValAccum - Labeli)) + tf.reduce_mean(tf.math.softplus(prLogVarAccum))
+        lossUnc = tf.reduce_mean((1/tf.maximum(tf.math.softplus(prLogVarAccum + Eps), Eps))*tf.abs(prValAccum - Labeli)) + tf.reduce_mean(tf.math.softplus(prLogVarAccum))
         lossUncAccum += loss_scale*lossUnc
 
         prMBAccum = tf.compat.v1.image.resize(prMBAccum, [prVali.shape[1], prVali.shape[2]])
@@ -278,7 +278,7 @@ def Loss(I1PH, I2PH, Label1PH, Label2PH, prVal, Args):
             Eps = 1e-3
             # prLogvar is linear in this case not logrithmic
             # lossUnc = tf.abs(prDisparity - Label1PH) + tf.reduce_mean(tf.math.softplus(prLogvar)) Try this!
-            lossUnc = tf.reduce_mean((1/tf.math.softplus(prLogvar + Eps))*tf.abs(prDisparity - Label1PH)) + tf.reduce_mean(tf.math.softplus(prLogvar))
+            lossUnc = tf.reduce_mean((1/tf.maximum(tf.math.softplus(prLogvar + Eps), Eps))*tf.abs(prDisparity - Label1PH)) + tf.reduce_mean(tf.math.softplus(prLogvar))
             # gives Inf
             # lossUnc = tf.reduce_mean((1/tf.math.softplus(prLogvar + Eps))*tf.abs(prDisparity - Label1PH)) + tf.reduce_mean(tf.math.sigmoid(prLogvar)) gives large values of prDisparity at 1e4 range
             # lossUnc = tf.reduce_mean((1/tf.math.sigmoid(prLogvar + Eps))*tf.abs(prDisparity - Label1PH)) + tf.reduce_mean(tf.math.sigmoid(prLogvar))
@@ -286,4 +286,3 @@ def Loss(I1PH, I2PH, Label1PH, Label2PH, prVal, Args):
         return lossUnc + lossReg
     else:
         return lossPhoto + lossReg 
-

@@ -1,0 +1,29 @@
+{
+  "stage": "ft3d",
+  "experiment_name": "retrain_v3_ft3d_run1",
+  "created_at": "2026-05-06T21:00:21.800113Z",
+  "candidates_csv": "EdgeFlowNAS/configs/retrain_candidates.csv",
+  "gpu_devices": [
+    "0",
+    "1",
+    "2"
+  ],
+  "max_workers": 3,
+  "candidates": [
+    {
+      "model_name": "v3_acc",
+      "arch_code": "0,1,2,2,2,2,0,0,0,0,1",
+      "role": "strongest_predicted_accuracy"
+    },
+    {
+      "model_name": "v3_efn_fps",
+      "arch_code": "2,0,0,2,2,1,0,0,0,0,0",
+      "role": "edgeflownet_fps_match"
+    },
+    {
+      "model_name": "v3_light",
+      "arch_code": "0,0,0,0,0,0,0,0,0,0,0",
+      "role": "lightest_pareto_endpoint"
+    }
+  ]
+}

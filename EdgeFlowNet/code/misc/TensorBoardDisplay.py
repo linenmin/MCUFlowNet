@@ -50,9 +50,19 @@ def AccumPreds(prVals):
     
     return prValAccum
 
-def TensorBoard(loss, I1PH, I2PH, prVal, Label1PH, Label2PH, Args):
+def SummaryFinite(T):
+    return tf.where(tf.math.is_finite(T), T, tf.zeros_like(T))
+
+def TensorBoard(loss, I1PH, I2PH, prVal, Label1PH, Label2PH, Args, summary_level='full'):
+    summary_level = str(summary_level).lower()
     # Create a summary to monitor loss tensor    
     tf.compat.v1.summary.scalar('LossEveryIter', loss)
+
+    if summary_level == 'scalar':
+        return tf.compat.v1.summary.merge_all()
+
+    if summary_level != 'full':
+        print(f"WARNING: unknown summary_level='{summary_level}', falling back to 'full'.")
 
 
     tf.compat.v1.summary.image('I1Patch', I1PH[:,:,:,0:3], max_outputs=1)
@@ -124,15 +134,17 @@ def TensorBoard(loss, I1PH, I2PH, prVal, Label1PH, Label2PH, Args):
         # Softplus
         if (Args.NetworkName == 'Network.MultiScaleResNet' or Args.NetworkName == "Network.MultiScaleMBResNet"):
             prVal = AccumPreds(prVal)
-        tf.compat.v1.summary.image('ScaleX', tf.clip_by_value(1/tf.math.softplus(prVal[:,:,:,2:3] + Eps), -MaxVal, MaxVal), max_outputs=1)
-        tf.compat.v1.summary.image('ScaleY', tf.clip_by_value(1/tf.math.softplus(prVal[:,:,:,3:4] + Eps), -MaxVal, MaxVal), max_outputs=1)
-        tf.compat.v1.summary.histogram('Scale', tf.clip_by_value(1/tf.math.softplus(prVal + Eps), -MaxVal, MaxVal))
-        tf.compat.v1.summary.histogram('prValHist', prVal[:,:,:,0:2])
+        prValSummary = SummaryFinite(prVal)
+        scaleDen = tf.maximum(tf.math.softplus(prValSummary + Eps), Eps)
+        tf.compat.v1.summary.image('ScaleX', tf.clip_by_value(1/scaleDen[:,:,:,2:3], -MaxVal, MaxVal), max_outputs=1)
+        tf.compat.v1.summary.image('ScaleY', tf.clip_by_value(1/scaleDen[:,:,:,3:4], -MaxVal, MaxVal), max_outputs=1)
+        tf.compat.v1.summary.histogram('Scale', tf.clip_by_value(1/scaleDen, -MaxVal, MaxVal))
+        tf.compat.v1.summary.histogram('prValHist', prValSummary[:,:,:,0:2])
     else:
         if Args.NetworkName == "Network.MultiScaleResNet" or (Args.NetworkName == "Network.MultiScaleMBResNet"):
-            tf.compat.v1.summary.histogram('prValHist', prVal[-1])
+            tf.compat.v1.summary.histogram('prValHist', SummaryFinite(prVal[-1]))
         else:
-            tf.compat.v1.summary.histogram('prValHist', prVal)
+            tf.compat.v1.summary.histogram('prValHist', SummaryFinite(prVal))
     # Merge all summaries into a single operation
     MergedSummaryOP = tf.compat.v1.summary.merge_all()
     return MergedSummaryOP
@@ -191,7 +203,7 @@ def PrettyPrint(Args, NumParams, NumFlops, ModelSize, VN, OverideKbInput=False):
         #     RunCommand.write('Logs are saved in: {}\n'.format(Args.LogsPath))
         #     RunCommand.write('Images used for Training are in: {}\n'.format(Args.BasePath))
         # cprint('Log written in {}'.format(FileName), 'yellow')
-        FileName = Args.CheckPointPath + 'RunCommand.md'
+        FileName = os.path.join(Args.CheckPointPath, 'RunCommand.md')
         with open(FileName, 'w+') as RunCommand:
             RunCommand.write('\n\n')
             RunCommand.write('{}\n'.format(datetime.now()))

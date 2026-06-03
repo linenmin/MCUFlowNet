@@ -1,0 +1,16 @@
+{
+  "epoch": 131,
+  "global_step": 72836,
+  "best_epe": {
+    "edgeflownet_bilinear_eca": 3.0031901001930237
+  },
+  "best_sintel_epe": {
+    "edgeflownet_bilinear_eca": 5.377943992614746
+  },
+  "best_mean_epe": 3.0031901001930237,
+  "no_improve_evals": 3,
+  "dataset": "FC2",
+  "model_names": [
+    "edgeflownet_bilinear_eca"
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "timestamp": "2026-05-21T17:15:38.404203",
+  "llm_model": "anthropic/claude-opus-4-7",
+  "requested_count": 50,
+  "returned_count": 50,
+  "valid_count": 50,
+  "invalid_count": 0,
+  "duplicate_within_batch": 0,
+  "unique_valid_count": 50,
+  "per_dim_entropy": [
+    1.092019,
+    1.095782,
+    1.092019,
+    1.095782,
+    1.090908,
+    1.092019,
+    0.693147,
+    0.692347,
+    0.693147,
+    0.692347,
+    0.693147
+  ],
+  "rationale": "50 个种子按三层混合策略构造, 目标是给 NSGA-II 一个跨整个 (EPE, FPS) 前沿的均匀启动: (a) 10 个 'light anchors' 围绕全 0 基线 (浅 backbone + 3x3 头), 用于压低延迟、占领 high-FPS 端; (b) 10 个 'heavy anchors' 围绕全 2/全 1 基线 (Deep3 + 5x5 头), 用于压低 EPE、占领 low-EPE 端; 每个 anchor 簇通过单维扰动覆盖 6 个 backbone 维 + 头维, 这样 crossover 一上来就能把 'depth 重要性 vs 头 kernel 重要性' 解耦; (c) 10 个 mid-balanced (Deep2 + 混合头) 填充前沿中段; (d) 20 个 Latin-hypercube 风格的对角/反对角/随机混合点, 显式打破前 6 位与后 5 位的相关性, 让早期 non-dominated sort 拿到足够 spread 形成 crowding distance 梯度. 所有 50 条互异, 前 6 位 ∈ {0,1,2}, 后 5 位 ∈ {0,1}."
+}

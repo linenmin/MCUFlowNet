@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+
+# Secrets / local config
+*.local
+
+# Model weights (hosted on Google Drive — see README "Pretrained weights")
+*.ckpt
+*.ckpt.*
+checkpoint
+*.h5
+*.pth
+*.pt
+*.tflite
+*.onnx
+
+# Large training artifacts / logs (curated results are committed explicitly)
+*.log
+events.out.tfevents.*
+**/launcher_logs/
+**/tensorboard/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Pretrained weights staging (upload to Google Drive; never commit)
+release_weights/

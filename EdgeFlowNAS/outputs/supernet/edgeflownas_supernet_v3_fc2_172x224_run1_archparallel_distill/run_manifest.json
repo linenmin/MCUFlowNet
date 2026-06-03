@@ -1,0 +1,85 @@
+{
+  "created_at": "2026-04-27T19:10:09.945637Z",
+  "manifest_type": "run_manifest",
+  "experiment_name": "edgeflownas_supernet_v3_fc2_172x224_run1_archparallel_distill",
+  "git_commit": "2ccee133616585c9bfb1d070dc5438c18ae3571e",
+  "config_hash": "8956babb5a8f31e3a6e3d1e6887361e0b9ec64a81a2546589f85f8ef31c9a367",
+  "resume_signature": {
+    "dataset": "FC2",
+    "input_shape": [
+      172,
+      224
+    ],
+    "flow_channels": 2,
+    "supernet_mode": "balanced_irregular_fairness",
+    "uncertainty_type": "LinearSoftplus",
+    "distill_enabled": true,
+    "distill_teacher_type": "edgeflownet",
+    "distill_lambda": 1.0,
+    "multi_gpu_mode": "arch_parallel",
+    "arch_semantics_version": "supernet_v3_mixed_11d_light_to_heavy_fixed_bilinear_bneckeca_gate4x",
+    "network": "MultiScaleResNet_supernet_v3",
+    "backbone": "bilinear_bottleneck_eca_gate4x",
+    "block_names": [
+      "E0",
+      "E1",
+      "EB0",
+      "EB1",
+      "DB0",
+      "DB1",
+      "H0Out",
+      "H1",
+      "H1Out",
+      "H2",
+      "H2Out"
+    ],
+    "block_choice_counts": [
+      3,
+      3,
+      3,
+      3,
+      3,
+      3,
+      2,
+      2,
+      2,
+      2,
+      2
+    ],
+    "init_neurons": 32,
+    "expansion_factor": 2.0,
+    "multiscale_outputs": 3
+  },
+  "train_snapshot": {
+    "num_epochs": 200,
+    "epoch_mode": "full_pass",
+    "steps_per_epoch": 50,
+    "train_sampling_mode": "shuffle_no_replacement",
+    "batch_size": 32,
+    "micro_batch_size": 32,
+    "lr": 0.0001,
+    "lr_schedule": "cosine",
+    "grad_clip_global_norm": 200.0,
+    "multi_gpu_mode": "arch_parallel",
+    "gpu_devices": "0,1,2"
+  },
+  "eval_snapshot": {
+    "eval_every_epoch": 5,
+    "eval_pool_size": 12,
+    "bn_recal_batches": 32,
+    "eval_batches_per_arch": 16
+  },
+  "checkpoint_snapshot": {
+    "load_checkpoint": false,
+    "resume_experiment_name": ""
+  },
+  "data_snapshot": {
+    "dataset": "FC2",
+    "base_path": "../",
+    "train_dir": "Datasets/FlyingChairs2/train",
+    "val_dir": "Datasets/FlyingChairs2/val",
+    "fc2_num_workers": 12,
+    "fc2_eval_num_workers": 2,
+    "prefetch_batches": 2
+  }
+}

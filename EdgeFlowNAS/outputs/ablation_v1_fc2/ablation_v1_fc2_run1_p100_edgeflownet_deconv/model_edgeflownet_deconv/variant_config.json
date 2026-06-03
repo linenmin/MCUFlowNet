@@ -1,0 +1,6 @@
+{
+  "name": "edgeflownet_deconv",
+  "upsample_mode": "deconv",
+  "bottleneck_eca": false,
+  "gate_4x": false
+}

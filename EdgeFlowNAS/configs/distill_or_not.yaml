@@ -1,0 +1,48 @@
+runtime:
+  experiment_name: "distill_or_not_fc2_short_run1"
+  output_root: "outputs/distill_or_not_fc2_short"
+  seed: 42
+
+model_name: "candidate"
+arch_code: "0,0,0,2,2,0,0,0,1,0,0"
+
+train:
+  gpu_device: 0
+  num_epochs: 50
+  batch_size: 32
+  micro_batch_size: 32
+  lr: 1.0e-4
+  lr_min: 1.0e-6
+  optimizer: "adam"
+  lr_schedule: "cosine"
+  weight_decay: 4.0e-5
+  grad_clip_global_norm: 200.0
+
+data:
+  dataset: "FC2"
+  base_path: "../"
+  train_dir: "Datasets/FlyingChairs2/train"
+  val_dir: "Datasets/FlyingChairs2/val"
+  input_height: 172
+  input_width: 224
+  flow_channels: 2
+  fc2_num_workers: 4
+  fc2_eval_num_workers: 2
+  prefetch_batches: 2
+  eval_prefetch_batches: 0
+
+eval:
+  eval_every_epoch: 1
+  eval_batches: 0
+  sintel:
+    dataset_root: "../Datasets/Sintel"
+    sintel_list: "EdgeFlowNet/code/dataset_paths/MPI_Sintel_Final_train_list.txt"
+    patch_size: "416,1024"
+    eval_every_epoch: 5
+    max_samples:
+    ckpt_name: "sintel_best"
+
+checkpoint:
+  load_checkpoint: false
+  resume_experiment_name: ""
+  resume_ckpt_name: "last"

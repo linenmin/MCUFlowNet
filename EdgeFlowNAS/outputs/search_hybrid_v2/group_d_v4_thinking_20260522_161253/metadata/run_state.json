@@ -1,0 +1,12 @@
+{
+  "current_epoch": null,
+  "phase": "idle",
+  "agent_a_result": null,
+  "candidates": [],
+  "new_archs": [],
+  "duplicates": 0,
+  "rule_rejected": 0,
+  "map_done": false,
+  "reduce_done": false,
+  "last_yield_info": ""
+}

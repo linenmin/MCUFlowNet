@@ -1,0 +1,16 @@
+{
+  "epoch": 163,
+  "global_step": 90628,
+  "best_epe": {
+    "edgeflownet_deconv": 3.066555416584015
+  },
+  "best_sintel_epe": {
+    "edgeflownet_deconv": 5.665528774261475
+  },
+  "best_mean_epe": 3.066555416584015,
+  "no_improve_evals": 0,
+  "dataset": "FC2",
+  "model_names": [
+    "edgeflownet_deconv"
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "epoch": 50,
+  "global_step": 63000,
+  "best_val_epe": 2.000338511617203,
+  "best_sintel_epe": 5.581857204437256,
+  "model_name": "v3_light",
+  "arch_code": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "dataset": "FT3D"
+}

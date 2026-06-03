@@ -10,6 +10,8 @@ import glob
 import re
 import misc.ImageUtils as iu
 import random
+import queue
+import threading
 from skimage import data, exposure, img_as_float
 import matplotlib.pyplot as plt
 from misc.MiscUtils import *
@@ -36,8 +38,70 @@ from misc.TensorBoardDisplay import TensorBoard,PrettyPrint
 # Don't generate pyc codes
 sys.dont_write_bytecode = True
 
+# Allow importing modules outside code/, e.g. sramTest.network.*
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+if PROJECT_ROOT not in sys.path:
+    sys.path.append(PROJECT_ROOT)
+
 # Disable Eager Execution to use TF1 code in TF2
 tf.compat.v1.disable_eager_execution()
+
+# Effective training architecture defaults (kept explicit for manifest/matching)
+DEFAULT_INIT_NEURONS = 32
+DEFAULT_NUM_SUBBLOCKS = 2
+DEFAULT_EXPANSION_FACTOR = 2.0
+DEFAULT_UNCERTAINTY_TYPE = "LinearSoftplus"
+
+
+class BatchPrefetcher:
+    def __init__(self, batch_generator, args, prefetch_batches):
+        self.batch_generator = batch_generator
+        self.args = args
+        self.prefetch_batches = max(0, int(prefetch_batches))
+        self.enabled = self.prefetch_batches > 0
+        self._error = None
+        self._stop_event = threading.Event()
+        self._queue = queue.Queue(maxsize=self.prefetch_batches) if self.enabled else None
+        self._worker_thread = (
+            threading.Thread(target=self._worker, name='batch-prefetcher', daemon=True)
+            if self.enabled else None
+        )
+
+    def start(self):
+        if self.enabled:
+            self._worker_thread.start()
+
+    def _worker(self):
+        try:
+            while not self._stop_event.is_set():
+                batch = self.batch_generator.GenerateBatchTF(self.args)
+                while not self._stop_event.is_set():
+                    try:
+                        self._queue.put(batch, timeout=0.5)
+                        break
+                    except queue.Full:
+                        continue
+        except Exception as exc:
+            self._error = exc
+            self._stop_event.set()
+
+    def get_batch(self):
+        if not self.enabled:
+            return self.batch_generator.GenerateBatchTF(self.args)
+
+        while True:
+            if self._error is not None:
+                raise RuntimeError("Batch prefetch worker failed.") from self._error
+            try:
+                return self._queue.get(timeout=0.5)
+            except queue.Empty:
+                if self._stop_event.is_set() and self._queue.empty():
+                    raise RuntimeError("Batch prefetcher stopped before delivering a batch.")
+
+    def stop(self):
+        self._stop_event.set()
+        if self.enabled and self._worker_thread.is_alive():
+            self._worker_thread.join(timeout=5.0)
 
 
 @Scope
@@ -57,20 +121,25 @@ def TrainOperation(InputPH, I1PH, I2PH, Label1PH, Label2PH, args):
     ClassName = args.NetworkName.replace('Network.', '').split('Net')[0]+'Net'
     Network = getattr(args.Net, ClassName)
     VN = Network(InputPH = InputPH, 
-                InitNeurons = 32, 
-                NumSubBlocks = 2, 
+                InitNeurons = args.EffectiveInitNeurons, 
+                NumSubBlocks = args.EffectiveNumSubBlocks, 
                 Suffix = '', 
                 NumOut = args.NumOut, 
-                UncType = "LinearSoftplus", 
-                ExpansionFactor=2)
+                UncType = args.EffectiveUncertaintyType, 
+                ExpansionFactor=args.EffectiveExpansionFactor)
     prVal = VN.Network()
     loss = Loss(I1PH, I2PH, Label1PH, Label2PH, prVal, args)
     OptimizerUpdate = Optimizer(args.OptimizerParams, loss)
-    MergedSummaryOP = TensorBoard(loss, I1PH, I2PH, prVal, Label1PH, Label2PH, args)
+    MergedSummaryOP = TensorBoard(
+        loss, I1PH, I2PH, prVal, Label1PH, Label2PH, args, summary_level=args.summary_level
+    )
+    summary_every = max(1, int(args.summary_every))
+    summary_flush_every = max(1, int(args.summary_flush_every))
     Saver = tf.compat.v1.train.Saver()
     with tf.compat.v1.Session() as sess:       
         if args.LatestFile is not None:
-            Saver.restore(sess, args.CheckPointPath + args.LatestFile + '.ckpt')
+            restore_path = os.path.join(args.ResumeCheckPointPath, args.LatestFile + '.ckpt')
+            Saver.restore(sess, restore_path)
             # Extract only numbers from the name
             StartEpoch = int(''.join(c for c in args.LatestFile.split('a')[0] if c.isdigit())) + 1
             print('Loaded latest checkpoint with the name ' + args.LatestFile + '....')
@@ -84,46 +153,84 @@ def TrainOperation(InputPH, I1PH, I2PH, Label1PH, Label2PH, args):
         args.Augmentations = 'None'
 
         NumParams = tu.FindNumParams(1)
-        NumFlops = tu.FindNumFlops(sess, 1)
+        if args.skip_model_profile:
+            NumFlops = -1
+            print('Skipping FLOPs profiling (--skip_model_profile=1).')
+        else:
+            NumFlops = tu.FindNumFlops(sess, 1)
         ModelSize = tu.CalculateModelSize(1)
 
         PrettyPrint(args, NumParams, NumFlops, ModelSize, VN, OverideKbInput=True)
-        Writer = tf.compat.v1.summary.FileWriter(args.LogsPath, graph=tf.compat.v1.get_default_graph())
+        if args.LatestFile is not None:
+            # 断点续训：不传 graph，避免创建包含冗余 graph 的新 event 文件
+            Writer = tf.compat.v1.summary.FileWriter(args.LogsPath)
+        else:
+            # 新训练：写入 graph 定义
+            Writer = tf.compat.v1.summary.FileWriter(args.LogsPath, graph=tf.compat.v1.get_default_graph())
 
         if args.SaveTestModel:
-            SaveName =  args.CheckPointPath + str(0) + 'a' + str(0) + 'model.ckpt'
+            SaveName = os.path.join(args.CheckPointPath, str(0) + 'a' + str(0) + 'model.ckpt')
             Saver.save(sess,  save_path=SaveName)
             print(SaveName + ' Model Saved...')
             exit(0)
 
-        for Epochs in tqdm(range(StartEpoch, args.NumEpochs)):
-            NumIterationsPerEpoch = int(args.NumTrainSamples/args.MiniBatchSize/args.DivTrain)
-            for PerEpochCounter in tqdm(range(NumIterationsPerEpoch)):
-                IBatch, P1Batch, P2Batch, Label1Batch, Label2Batch = bg.GenerateBatchTF(args)
-                
-                FeedDict = {VN.InputPH: IBatch, 
-                            I1PH: P1Batch, 
-                            I2PH: P2Batch, 
-                            Label1PH: Label1Batch, 
-                            Label2PH: Label2Batch}
-                _, _, Summary = sess.run([OptimizerUpdate, loss, MergedSummaryOP], feed_dict=FeedDict)
+        prefetcher = BatchPrefetcher(bg, args, args.prefetch_batches)
+        if prefetcher.enabled:
+            print(f'Batch prefetch enabled with queue size {prefetcher.prefetch_batches}.')
+        prefetcher.start()
 
-                # Tensorboard
-                Writer.add_summary(Summary, Epochs*NumIterationsPerEpoch + PerEpochCounter)
-                Writer.flush()
+        try:
+            for Epochs in tqdm(range(StartEpoch, args.NumEpochs)):
+                NumIterationsPerEpoch = int(args.NumTrainSamples/args.MiniBatchSize/args.DivTrain)
+                for PerEpochCounter in tqdm(range(NumIterationsPerEpoch)):
+                    IBatch, P1Batch, P2Batch, Label1Batch, Label2Batch = prefetcher.get_batch()
+                    
+                    FeedDict = {VN.InputPH: IBatch, 
+                                I1PH: P1Batch, 
+                                I2PH: P2Batch, 
+                                Label1PH: Label1Batch, 
+                                Label2PH: Label2Batch}
+                    GlobalStep = Epochs*NumIterationsPerEpoch + PerEpochCounter
+                    if GlobalStep % summary_every == 0:
+                        _, _, Summary = sess.run([OptimizerUpdate, loss, MergedSummaryOP], feed_dict=FeedDict)
+                        Writer.add_summary(Summary, GlobalStep)
+                        if GlobalStep % summary_flush_every == 0:
+                            Writer.flush()
+                    else:
+                        sess.run([OptimizerUpdate, loss], feed_dict=FeedDict)
 
-                if PerEpochCounter % args.SaveCheckPoint == 0:
-                    SaveName =  args.CheckPointPath + str(Epochs) + 'a' + str(PerEpochCounter) + 'model.ckpt'
-                    Saver.save(sess,  save_path=SaveName)
-                    print(SaveName + ' Model Saved...')
+                    if PerEpochCounter % args.SaveCheckPoint == 0:
+                        SaveName = os.path.join(args.CheckPointPath, str(Epochs) + 'a' + str(PerEpochCounter) + 'model.ckpt')
+                        Saver.save(sess,  save_path=SaveName)
+                        print(SaveName + ' Model Saved...')
 
-            SaveName = args.CheckPointPath + str(Epochs) + 'model.ckpt'
-            Saver.save(sess, save_path=SaveName)
-            print(SaveName + ' Model Saved...')
+                SaveName = os.path.join(args.CheckPointPath, str(Epochs) + 'model.ckpt')
+                Saver.save(sess, save_path=SaveName)
+                print(SaveName + ' Model Saved...')
+        finally:
+            prefetcher.stop()
+            Writer.flush()
+            Writer.close()
 
     PrettyPrint(args, NumParams, NumFlops, ModelSize, VN, OverideKbInput=True)
 
         
+def load_network_module(module_path):
+    expected_class = "MultiScaleResNet"
+    try:
+        module = importlib.import_module(module_path)
+    except Exception as exc:
+        print(f"ERROR: failed to import network module '{module_path}'.")
+        print(f"Expected class: '{expected_class}'")
+        print(f"Import error: {exc}")
+        raise SystemExit(1) from exc
+
+    if not hasattr(module, expected_class):
+        print(f"ERROR: module '{module_path}' does not define class '{expected_class}'.")
+        raise SystemExit(1)
+
+    return module
+
         
 def main():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -133,6 +240,7 @@ def main():
     parser.add_argument('--DivTrain', type=int, default=1, help='Factor to reduce Train data by per epoch')
     parser.add_argument('--MiniBatchSize', type=int, default=16, help='Size of the MiniBatch to use')
     parser.add_argument('--LoadCheckPoint', type=int, default=0, help='Load Model from latest Checkpoint from CheckPointPath?')
+    parser.add_argument('--ResumeExperimentFileName', default='', help='Experiment directory name to resume from under Checkpoints/')
     parser.add_argument('--ExpansionFactor', type=float, default=2, help='PathSizeChannels')
     parser.add_argument('--RemoveLogs', type=int, default=0, help='Delete log Files from ./Logs?')
     parser.add_argument('--LossFuncName', default='MultiscaleSL1-1', help='Choice of Loss functions, choose from SL2, PhotoL1, PhotoChab, PhotoRobust')
@@ -145,18 +253,56 @@ def main():
     parser.add_argument('--Suffix', default='', help='Suffix for Naming Network ')
     parser.add_argument('--Dataset', default='FC2', help='Dataset: FC2 for Flying Chairs 2 or FT3D for Flying Things 3D')
     parser.add_argument('--data_list', default='code/dataset_paths/MPI_Sintel_Final_train_list.txt', help='list of data')
+    parser.add_argument('--network_module', default='network.MultiScaleResNet',
+                        help='Python module path for the network (e.g. sramTest.network.MultiScaleResNet_bilinear)')
+    parser.add_argument('--fast_mode', action='store_true', help='Enable speed-oriented training defaults')
+    parser.add_argument('--summary_level', default='full', choices=['full', 'scalar'],
+                        help='TensorBoard summary verbosity')
+    parser.add_argument('--summary_every', type=int, default=1,
+                        help='Write TensorBoard summary every N global steps')
+    parser.add_argument('--summary_flush_every', type=int, default=1,
+                        help='Flush TensorBoard writer every N global steps')
+    parser.add_argument('--prefetch_batches', type=int, default=0,
+                        help='Number of CPU-prefetched batches, 0 disables prefetch')
+    parser.add_argument('--skip_model_profile', type=int, default=0, choices=[0, 1],
+                        help='Skip expensive FLOPs profiling at startup when set to 1')
     args = parser.parse_args()
+
+    def _arg_present(flag_name):
+        full_name = f'--{flag_name}'
+        return any(arg == full_name or arg.startswith(full_name + '=') for arg in sys.argv[1:])
+
+    if args.fast_mode:
+        if not _arg_present('summary_level'):
+            args.summary_level = 'scalar'
+        if not _arg_present('summary_every'):
+            args.summary_every = 100
+        if not _arg_present('summary_flush_every'):
+            args.summary_flush_every = 200
+        if not _arg_present('prefetch_batches'):
+            args.prefetch_batches = 8
+        if not _arg_present('skip_model_profile'):
+            args.skip_model_profile = 1
+
+    args.EffectiveInitNeurons = DEFAULT_INIT_NEURONS
+    args.EffectiveNumSubBlocks = DEFAULT_NUM_SUBBLOCKS
+    args.EffectiveExpansionFactor = DEFAULT_EXPANSION_FACTOR
+    args.EffectiveUncertaintyType = DEFAULT_UNCERTAINTY_TYPE
 
     
     tu.SetGPU(args.GPUDevice)
 
-    args.Net = importlib.import_module('network.MultiScaleResNet')
+    args.Net = load_network_module(args.network_module)
 
 
     if(args.RemoveLogs != 0):
         shutil.rmtree(os.getcwd() + os.sep + 'Logs' + os.sep)
 
     args = SetupAll(args)
+    if args.LoadCheckPoint == 1:
+        ValidateResumeManifest(args)
+    manifest_path = WriteRunManifest(args)
+    print(f"Run manifest written to: {manifest_path}")
 
         
     InputPH = tf.compat.v1.placeholder(tf.float32, shape=(args.MiniBatchSize, args.PatchSize[0], args.PatchSize[1], 2*args.PatchSize[2]), name='Input')
@@ -173,4 +319,3 @@ def main():
     
 if __name__ == '__main__':
     main()
-

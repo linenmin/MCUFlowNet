@@ -1,0 +1,16 @@
+{
+  "epoch": 134,
+  "global_step": 74504,
+  "best_epe": {
+    "edgeflownet_bilinear_eca_gate4x": 2.9876443207263947
+  },
+  "best_sintel_epe": {
+    "edgeflownet_bilinear_eca_gate4x": 5.369642734527588
+  },
+  "best_mean_epe": 2.9876443207263947,
+  "no_improve_evals": 0,
+  "dataset": "FC2",
+  "model_names": [
+    "edgeflownet_bilinear_eca_gate4x"
+  ]
+}

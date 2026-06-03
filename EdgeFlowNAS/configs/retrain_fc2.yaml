@@ -1,0 +1,54 @@
+runtime:
+  experiment_name: "retrain_v3_fc2_run1"
+  output_root: "outputs/retrain_v3_fc2"
+  seed: 42
+
+model_name: "v3_light"
+arch_code: "0,0,0,0,0,0,0,0,0,0,0"
+
+train:
+  gpu_device: 0
+  num_epochs: 400
+  batch_size: 32
+  micro_batch_size: 32
+  lr: 1.0e-4
+  lr_min: 1.0e-6
+  optimizer: "adam"
+  lr_schedule: "cosine"
+  weight_decay: 0.0
+  grad_clip_global_norm: 200.0
+  train_sampling_mode: "shuffle_no_replacement"
+  train_crop_mode: "random"
+  early_stop_patience: 0
+
+data:
+  dataset: "FC2"
+  base_path: "../"
+  train_dir: "Datasets/FlyingChairs2/train"
+  val_dir: "Datasets/FlyingChairs2/val"
+  input_height: 352
+  input_width: 480
+  flow_channels: 2
+  fc2_num_workers: 4
+  fc2_eval_num_workers: 1
+  prefetch_batches: 2
+  eval_prefetch_batches: 0
+
+eval:
+  eval_every_epoch: 1
+  eval_batches: 0
+  sintel:
+    dataset_root: "../Datasets/Sintel"
+    sintel_list: "EdgeFlowNet/code/dataset_paths/MPI_Sintel_Final_train_list.txt"
+    patch_size: "416,1024"
+    eval_every_epoch: 5
+    max_samples:
+    ckpt_name: "sintel_best"
+
+checkpoint:
+  load_checkpoint: false
+  resume_experiment_name: ""
+  resume_ckpt_name: "last"
+  init_mode: "none"
+  init_experiment_dir: ""
+  init_ckpt_name: "best"

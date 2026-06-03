@@ -1,0 +1,295 @@
+[
+  {
+    "generation": 2,
+    "timestamp": "2026-05-06T19:45:59.373454",
+    "before_state": {
+      "mutation_prob": 0.09090909090909091,
+      "crossover_prob": 0.9,
+      "tournament_size": 2,
+      "per_dim_mutation_multiplier": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "reseed_bottom_pct": 0,
+      "local_search_pareto_neighbors": 0,
+      "parent_pool_source": "current_pop",
+      "frozen_dims": []
+    },
+    "after_state": {
+      "mutation_prob": 0.09090909090909091,
+      "crossover_prob": 0.9,
+      "tournament_size": 2,
+      "per_dim_mutation_multiplier": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "reseed_bottom_pct": 0,
+      "local_search_pareto_neighbors": 0,
+      "parent_pool_source": "current_pop",
+      "frozen_dims": []
+    },
+    "applied": {},
+    "rejected": {},
+    "rationale": "Initial phase. Stagnation is low (2 generations). Pareto size is growing well (from 15 to 20). Gene entropy is high across most dimensions. No action needed.",
+    "expected_effect": "Maintain current exploration pace, expecting HV and Pareto count to increase gradually.",
+    "review_after_gen": 3
+  },
+  {
+    "generation": 5,
+    "timestamp": "2026-05-06T20:10:23.059171",
+    "before_state": {
+      "mutation_prob": 0.09090909090909091,
+      "crossover_prob": 0.9,
+      "tournament_size": 2,
+      "per_dim_mutation_multiplier": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "reseed_bottom_pct": 0,
+      "local_search_pareto_neighbors": 0,
+      "parent_pool_source": "current_pop",
+      "frozen_dims": []
+    },
+    "after_state": {
+      "mutation_prob": 0.09090909090909091,
+      "crossover_prob": 0.9,
+      "tournament_size": 2,
+      "per_dim_mutation_multiplier": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "reseed_bottom_pct": 0,
+      "local_search_pareto_neighbors": 5,
+      "parent_pool_source": "current_pop",
+      "frozen_dims": [
+        7
+      ]
+    },
+    "applied": {
+      "local_search_pareto_neighbors": 5,
+      "frozen_dims": [
+        7
+      ]
+    },
+    "rejected": {},
+    "rationale": "Duplicate rate has been steadily increasing, reaching 0.26 in epoch 5. Gene entropy for dimension 7 has collapsed to 0.0, indicating premature convergence or a strong preference in the current population. I will freeze dimension 7 to redirect the mutation budget to other dimensions. Additionally, enabling a small amount of local search will help refine the newly found high-accuracy regions (like the light stems mentioned in I-003) and improve Pareto exploitation.",
+    "expected_effect": "Duplicate rate should stabilize or decrease. HV should continue to improve as local search exploits the Pareto front, particularly exploring configurations around the light-stem architectures.",
+    "review_after_gen": 3
+  },
+  {
+    "generation": 8,
+    "timestamp": "2026-05-06T20:34:29.180549",
+    "before_state": {
+      "mutation_prob": 0.09090909090909091,
+      "crossover_prob": 0.9,
+      "tournament_size": 2,
+      "per_dim_mutation_multiplier": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "reseed_bottom_pct": 0,
+      "local_search_pareto_neighbors": 5,
+      "parent_pool_source": "current_pop",
+      "frozen_dims": [
+        7
+      ]
+    },
+    "after_state": {
+      "mutation_prob": 0.15,
+      "crossover_prob": 0.9,
+      "tournament_size": 2,
+      "per_dim_mutation_multiplier": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "reseed_bottom_pct": 30,
+      "local_search_pareto_neighbors": 5,
+      "parent_pool_source": "mixed_50_50",
+      "frozen_dims": [
+        7
+      ]
+    },
+    "applied": {
+      "mutation_prob": 0.15,
+      "reseed_bottom_pct": 30,
+      "parent_pool_source": "mixed_50_50"
+    },
+    "rejected": {},
+    "rationale": "The duplicate rate has skyrocketed to 74% (epoch 8) with a Rank-1 saturation of 0.78, indicating severe population collapse and stagnation around the deep decoder architectures (as noted in I-004). To break out of this extreme saturation and explore other trade-off regions, I am introducing a 30% random reseeding of the bottom population. Additionally, switching the parent pool to 'mixed_50_50' will inject more historical diversity into the mating pool, and increasing the global mutation probability will help the search escape the current local optima.",
+    "expected_effect": "The duplicate rate should drop significantly due to random reseeding and increased mutation. Gene entropy across lower dimensions should recover, and HV improvement should resume as new areas of the search space are explored.",
+    "review_after_gen": 3
+  },
+  {
+    "generation": 11,
+    "timestamp": "2026-05-06T20:58:44.540888",
+    "before_state": {
+      "mutation_prob": 0.15,
+      "crossover_prob": 0.9,
+      "tournament_size": 2,
+      "per_dim_mutation_multiplier": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "reseed_bottom_pct": 30,
+      "local_search_pareto_neighbors": 5,
+      "parent_pool_source": "mixed_50_50",
+      "frozen_dims": [
+        7
+      ]
+    },
+    "after_state": {
+      "mutation_prob": 0.15,
+      "crossover_prob": 0.9,
+      "tournament_size": 2,
+      "per_dim_mutation_multiplier": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "reseed_bottom_pct": 50,
+      "local_search_pareto_neighbors": 0,
+      "parent_pool_source": "mixed_50_50",
+      "frozen_dims": [
+        7
+      ]
+    },
+    "applied": {
+      "reseed_bottom_pct": 50,
+      "local_search_pareto_neighbors": 0
+    },
+    "rejected": {},
+    "rationale": "Despite the actions taken in epoch 8 (reseeding and mixed parent pool), the duplicate rate has continued to climb to an alarming 80% in epoch 11, with 40 out of 50 evaluations being duplicates. Rank-1 saturation is also very high at 0.88, and HV improvement has essentially flatlined (0.0036). The local search mechanism (currently set to 5) is likely causing the algorithm to repeatedly evaluate the immediate neighbors of the same dominant Pareto points, generating massive duplicates. I will disable local search to stop this redundant exploitation and further increase bottom reseeding to 50% to force exploration and restore population diversity.",
+    "expected_effect": "A sharp decrease in the duplicate rate and Rank-1 saturation, accompanied by a recovery in gene entropy across multiple dimensions as the algorithm shifts from redundant local exploitation back to global exploration.",
+    "review_after_gen": 3
+  },
+  {
+    "generation": 14,
+    "timestamp": "2026-05-06T21:22:34.840412",
+    "before_state": {
+      "mutation_prob": 0.15,
+      "crossover_prob": 0.9,
+      "tournament_size": 2,
+      "per_dim_mutation_multiplier": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "reseed_bottom_pct": 50,
+      "local_search_pareto_neighbors": 0,
+      "parent_pool_source": "mixed_50_50",
+      "frozen_dims": [
+        7
+      ]
+    },
+    "after_state": {
+      "mutation_prob": 0.15,
+      "crossover_prob": 0.9,
+      "tournament_size": 2,
+      "per_dim_mutation_multiplier": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "reseed_bottom_pct": 20,
+      "local_search_pareto_neighbors": 0,
+      "parent_pool_source": "mixed_50_50",
+      "frozen_dims": [
+        7
+      ]
+    },
+    "applied": {
+      "reseed_bottom_pct": 20
+    },
+    "rejected": {},
+    "rationale": "The previous aggressive reseeding (50%) and disabling of local search have successfully broken the stagnation. Duplicate rates dropped from 80% (Epoch 11) to 30% (Epoch 14), and HV is stable. The current setup is healthy, with backbone depths successfully driving the Pareto trade-off as observed in I-006. Dimension 7 remains frozen appropriately due to its confirmed convergence (I-005). Given the restored health and exploration, I will maintain the current state but slightly reduce the reseeding percentage from 50% to 20% to allow the algorithm to focus a bit more on evolving the newly discovered diverse points rather than excessively randomizing the population.",
+    "expected_effect": "Duplicate rates should remain in a healthy range (20-40%). HV improvement should continue gradually as the population evolves naturally with slightly less disruption from random reseeding.",
+    "review_after_gen": 3
+  }
+]

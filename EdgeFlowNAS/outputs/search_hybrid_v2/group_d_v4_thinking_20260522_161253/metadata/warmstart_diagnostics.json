@@ -1,0 +1,24 @@
+{
+  "timestamp": "2026-05-22T16:13:50.985883",
+  "llm_model": "anthropic/claude-opus-4-7",
+  "requested_count": 50,
+  "returned_count": 50,
+  "valid_count": 50,
+  "invalid_count": 0,
+  "duplicate_within_batch": 0,
+  "unique_valid_count": 50,
+  "per_dim_entropy": [
+    1.093493,
+    1.09821,
+    1.093493,
+    1.093493,
+    1.095782,
+    1.093493,
+    0.692347,
+    0.689944,
+    0.693147,
+    0.689944,
+    0.692347
+  ],
+  "rationale": "50 个种子按 3 层策略构造: (a) 8 个角点锚 — 覆盖 (min/max) × (stem/backbone/head) 极端组合, 提供 EPE↓ 与 FPS↑ 两端的早期信号; (b) 12 个语义化中间体 — 围绕'快速 stem (E1=2 dilated-stride2) + 浅 backbone'与'重 backbone + 大 head'分别打簇, 给 Pareto 前沿中段播种; (c) 30 个伪 Latin-hypercube 多样性样本 — 每个位置上 {0,1,2} 或 {0,1} 频次大致均衡, 保证 11 维各 marginal 均被覆盖, 避免初代基因池退化. 50 条互不重复, 占搜索空间 23328 中约 0.21%."
+}

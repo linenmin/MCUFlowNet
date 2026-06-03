@@ -1,0 +1,4 @@
+model_name,arch_code,gpu,status,returncode,started_at,finished_at,log_path
+v3_acc,"0,1,2,2,2,2,0,0,0,0,1",0,failed,-9,2026-05-06T21:00:21.803521Z,2026-05-08T01:35:14.616826Z,EdgeFlowNAS/outputs/retrain_v3_ft3d/retrain_v3_ft3d_run1/launcher_logs/v3_acc.log
+v3_efn_fps,"2,0,0,2,2,1,0,0,0,0,0",1,done,0,2026-05-06T21:00:21.806429Z,2026-05-08T21:28:16.635567Z,EdgeFlowNAS/outputs/retrain_v3_ft3d/retrain_v3_ft3d_run1/launcher_logs/v3_efn_fps.log
+v3_light,"0,0,0,0,0,0,0,0,0,0,0",2,done,0,2026-05-06T21:00:21.809490Z,2026-05-08T21:28:16.640342Z,EdgeFlowNAS/outputs/retrain_v3_ft3d/retrain_v3_ft3d_run1/launcher_logs/v3_light.log

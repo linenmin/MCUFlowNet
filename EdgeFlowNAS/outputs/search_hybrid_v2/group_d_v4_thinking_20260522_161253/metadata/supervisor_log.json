@@ -1,0 +1,353 @@
+[
+  {
+    "generation": 2,
+    "timestamp": "2026-05-22T16:42:02.735534",
+    "before_state": {
+      "mutation_prob": 0.09090909090909091,
+      "crossover_prob": 0.9,
+      "tournament_size": 2,
+      "per_dim_mutation_multiplier": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "reseed_bottom_pct": 0,
+      "local_search_pareto_neighbors": 0,
+      "parent_pool_source": "current_pop",
+      "frozen_dims": []
+    },
+    "after_state": {
+      "mutation_prob": 0.09090909090909091,
+      "crossover_prob": 0.9,
+      "tournament_size": 2,
+      "per_dim_mutation_multiplier": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "reseed_bottom_pct": 0,
+      "local_search_pareto_neighbors": 0,
+      "parent_pool_source": "current_pop",
+      "frozen_dims": []
+    },
+    "applied": {},
+    "rejected": {},
+    "rationale": "Gen 2/16, 150/800 evals — still in the exploration phase. All health indicators are green: HV is monotone increasing (6.91 → 7.13 → 7.29, no stagnation), pareto front grew 14→14→17, duplicate_rate=0.06 (very low), rank1_saturation 0.34 (healthy). On the entropy side, the dims that matter most per I-001/I-003 (backbone dims 2-5, DB0=F_epe=293 dominant) are still near-maximum entropy (0.98-1.06 of max 1.10). Dims that ARE collapsing — dim_7 (H1)=0.367 and dim_9 (H2)=0.279 — are collapsing toward 3x3, which is exactly the direction I-002 says is correct (5x5 heads cost ~1 FPS for ~0 EPE). So this is healthy convergence on a verified-null axis, not pathological. The Scientist's notes explicitly say to intervene 'if HV stalls in mid-FPS region' — HV is not stalled (hv_improvement_rate_3gen still null/positive). Any directional bias (per-dim multiplier toward backbone, frozen heads, local search around pareto) would be premature optimization at gen 2; standard NSGA-II is currently doing what insights would recommend on its own. No_change. Will recheck at gen 5 when 3-gen HV improvement rate becomes meaningful and we can see whether the EB0-shallow (I-004) and single-Deep2 high-FPS (I-006) pockets get organically discovered.",
+    "expected_effect": "By gen 5: HV continues climbing (>7.5), pareto_count grows past 20, hv_improvement_rate_3gen positive, duplicate_rate stays <0.15. Backbone dims (2-5) entropy should stay >0.85 while heads (7,9) continue legitimately collapsing toward 3x3. If by gen 5 HV stalls or the mid-FPS gap (currently FPS 7.21→8.45) doesn't shrink, I'll consider per-dim mutation bias on backbone + local_search around pareto neighbors to thicken I-004/I-006 pockets.",
+    "review_after_gen": 5
+  },
+  {
+    "generation": 5,
+    "timestamp": "2026-05-22T17:15:15.333416",
+    "before_state": {
+      "mutation_prob": 0.09090909090909091,
+      "crossover_prob": 0.9,
+      "tournament_size": 2,
+      "per_dim_mutation_multiplier": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "reseed_bottom_pct": 0,
+      "local_search_pareto_neighbors": 0,
+      "parent_pool_source": "current_pop",
+      "frozen_dims": []
+    },
+    "after_state": {
+      "mutation_prob": 0.12,
+      "crossover_prob": 0.9,
+      "tournament_size": 2,
+      "per_dim_mutation_multiplier": [
+        1.5,
+        1.5,
+        1.3,
+        1.0,
+        1.0,
+        1.0,
+        0.5,
+        0.2,
+        0.5,
+        0.2,
+        0.5
+      ],
+      "reseed_bottom_pct": 0,
+      "local_search_pareto_neighbors": 6,
+      "parent_pool_source": "mixed_50_50",
+      "frozen_dims": []
+    },
+    "applied": {
+      "mutation_prob": 0.12,
+      "per_dim_mutation_multiplier": [
+        1.5,
+        1.5,
+        1.3,
+        1.0,
+        1.0,
+        1.0,
+        0.5,
+        0.2,
+        0.5,
+        0.2,
+        0.5
+      ],
+      "local_search_pareto_neighbors": 6,
+      "parent_pool_source": "mixed_50_50"
+    },
+    "rejected": {},
+    "rationale": "Gen 5/16, 300/800 evals. Three converging warning signals justify intervention now: (1) HV improvement rate decaying 0.160→0.110→0.062, hv jumps from +0.16 per gen to +0.015 per gen (gen5 to gen4 delta only ~0.015); (2) both endpoints frozen — best_fps=9.141 for 5 gens (stagnation_best_fps=5), best_epe stuck 4.026→4.024; (3) duplicate_rate climbing 0.06→0.08→0.18→0.22 (3gen_avg 0.16), crossover is now regenerating already-evaluated archs. Meanwhile insights are clear about WHERE to push: I-007/I-008/I-009 all converge on 'reallocate from dense mid-front toward EPE-floor (1-bit perturbations of full-D3 seeds) and FPS>7.5 shoulder (single-Deep2 archs).' Four coordinated moves: (a) **local_search_pareto_neighbors=6** — 12% of offspring as 1-flip neighbors of current Pareto members directly executes I-007's 'small E0/E1/single-head-kernel perturbations around EPE-floor seeds' and I-006's targeted Deep2-placement probes. Highest expected leverage for endpoint breakthrough. (b) **mutation_prob 0.091→0.12** — modest global lift to attack the 0.22 duplicate rate and re-energize exploration. (c) **per_dim_multiplier** — boost stem dims 0,1 (entropy 0.50/0.73, I-003 calls them safe diversity-injection slots) and EB0=dim 2 (I-004's EB0-shallow pocket is still under-sampled); leave EB1/DB0/DB1 at 1.0 (DB0 entropy already at max 1.09, no need); strongly suppress head dims 7 and 9 to mult 0.2 (entropy already 0.10/0.23; I-002 verified zero EPE benefit at ~1 FPS cost — stop wasting flips re-injecting 5x5 here); modest suppression 0.5 on remaining head dims 6,8,10. Net effective per-dim rates: stem ~0.18, EB0 ~0.156, backbone 0.12, expensive heads 0.024 (effectively locked but reversible). (d) **parent_pool_source=mixed_50_50** — folds history's Pareto set into selection, free diversity injection that should also reduce duplicate offspring. Skipping reseed_bottom_pct (would dilute the surgical local_search push), tournament_size (rank1_saturation=0.74 already, more pressure hurts diversity), crossover_prob (0.9 is fine), frozen_dims (per-dim multiplier is the more graceful version of the same idea).",
+    "expected_effect": "By gen 8: (1) at least one endpoint moves — best_fps drops below 9.141 stagnation (single-Deep2 archs with k=0/1 should reach ~9.3-9.5) OR best_epe drops below 4.024 (1-flip neighbors of `0,1,2,2,2,2,0,0,0,1,0` could find a slightly better stem/head combo). (2) hv_improvement_rate_3gen recovers above 0.05 instead of continuing to decay toward 0. (3) duplicate_rate drops back below 0.15 (mixed parent pool + higher mutation_prob + local-search inject fresh genotypes). (4) gene_entropy for dims 0,1,2 partially recovers (>0.7 ternary), while dims 7,9 stay collapsed near 0.1-0.3 (intended). (5) pareto_count keeps growing past 45, with new members concentrated in EPE<4.10 or FPS>7.5 bands rather than mid-front. If endpoints remain frozen by gen 8 despite these moves, escalate with reseed_bottom_pct=10 and consider freezing dims 7,9 hard.",
+    "review_after_gen": 8
+  },
+  {
+    "generation": 8,
+    "timestamp": "2026-05-22T17:44:42.528938",
+    "before_state": {
+      "mutation_prob": 0.12,
+      "crossover_prob": 0.9,
+      "tournament_size": 2,
+      "per_dim_mutation_multiplier": [
+        1.5,
+        1.5,
+        1.3,
+        1.0,
+        1.0,
+        1.0,
+        0.5,
+        0.2,
+        0.5,
+        0.2,
+        0.5
+      ],
+      "reseed_bottom_pct": 0,
+      "local_search_pareto_neighbors": 6,
+      "parent_pool_source": "mixed_50_50",
+      "frozen_dims": []
+    },
+    "after_state": {
+      "mutation_prob": 0.16,
+      "crossover_prob": 0.9,
+      "tournament_size": 2,
+      "per_dim_mutation_multiplier": [
+        2.0,
+        1.8,
+        1.3,
+        1.0,
+        1.0,
+        1.0,
+        0.5,
+        0.2,
+        0.5,
+        0.2,
+        0.5
+      ],
+      "reseed_bottom_pct": 20,
+      "local_search_pareto_neighbors": 3,
+      "parent_pool_source": "current_pop",
+      "frozen_dims": [
+        7,
+        9
+      ]
+    },
+    "applied": {
+      "mutation_prob": 0.16,
+      "per_dim_mutation_multiplier": [
+        2.0,
+        1.8,
+        1.3,
+        1.0,
+        1.0,
+        1.0,
+        0.5,
+        0.2,
+        0.5,
+        0.2,
+        0.5
+      ],
+      "reseed_bottom_pct": 20,
+      "local_search_pareto_neighbors": 3,
+      "parent_pool_source": "current_pop",
+      "frozen_dims": [
+        7,
+        9
+      ]
+    },
+    "rejected": {},
+    "rationale": "Gen 8/16, 450/800 evals, 7 gens remaining. My last intervention at gen 5 missed its primary target: duplicate_rate exploded 0.22→0.30→0.54→1.12 (expected <0.15), and both endpoints stay frozen (best_fps=9.141 for 8 gens, best_epe=4.024 for 3 gens). HV improvement is now +0.011/gen — effectively flat. Root cause: local_search_pareto_neighbors=6 + parent_pool=mixed_50_50 ran the 1-flip neighborhood of a small history Pareto set (~40 archs) to exhaustion; rank1_saturation=0.86 means 43/50 of the population is on the front, so crossover regenerates already-evaluated archs. dim_0 (E0) entropy crashed to 0.098 despite multiplier=1.5 — the 1.5 boost wasn't enough against fixation pressure. Insights I-006/I-007/I-010 list specific HV-extending unsampled archs (e.g. `0,0,0,2,2,2,0,0,0,0,0`, `0,0,0,1,2,0,0,0,0,0,0`, E0=1/2 at k=4 floor) that 1-flip local search should have hit but evidently kept colliding with archive. Four corrective moves: (a) **reseed_bottom_pct 0→20** — 10 random archs/gen is drastic but justified: duplicate_rate=1.12 means we're already wasting >50% of evals on re-samples, so reallocating 20% to fresh genotypes is net-positive novelty. With only ~1.93% of space covered, random sampling still has decent hit rate. (b) **local_search_pareto_neighbors 6→3** — neighborhood is largely mapped; cut in half but keep some to still probe the unsampled k=4 / DB0-ladder neighbors insights flagged. (c) **parent_pool_source mixed_50_50→current_pop** — revert. History Pareto is now ~saturated in the parent pool and contributes mostly duplicates. Standard tournament on current_pop with fresh reseeds will produce more novel children. (d) **mutation_prob 0.12→0.16** — modest further boost; with E0 still collapsing, need more per-locus pressure. (e) **per_dim_multiplier**: boost dim 0 (E0) 1.5→2.0 and dim 1 (E1) 1.5→1.8 to directly counter the entropy collapse insights call out as premature; keep EB0 at 1.3 (I-004 pocket); leave backbone middles at 1.0; keep heads suppressed. Effective per-dim rates: E0=0.32, E1=0.29, EB0=0.21, EB1/DB0/DB1=0.16, suppressed heads=0.08. (f) **frozen_dims=[7,9]** — H1 and H2 entropy stuck at 0.098/0.17, verified null per I-002, multiplier already 0.2; freezing makes the budget reallocation explicit and saves a few flips. Reversible if needed. Skipping tournament_size (rank1_saturation 0.86 — more pressure would hurt) and crossover_prob (not the bottleneck).",
+    "expected_effect": "By gen 12: (1) duplicate_rate drops sharply, target <0.30 (from 1.12). The 10 reseeds/gen + frozen-head-budget redistributed to backbone/stem flips should restore novel offspring fraction above 70%. (2) gene_entropy_dim_0 recovers above 0.40 and dim_1 above 0.70 (random reseeds + 0.32 effective mutation rate on E0 will inject E0=1,2). (3) At least one HV-extending unsampled arch from insights gets hit: `0,0,0,2,2,2,0,0,0,0,0` (1-flip from a sampled k=4 sibling, should pop via local search) or an E0=1/2 k=4 variant (via reseed+mutation), giving best_epe<4.024 or new Pareto density at EPE 4.04-4.05 / FPS 4.3-4.7. (4) hv_improvement_rate_3gen recovers above 0.02 (vs current 0.011). (5) pareto_count keeps growing past 48. If duplicate_rate stays above 0.5 at gen 12, escalate reseed to 30 and bump mutation_prob to 0.20. If best_fps still 9.141 by gen 12, accept it as hardware ceiling for this skeleton and refocus all remaining levers on EPE-floor / mid-band thickening.",
+    "review_after_gen": 12
+  },
+  {
+    "generation": 11,
+    "timestamp": "2026-05-22T18:15:07.948392",
+    "before_state": {
+      "mutation_prob": 0.16,
+      "crossover_prob": 0.9,
+      "tournament_size": 2,
+      "per_dim_mutation_multiplier": [
+        2.0,
+        1.8,
+        1.3,
+        1.0,
+        1.0,
+        1.0,
+        0.5,
+        0.2,
+        0.5,
+        0.2,
+        0.5
+      ],
+      "reseed_bottom_pct": 20,
+      "local_search_pareto_neighbors": 3,
+      "parent_pool_source": "current_pop",
+      "frozen_dims": [
+        7,
+        9
+      ]
+    },
+    "after_state": {
+      "mutation_prob": 0.16,
+      "crossover_prob": 0.9,
+      "tournament_size": 2,
+      "per_dim_mutation_multiplier": [
+        2.0,
+        1.8,
+        1.3,
+        1.0,
+        1.0,
+        1.0,
+        0.8,
+        0.2,
+        0.8,
+        0.2,
+        0.8
+      ],
+      "reseed_bottom_pct": 10,
+      "local_search_pareto_neighbors": 8,
+      "parent_pool_source": "current_pop",
+      "frozen_dims": [
+        7,
+        9
+      ]
+    },
+    "applied": {
+      "per_dim_mutation_multiplier": [
+        2.0,
+        1.8,
+        1.3,
+        1.0,
+        1.0,
+        1.0,
+        0.8,
+        0.2,
+        0.8,
+        0.2,
+        0.8
+      ],
+      "reseed_bottom_pct": 10,
+      "local_search_pareto_neighbors": 8
+    },
+    "rejected": {},
+    "rationale": "Gen 11/16, 600/800 evals, 4 gens remaining. Gen 8 intervention worked partially: duplicate_rate trajectory 1.12→0.90→1.00→0.62 shows the reseed+freeze combo is dragging duplicates down, gene_entropy_dim_0 partially recovered 0.098→0.168, and the largest_fps_gap migrated favorably (8.29→7.03→6.62→7.03, with the canonical I-014 ladder rung 4.372/7.03 now sitting exactly at the right edge of the gen-11 gap). But HV is now functionally saturated: rate_3gen 0.011→0.005→0.003→0.004, pareto_count plateaued 43→44→46→46, both endpoints frozen 4 / 11 gens. Scientist's I-015 is concrete: three high-yield zones (FPS-endpoint head perms, DB0+DB1 shoulder rungs, EB0=Deep2 EPE-floor band), and crucially **the unsampled members are 1-flip neighbors of current Pareto entries** (e.g. `0,0,0,0,0,0,1,0,1,0,0` is 1-flip from `0,0,0,0,0,0,0,0,1,0,0`, `0,0,0,0,2,0,...` is 1-flip from existing DB1 ladder members). With rank1_saturation=0.92 the standard NSGA-II tournament has degenerated to crowding-distance-only selection and crossover keeps regenerating archive hits. Random reseeds at 20% have tiny chance of hitting the high-yield zones (zone 1 base `0,0,0,0,0,0,*` is 1/5832 of random space). **Three coordinated shifts**: (1) **local_search_pareto_neighbors 3→8** — by construction returns archive-dedup'd novel archs, and I-015's enumerated targets (25 unsampled FPS-endpoint head combos + (DB0,DB1)∈{(1,0),(1,1),(2,0)} cells thinly sampled at n=4-8) are exactly the top-crowding-distance Pareto 1-flips. This is the single highest-leverage move for the last 4 gens. (2) **reseed_bottom_pct 20→10** — frees 5 offspring/gen for the more targeted local_search; 5 random/gen still provides some unexpected-novelty insurance against premature collapse. Net directed-or-novel: 8+10=18/50 vs current 3+20=23, but quality is much higher since local_search hits I-015 targets directly. (3) **HxOut multipliers 0.5→0.8 on dims 6,8,10** — I-013 quantified HxOut flips at −0.58 to −0.71 FPS each (vs H1/H2's −1.18); these are the legitimate Pareto-extending discrete steps for thickening the FPS-endpoint cluster (~6 distinct archs currently). At 0.8×0.16=0.128 effective rate, mutation will produce more HxOut variants from FPS-cluster parents without overshooting. Keep frozen [7,9] (verified null per I-013 Vela grounding), keep mutation_prob=0.16 (duplicate rate still 0.62), keep E0/E1/EB0 boosts (E0 entropy 0.168 still under-recovered, I-012 EB0=Deep2 cheap-drop still has unsampled head perms). Skip tournament_size (rank1 already 0.92, more pressure useless), skip crossover_prob, skip parent_pool_source (gen-5 mixed_50_50 caused exhaustion — current_pop + local_search is the correct combo).",
+    "expected_effect": "By gen 14 (2 gens of data, last review before final gen): (1) hv_improvement_rate_3gen recovers above 0.008 (vs 0.004 at gen 11). 8 targeted local_search neighbors/gen × 2 gens = 16 archive-novel archs explicitly aimed at I-015 zones, of which I-014/I-013 predict ~5-8 will be Pareto-extending. (2) pareto_count grows past 50 (from 46), specifically with new density in the FPS 6.74→7.03 shoulder (DB0+DB1 ladder rungs filling) and the FPS>8.5 endpoint cluster (HxOut perm siblings). (3) largest_fps_gap below 0.25 (from 0.286); ideally a new rung appears in the 6.74→7.03 band reducing it to <0.20. (4) at least one of: best_epe drops below 4.024 (via E0/E1 stem mutation on EB0=Deep2 seeds) OR best_fps moves above 9.141 — note FPS endpoint may be hardware ceiling for this skeleton (insights consistent with this), so don't penalize if only EPE moves or only thickening happens. (5) duplicate_rate stays in 0.5-0.8 band (slightly worse than gen 11 acceptable; local_search compensates for reseed reduction and the remaining duplicates are now a saturation signal not pathology). (6) gene_entropy: dim 0 stays >0.15, HxOut dims 6/8/10 mildly increase from current 0.53-0.55 toward 0.65 reflecting endpoint-cluster exploration. If by gen 14 pareto_count is still ≤47 and HV rate <0.005, accept full HV saturation and last gen runs unchanged. If duplicate_rate jumps back above 0.9, the final-gen tweak would be local_search→12 / reseed→15.",
+    "review_after_gen": 14
+  },
+  {
+    "generation": 14,
+    "timestamp": "2026-05-22T18:43:41.483142",
+    "before_state": {
+      "mutation_prob": 0.16,
+      "crossover_prob": 0.9,
+      "tournament_size": 2,
+      "per_dim_mutation_multiplier": [
+        2.0,
+        1.8,
+        1.3,
+        1.0,
+        1.0,
+        1.0,
+        0.8,
+        0.2,
+        0.8,
+        0.2,
+        0.8
+      ],
+      "reseed_bottom_pct": 10,
+      "local_search_pareto_neighbors": 8,
+      "parent_pool_source": "current_pop",
+      "frozen_dims": [
+        7,
+        9
+      ]
+    },
+    "after_state": {
+      "mutation_prob": 0.16,
+      "crossover_prob": 0.9,
+      "tournament_size": 2,
+      "per_dim_mutation_multiplier": [
+        2.0,
+        1.8,
+        1.5,
+        1.5,
+        1.5,
+        1.5,
+        0.8,
+        0.2,
+        0.8,
+        0.2,
+        0.8
+      ],
+      "reseed_bottom_pct": 5,
+      "local_search_pareto_neighbors": 15,
+      "parent_pool_source": "current_pop",
+      "frozen_dims": [
+        7,
+        9
+      ]
+    },
+    "applied": {
+      "per_dim_mutation_multiplier": [
+        2.0,
+        1.8,
+        1.5,
+        1.5,
+        1.5,
+        1.5,
+        0.8,
+        0.2,
+        0.8,
+        0.2,
+        0.8
+      ],
+      "reseed_bottom_pct": 5,
+      "local_search_pareto_neighbors": 15
+    },
+    "rejected": {},
+    "rationale": "Gen 14/16, 750/800 used, 1 final gen (50 evals) remaining. The gen-11 intervention partially landed: pareto_count grew 46→53 (exceeded target of 50), HV 7.5194→7.5231 (+0.0037 over 3 gens vs my target +0.008), largest_fps_gap stable at 6.74→7.03. But duplicate_rate climbed 0.62→0.74→1.06→1.48 and rank1_saturation hit 1.0 — entire population is on PF, tournament has degenerated to pure crowding-distance, and crossover/mutation regenerate archive members ~75% of the time. With only one gen left, I-016 gives a concrete geometric target: FPS-shoulder gap 6.74→7.03 EPE 4.30–4.37, accessible via (DB0,DB1)∈{(1,1),(2,0)} cells crossed with EB0/EB1≠Deep1 — i.e. backbone-middle 1-flip neighbors of existing PF members at the gap edges, plus stem perturbations. I-013 confirms 'remaining gains come from backbone (dims 2–5) and stem (dims 0, 1) variation.' Three tightly-coupled final-gen moves: (1) **local_search_pareto_neighbors 8→15** — single highest-leverage knob. PF=53 members ranked by crowding distance puts the gap-edge points (high CD precisely because of the 6.74→7.03 gap) at the top of the queue; their 1-flip neighbors are by construction archive-deduped and include exactly the I-016 candidates (e.g. flip EB1 at the 4.37/7.03 anchor `0,0,0,0,1,1,0,0,0,0,0` → `0,0,0,1,1,1,0,0,0,0,0`; flip EB0 at the 4.306/6.357 anchor → `0,0,1,0,2,0,...`). 15 archs/50 = 30% of offspring directed at the gap. (2) **per_dim_mutation_multiplier**: boost EB1/DB0/DB1 (dims 3,4,5) from 1.0→1.5 to match EB0 (1.3→1.5). The (DB0,DB1) cell is the gap's defining coordinate and entropy is still 1.03–1.06 (room to move), but at multiplier=1.0 normal mutation produces too few flips on the bottleneck axis. Effective rates become E0=0.32, E1=0.29, EB0=EB1=DB0=DB1=0.24, expensive heads at 0.128, sum ≈2.16 expected flips/offspring — aggressive but warranted given saturation. (3) **reseed_bottom_pct 10→5** — at 3.22% space coverage random reseeds remain unlikely to hit the gap (the (1,1)/(2,0) cells × stem-Deep1 base are ~1/300 of random draws); reallocating 5 slots from random→local_search yields strictly more on-target archs. Keep mutation_prob=0.16 (duplicate pressure still requires it), frozen_dims=[7,9] (I-013 Vela-grounded null), crossover_prob=0.9, tournament_size=2 (rank1=1.0 already, more pressure pointless), parent_pool=current_pop (gen-5 mixed_50_50 caused archive exhaustion, current+local_search is the correct combo for last gen).",
+    "expected_effect": "Final gen (gen 15, evals 750→800): (1) HV adds +0.002–0.005 absolute (per I-016 realistic ceiling), driven by 1–3 new PF members landing in FPS 6.85–7.00 / EPE 4.30–4.40 — the I-016 shoulder gap. (2) pareto_count grows 53→55–58. (3) largest_fps_gap shrinks below 0.25 (from current 7.03−6.74=0.29) if at least one rung lands in the band. (4) Endpoints almost certainly stay frozen (best_fps=9.141 hardware ceiling per I-013, best_epe=4.024 stagnant 4 gens); not penalizing. (5) duplicate_rate may stay high (1.0–1.5) — accepted as saturation signal, since the 15 local_search slots produce archive-novel archs by construction regardless of duplicate fraction in the other 35. (6) gene_entropy on dims 2–5 holds ≥0.95; dims 0 (currently 0.17) may not recover meaningfully in just one gen, and that's fine — we've shifted budget to backbone for the gap. If post-gen-15 HV gain is <0.001, accept it as full saturation of the discrete 23,328-arch space given 3.22% coverage; the final PF is the deliverable.",
+    "review_after_gen": 15
+  }
+]

@@ -1,0 +1,18 @@
+{
+  "created_at": "2026-04-29T07:06:58.342239Z",
+  "experiment_name": "edgeflownas_supernet_v3_fc2_172x224_run1_archparallel_distill",
+  "seed": 42,
+  "git_commit": "2ccee133616585c9bfb1d070dc5438c18ae3571e",
+  "config_hash": "8956babb5a8f31e3a6e3d1e6887361e0b9ec64a81a2546589f85f8ef31c9a367",
+  "input_shape": [
+    172,
+    224
+  ],
+  "flow_channels": 2,
+  "optimizer": "adam",
+  "lr_schedule": "cosine",
+  "uncertainty_type": "LinearSoftplus",
+  "wd": 4e-05,
+  "grad_clip": 200.0,
+  "arch_semantics_version": "supernet_v3_mixed_11d_light_to_heavy_fixed_bilinear_bneckeca_gate4x"
+}

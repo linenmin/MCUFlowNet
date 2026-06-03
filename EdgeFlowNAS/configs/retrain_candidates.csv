@@ -1,0 +1,4 @@
+model_name,arch_code,role
+v3_acc,"0,1,2,2,2,2,0,0,0,0,1",strongest_predicted_accuracy
+v3_efn_fps,"2,0,0,2,2,1,0,0,0,0,0",edgeflownet_fps_match
+v3_light,"0,0,0,0,0,0,0,0,0,0,0",lightest_pareto_endpoint

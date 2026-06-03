@@ -1,0 +1,15 @@
+{
+  "current_epoch": null,
+  "phase": "idle",
+  "scientist_done": false,
+  "assumptions_evaluated": false,
+  "findings_revalidated": false,
+  "agent_a_result": null,
+  "candidates": [],
+  "new_archs": [],
+  "duplicates": 0,
+  "rule_rejected": 0,
+  "map_done": false,
+  "reduce_done": false,
+  "last_yield_info": ""
+}

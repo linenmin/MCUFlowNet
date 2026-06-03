@@ -1,0 +1,21 @@
+{
+  "epoch": 50,
+  "global_step": 63000,
+  "best_val_epe": 1.814733938109584,
+  "best_sintel_epe": 4.887857437133789,
+  "model_name": "v3_efn_fps",
+  "arch_code": [
+    2,
+    0,
+    0,
+    2,
+    2,
+    1,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "dataset": "FT3D"
+}
