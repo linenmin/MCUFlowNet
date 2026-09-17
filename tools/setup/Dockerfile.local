@@ -1,0 +1,11 @@
+FROM nvcr.io/nvidia/tensorflow:25.02-tf2-py3@sha256:c83b37d26f19ab00d8a13cf974edd079c3d099918ec3110c304a989d6e2f75d5
+ENV TF_USE_LEGACY_KERAS=1 PYTHONDONTWRITEBYTECODE=1
+# Preserve the NVIDIA TensorFlow build and its NumPy/SciPy dependencies.
+RUN printf 'numpy==1.26.4\nscipy==1.12.0\n' > /tmp/mcuflow-constraints.txt && \
+    python -m pip install --no-cache-dir -c /tmp/mcuflow-constraints.txt \
+      opencv-python-headless==4.11.0.86 scikit-image==0.24.0 \
+      matplotlib==3.9.2 pillow==11.1.0 && \
+    python -m pip freeze > /opt/mcuflownet-pip-freeze.txt
+WORKDIR /workspace
+ENTRYPOINT []
+CMD ["python", "--version"]

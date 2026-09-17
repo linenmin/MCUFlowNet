@@ -1,8 +1,29 @@
 # 本机开发准备：Windows + RTX 5060 Ti
 
-状态（2026-09-17）：代码已克隆并完成静态核查；经用户同意，已安装Git for Windows 2.55.0.windows.3及WSL 2.7.13.0，并启用VirtualMachinePlatform。Windows明确要求重启，Ubuntu发行版列表仍为空。Docker、TensorFlow和GPU/旧权重验收尚未完成。
+状态（2026-09-17）：Git、WSL2/Ubuntu24.04.5、Docker29.8.1、NVIDIA Container Toolkit1.20.0已经安装。最终镜像`mcuflownet-local:20260917`内Python3.12.3、NVIDIA TensorFlow2.17.0/CUDA12.8、tf-keras2.17.0；GPU算子、S/L各两次参数更新和少量FC2/Sintel数据读取通过。旧权重恢复和真实训练短跑待执行。
 
-下一步：保存工作并重启Windows；随后检查`wsl --list --verbose`，必要时继续`wsl --install -d Ubuntu-24.04 --no-launch --web-download`。确认Ubuntu可以启动和识别GPU后，再安装Docker及NVIDIA Container Toolkit，执行下文验收。不要把安装命令返回成功当作模型运行成功。
+## 平常如何运行
+
+在PowerShell进入本仓库，然后运行（路径是容器内路径）：
+
+```powershell
+cd C:/00Work/Code/MCUFlowNet
+./tools/setup/run-local.ps1 python --version
+./tools/setup/run-local.ps1 python tools/setup/check_tensorflow.py --device gpu --output /runs/my-env-check/gpu-check.json
+./tools/setup/run-local.ps1 python tools/setup/check_data.py --output /runs/my-env-check/data-check.json
+```
+
+`/workspace`对应本仓库，`/datasets`对应C:/00Work/Datasets且只读，`/runs`对应C:/00Work/Runs/MCUFlowNet。结果请写到`/runs/<实验编号>`，不要覆盖旧记录。启动器使用WSL root调用Docker，当前未创建普通Linux用户；无需运行Windows Conda激活命令。模型权重不在镜像内，后续单独准备。
+
+镜像配方在`tools/setup/Dockerfile.local`，固定NVIDIA基础镜像digest并保留原NumPy/SciPy。需要重建时：
+
+```powershell
+wsl -d Ubuntu-24.04 -u root -- docker build -f /mnt/c/00Work/Code/MCUFlowNet/tools/setup/Dockerfile.local -t mcuflownet-local:20260917 /mnt/c/00Work/Code/MCUFlowNet/tools/setup
+```
+
+安装脚本`tools/setup/install_wsl_docker.sh`记录Docker/NVIDIA官方APT源配置。它只供新环境准备；本机已安装，不需每次执行。基础镜像固定，额外依赖的实际完整版本另存wiki附件`本机环境核查-20260917/pip-freeze.txt`，以后重建仍需复核包清单。`pip check`本轮通过。
+
+本轮结果：`C:/00Work/Runs/MCUFlowNet/20260917-env01`；wiki附件另有小型JSON副本。随机输入误差没有科学比较意义。GPU日志包含NUMA、计时器和PTX特征提示，本轮检查通过，但尚未验证长时稳定性与性能。
 
 ## 先看目录
 
@@ -45,7 +66,7 @@ python tools/setup/audit_repositories.py --dev C:/00Work/Code/MCUFlowNet-dev --o
 
 HPC的`module load`是在加载管理员已经编译好的软件，再叠加`~/tf_work`里的包。它并不等于简单的`pip install tensorflow==2.15.1`；还需要导出实际Python版本、包清单和TensorFlow编译信息才能精确追溯。原来的`PYTHONPATH`命令依赖Python3.11目录，不能原样放到本机其他版本环境。
 
-1. **本机GPU环境，优先准备：** WSL2 + Ubuntu 24.04，随后在WSL中安装Docker Engine和NVIDIA Container Toolkit，先试官方`nvcr.io/nvidia/tensorflow:25.02-tf2-py3`。它是TF2.17.0、CUDA12.8的候选环境，不是HPC环境副本，也尚未在这张5060 Ti实测。容器已停止后续月度发布，因此这里只将它作为有官方Blackwell支持依据的兼容起点；验收成功后记录镜像digest。
+1. **本机GPU环境，优先准备：** WSL2 + Ubuntu 24.04，随后在WSL中安装Docker Engine和NVIDIA Container Toolkit，先试官方`nvcr.io/nvidia/tensorflow:25.02-tf2-py3`。它是TF2.17.0、CUDA12.8的候选环境，不是HPC环境副本，已在这张5060 Ti通过上述基础检查。容器已停止后续月度发布，因此这里只将它作为有官方Blackwell支持依据的兼容起点；基础镜像digest已写入Dockerfile。
 2. **旧版本参照环境，按需要增加：** 在已有Miniconda中新建Python3.11 + TensorFlow2.15.1的CPU环境，检查旧接口、权重和少量预测。Windows CPU结果用于排查差异，不当作Linux HPC完全复现。不要改现有base环境。
 
 不推荐Windows原生TF2.10作为GPU绕行方案，也不直接将TF2.15.1/CUDA12.1当作5060 Ti已支持组合。新版普通TensorFlow安装包也要经过实际算子验证，不能仅看版本号。Windows驱动已存在，WSL复用它，不在WSL另装Linux显卡驱动。
@@ -65,17 +86,17 @@ HPC的`module load`是在加载管理员已经编译好的软件，再叠加`~/t
 5. 恢复旧权重，检查路径、变量名、形状和预测；必要时与dev历史代码在相同环境中对照。
 6. 通过后再接入双列EPE并做100步左右短跑。批次先小，实测显存再增加；小批次的BN行为与历史batch32不同，不直接以短跑分数判断训练优劣。
 
-第2–3项已有验收脚本，但本次仅检查语法和`--help`，没有运行TensorFlow：
+第2–3项已通过，第4项完成少量数据读取。可用以下脚本在容器内复查：
 
 ```bash
 python tools/setup/check_tensorflow.py --device gpu --output /mnt/c/00Work/Lem_brain/wiki/项目/MCUFlowNet/附件/本机环境核查-20260917/gpu-check.json
 ```
 
-它使用随机数据对S/L各更新两步，不加载旧权重、不启动正式训练。成功后还需完成第4–6项。CPU参照环境可用同一脚本的`--device cpu`，输出到另一个文件。
+它使用随机数据对S/L各更新两步，不加载旧权重、不启动正式训练。本轮第4项只覆盖两张FC2验证样本及一对Sintel图片，第5–6项仍待执行。CPU参照环境可用同一脚本的`--device cpu`，输出到另一个文件。
 
 ## Git与SSH：先本地提交，再连接远端
 
-目前两个仓库通过公开HTTPS下载；SSH只用于后续远端认证。Git for Windows已安装到`C:/Program Files/Git`，新开终端后可使用；WSL组件已装，等待重启后继续Ubuntu与容器安装。
+目前两个仓库通过公开HTTPS下载；SSH只用于后续远端认证。Git for Windows已安装到`C:/Program Files/Git`，新开终端后可使用；Ubuntu与GPU容器已安装并通过上述基础检查。
 
 两个仓库已按用户指定设置本地提交署名，以下命令仅供日后核对或重新配置：
 
