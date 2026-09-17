@@ -25,5 +25,5 @@ def label_ab_protocol(config):
 
 
 def check_resume_protocol(saved, current):
-    if current is not None and saved != current:
+    if (current is not None or saved is not None) and saved != current:
         raise ValueError('Resume protocol changed. Use a new experiment for changed labels, batch, LR horizon or evaluation lists.')

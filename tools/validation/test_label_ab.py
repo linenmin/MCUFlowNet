@@ -51,6 +51,9 @@ class LabelTests(unittest.TestCase):
             b = json.loads((folder/f'{model}_raw.json').read_text())
             saved = label_ab_protocol(a)
             check_resume_protocol(saved, label_ab_protocol(a))
+            with self.assertRaises(ValueError): check_resume_protocol(saved, None)
+            with self.assertRaises(ValueError): check_resume_protocol(None, saved)
+            check_resume_protocol(None, None)
             with self.assertRaises(ValueError): check_resume_protocol(saved, label_ab_protocol(b))
             b['runtime']['experiment_name'] = a['runtime']['experiment_name']
             b['data']['fc2_train_label_clip'] = 50.
