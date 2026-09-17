@@ -6,7 +6,7 @@
 
 配置位于 `EdgeFlowNAS/configs/experiments/label_ab/`：`s_clip50.json`、`s_raw.json`、`l_clip50.json`、`l_raw.json`。同一模型两组仅实验编号和 `fc2_train_label_clip` 不同；50 表示分量截断，null 表示保留原值。`fc2_eval_label_clip` 全部为 null，所以 FC2 验证成绩可以直接比较。未写这些字段的旧配置仍默认 ±50。
 
-第一版正式配置：种子42、352×480随机裁剪、逻辑batch32、microbatch8、Adam、学习率1e-4到1e-6余弦下降、50轮、梯度范数上限200、无额外增广或权重衰减。它是后续HPC试跑的起点，不代表最优方案。BN实际看到的是microbatch8；不能只保证逻辑batch相同。正式配置的batch尚未在HPC验收。
+第一版正式配置：种子42、352×480随机裁剪、逻辑batch32、microbatch32、Adam、学习率1e-4到1e-6余弦下降、400轮学习率周期，先在第15轮停下来检查、梯度范数上限200、无额外增广或权重衰减。它是后续HPC试跑的起点，不代表最优方案。BN实际看到的是microbatch32；不能只保证逻辑batch相同。正式配置的batch尚未在HPC验收。batch32和400轮周期取自发布库configs/retrain_fc2.yaml；第15轮暂停是本轮新增的阶段检查点，届时已有第5/10/15轮的完整监控。继续时提高stop_after_epoch并恢复last，不改变num_epochs；400轮是学习率计划，不是必须跑满的承诺。
 
 四个独立单卡任务使用同一软件环境。单个程序没有多卡并行能力。先测读取和显存再提交长作业。变更batch或训练周期需成组调整配置；续跑不能偷偷改变对照条件。
 

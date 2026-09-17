@@ -49,8 +49,9 @@ def main():
         base = json.loads((OUT.parent / f'local_smoke_{model}.json').read_text())
         base['runtime'].pop('stop_after_epoch', None)
         base['runtime']['audit_initial_state'] = True
+        base['runtime']['stop_after_epoch'] = 15
         base['train'].pop('smoke_steps_per_epoch', None)
-        base['train'].update(num_epochs=50, batch_size=32, micro_batch_size=8)
+        base['train'].update(num_epochs=400, batch_size=32, micro_batch_size=32)
         base['data'].update(fc2_eval_label_clip=None, fc2_strict_loading=True)
         base['eval']['eval_batches'] = 0
         base['eval']['sintel'].update(sintel_list=f'{rel}/monitor_quick.txt', max_samples=None)
