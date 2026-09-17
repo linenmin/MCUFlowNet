@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+import copy
+import hashlib
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -36,6 +38,7 @@ from efnas.engine.standalone_trainer import (
 from efnas.utils.json_io import read_json, write_json
 from efnas.utils.logger import build_logger
 from efnas.utils.seed import set_global_seed
+from efnas.engine.experiment_protocol import label_ab_protocol, check_resume_protocol
 
 
 def _build_provider(config: Dict[str, Any], split: str, seed_offset: int, provider_mode: str):
@@ -217,6 +220,10 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
     ckpt_paths = _build_standalone_checkpoint_paths(model_dir)
     state_path = model_dir / "trainer_state.json"
     eval_history_path = model_dir / "eval_history.csv"
+    protocol = label_ab_protocol(config)
+    if checkpoint_cfg.get("load_checkpoint", False):
+        original = _resolve_resume_root(config, experiment_dir) / f"model_{model_name}" / "run_manifest.json"
+        check_resume_protocol(read_json(str(original)).get("protocol"), protocol)
     manifest_path = model_dir / (f"resume_manifest_{time.time_ns()}.json" if checkpoint_cfg.get("load_checkpoint", False) else "run_manifest.json")
     write_json(
         str(manifest_path),
@@ -227,12 +234,14 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
             "scratch_init": str(checkpoint_cfg.get("init_mode", "none")).strip().lower() in ("", "none"),
             "config": config,
             "git_commit": _git_commit_hash(),
+            "protocol": protocol,
         },
     )
 
     eval_history = _load_csv_rows(eval_history_path)
     best_epe = float("inf")
     best_sintel_epe = float("inf")
+    best_full_monitor_epe = float("inf")
     start_epoch = 1
     global_step = 0
 
@@ -264,7 +273,10 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                 state = _load_state(resume_root / f"model_{model_name}" / "trainer_state.json")
                 if meta_path.exists():
                     best_epe = _best_validation_on_resume(meta, state)
+                if protocol is not None and int(state.get("epoch", -1)) != start_epoch - 1:
+                    raise ValueError("This comparison requires last checkpoint and matching epoch-boundary trainer state")
                 if state:
+                    best_full_monitor_epe = float(state.get("best_full_monitor_epe", float("inf")))
                     best_sintel_epe = float(state.get("best_sintel_epe", best_sintel_epe))
                     if "train_rng_state" in state and hasattr(train_provider, "rng"):
                         train_provider.rng.setstate(_as_tuple(state["train_rng_state"]))
@@ -277,6 +289,13 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                     init_saver.restore(sess, str(init_ckpt))
                     logger.info("initialized model weights from %s", init_ckpt)
 
+            if runtime_cfg.get("audit_initial_state", False) and not checkpoint_cfg.get("load_checkpoint", False):
+                digest = hashlib.sha256()
+                for variable in sorted(_model_weight_vars(model_name), key=lambda v: v.op.name):
+                    digest.update(variable.op.name.encode())
+                    digest.update(sess.run(variable).tobytes())
+                write_json(str(model_dir / "initial_state.json"), {"model_sha256": digest.hexdigest()})
+
             for epoch_idx in range(start_epoch, min(num_epochs, stop_after_epoch) + 1):
                 epoch_start = time.time()
                 if hasattr(train_provider, "start_epoch"):
@@ -288,8 +307,11 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                 lr_last = base_lr
                 desc = f"{model_name} {dataset} epoch {epoch_idx}/{num_epochs}"
                 iterator = tqdm(range(steps_per_epoch), total=steps_per_epoch, desc=desc, leave=False)
+                first_batch_digest = None
                 for _ in iterator:
                     input_batch, _, _, label_batch = train_provider.next_batch(batch_size=batch_size)
+                    if first_batch_digest is None:
+                        first_batch_digest = hashlib.sha256(input_batch.tobytes()).hexdigest()
                     input_batch = standardize_image_tensor(input_batch)
                     logical_batch = int(input_batch.shape[0])
                     micro_slices = _iter_micro_slices(logical_batch, micro_batch_size)
@@ -379,11 +401,24 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                             )
                             logger.info("sintel_best updated sintel_epe=%.4f", sintel_epe)
 
+                full_result = None
+                full_cfg = eval_cfg.get("sintel_full_monitor", {})
+                full_every = int(full_cfg.get("eval_every_epoch", 0))
+                if full_every > 0 and (epoch_idx % full_every == 0 or epoch_idx == num_epochs):
+                    full_config = copy.deepcopy(config)
+                    full_config["eval"]["sintel"] = full_cfg
+                    full_result = _run_sintel_if_configured(model_dir, full_config, epoch_idx, "last")
+                    if full_result is not None and float(full_result["sintel_epe"]) < best_full_monitor_epe:
+                        best_full_monitor_epe = float(full_result["sintel_epe"])
+                        _save_standalone_checkpoint(sess, graph_obj["saver"], ckpt_paths["root"] / "sintel_monitor_best.ckpt",
+                                                    epoch_idx, global_step, best_full_monitor_epe, best_full_monitor_epe, arch_code)
+
                 row: Dict[str, Any] = {
                     "epoch": epoch_idx,
                     "global_step": global_step,
                     "lr": lr_last,
                     "loss": avg_loss,
+                    "first_batch_input_sha256": first_batch_digest,
                     "loss_optical": avg_optical,
                     "loss_uncertainty": avg_uncertainty,
                     "val_epe": val_epe,
@@ -396,6 +431,9 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                         if key in sintel_result:
                             row[key] = sintel_result[key]
                     row["best_sintel_epe"] = best_sintel_epe
+                if full_result is not None:
+                    row.update({f"full_monitor_{k}": v for k, v in full_result.items() if k in ("sintel_raw_epe", "sintel_legacy_epe", "evaluated_samples")})
+                    row["best_full_monitor_epe"] = best_full_monitor_epe
                 eval_history.append(row)
                 _write_csv(eval_history_path, eval_history)
                 _save_json_atomic(
@@ -405,6 +443,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                         "global_step": global_step,
                         "best_val_epe": best_epe,
                         "best_sintel_epe": best_sintel_epe,
+                        "best_full_monitor_epe": best_full_monitor_epe,
                         "model_name": model_name,
                         "arch_code": [int(v) for v in arch_code],
                         "dataset": dataset,

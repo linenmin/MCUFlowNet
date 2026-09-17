@@ -114,7 +114,13 @@ class FC2BatchProvider:
         sampling_mode: str = "random",
         crop_mode: str = "random",
         num_workers: int = 1,
+        label_clip: Optional[float] = 50.0,
+        strict_loading: bool = False,
     ):
+        self.label_clip = None if label_clip is None else float(label_clip)
+        if self.label_clip is not None and (not np.isfinite(self.label_clip) or self.label_clip <= 0):
+            raise ValueError("label_clip must be positive and finite, or null")
+        self.strict_loading = bool(strict_loading)
         self.samples = list(samples)
         self.crop_h = int(crop_h)
         self.crop_w = int(crop_w)
@@ -183,7 +189,10 @@ class FC2BatchProvider:
         flow = _read_flow_file(flow_path)
         img0 = img0.astype(np.float32)
         img1 = img1.astype(np.float32)
-        flow = np.clip(flow, a_min=-50.0, a_max=50.0).astype(np.float32)
+        if not np.isfinite(flow).all():
+            raise ValueError(f"nonfinite FC2 flow: {flow_path}")
+        if self.label_clip is not None:
+            flow = np.clip(flow, -self.label_clip, self.label_clip)
 
         if self.crop_mode == "random":
             return _random_crop_triplet(
@@ -228,6 +237,8 @@ class FC2BatchProvider:
             try:
                 return self._load_job((img0_path, seed))
             except Exception:
+                if self.strict_loading:
+                    raise
                 continue
 
         raise RuntimeError("failed to load valid FC2 sample after retries")

@@ -76,6 +76,8 @@ def build_fc2_provider(config: Dict, split: str, seed_offset: int = 0, provider_
 
     provider = FC2BatchProvider(
         samples=sample_paths,
+        label_clip=data_cfg.get("fc2_train_label_clip" if mode == "train" else "fc2_eval_label_clip", 50.0),
+        strict_loading=bool(data_cfg.get("fc2_strict_loading", False)),
         crop_h=int(data_cfg.get("input_height", 180)),
         crop_w=int(data_cfg.get("input_width", 240)),
         seed=int(runtime_cfg.get("seed", 42)) + int(seed_offset),

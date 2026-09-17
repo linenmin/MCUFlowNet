@@ -1,0 +1,71 @@
+{
+  "rule": "hash scene families; lowest rounded 25% held out; 4 evenly spaced pairs per monitor scene",
+  "held_scene_families": [
+    "sleeping",
+    "temple"
+  ],
+  "source": "EdgeFlowNet\\code\\dataset_paths\\MPI_Sintel_Final_train_list.txt",
+  "splits": {
+    "monitor_quick": {
+      "samples": 76,
+      "scenes": [
+        "alley_1",
+        "alley_2",
+        "ambush_2",
+        "ambush_4",
+        "ambush_5",
+        "ambush_6",
+        "ambush_7",
+        "bamboo_1",
+        "bamboo_2",
+        "bandage_1",
+        "bandage_2",
+        "cave_2",
+        "cave_4",
+        "market_2",
+        "market_5",
+        "market_6",
+        "mountain_1",
+        "shaman_2",
+        "shaman_3"
+      ],
+      "sha256": "fe732b58fbb354c138eff7340a71169c36e9cc962c0dffabaa89b3d08cf980af"
+    },
+    "monitor_all": {
+      "samples": 845,
+      "scenes": [
+        "alley_1",
+        "alley_2",
+        "ambush_2",
+        "ambush_4",
+        "ambush_5",
+        "ambush_6",
+        "ambush_7",
+        "bamboo_1",
+        "bamboo_2",
+        "bandage_1",
+        "bandage_2",
+        "cave_2",
+        "cave_4",
+        "market_2",
+        "market_5",
+        "market_6",
+        "mountain_1",
+        "shaman_2",
+        "shaman_3"
+      ],
+      "sha256": "b7b8e84d00610a0c79139eb4cfdbd1de0b787facd41f4fc17eec49f770970429"
+    },
+    "holdout": {
+      "samples": 196,
+      "scenes": [
+        "sleeping_1",
+        "sleeping_2",
+        "temple_2",
+        "temple_3"
+      ],
+      "sha256": "b056fb72e3bb6164f7416f1e2432c28d80fb38b7a50f2232c6a3e71fdf5a873c"
+    }
+  },
+  "limitation": "Internal future holdout only: old checkpoints were already evaluated on all 1041 pairs. Not an official benchmark split."
+}
