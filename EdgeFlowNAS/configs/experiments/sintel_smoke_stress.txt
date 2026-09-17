@@ -1,0 +1,2 @@
+Datasets/Sintel/training/final/alley_2/frame_0045.png Datasets/Sintel/training/final/alley_2/frame_0046.png Datasets/Sintel/training/flow/alley_2/frame_0045.flo
+Datasets/Sintel/training/final/ambush_4/frame_0005.png Datasets/Sintel/training/final/ambush_4/frame_0006.png Datasets/Sintel/training/flow/ambush_4/frame_0005.flo

@@ -1,0 +1,66 @@
+{
+  "runtime": {
+    "output_root": "/runs",
+    "seed": 42,
+    "stop_after_epoch": 2,
+    "experiment_name": "20260917-resume-regression-s"
+  },
+  "train": {
+    "gpu_device": 0,
+    "num_epochs": 2,
+    "batch_size": 2,
+    "micro_batch_size": 2,
+    "lr": 0.0001,
+    "lr_min": 1e-06,
+    "grad_clip_global_norm": 200,
+    "weight_decay": 0,
+    "train_sampling_mode": "shuffle_no_replacement",
+    "train_crop_mode": "random",
+    "smoke_steps_per_epoch": 2
+  },
+  "data": {
+    "dataset": "FC2",
+    "base_path": "/runs/20260917-resume-fixture01",
+    "train_dir": "train",
+    "val_dir": "val",
+    "input_height": 352,
+    "input_width": 480,
+    "flow_channels": 2,
+    "fc2_num_workers": 1,
+    "fc2_eval_num_workers": 1,
+    "prefetch_batches": 0,
+    "eval_prefetch_batches": 0
+  },
+  "eval": {
+    "eval_every_epoch": 1,
+    "eval_batches": 0,
+    "validation_training_mode": false,
+    "sintel": {
+      "dataset_root": "/datasets/Sintel",
+      "sintel_list": "EdgeFlowNAS/configs/experiments/sintel_smoke_stress.txt",
+      "patch_size": "416,1024",
+      "max_samples": 2,
+      "eval_every_epoch": 1,
+      "primary_metric": "raw"
+    }
+  },
+  "checkpoint": {
+    "init_mode": "none",
+    "load_checkpoint": true,
+    "verify_restored_tensors": true
+  },
+  "model_name": "v3_light",
+  "arch_code": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ]
+}

@@ -121,6 +121,13 @@ def _load_state(path: Path) -> Dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _best_validation_on_resume(meta, state):
+    values = [float(meta.get("best_metric", float("inf"))), float(meta.get("metric", float("inf")))]
+    if int(state.get("epoch", -1)) == int(meta.get("epoch", -2)):
+        values.append(float(state.get("best_val_epe", float("inf"))))
+    return min(values)
+
+
 def _as_tuple(value):
     return tuple(_as_tuple(v) for v in value) if isinstance(value, list) else value
 
@@ -255,6 +262,8 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                     global_step = int(meta.get("global_step", 0))
                     best_epe = float(meta.get("best_metric", float("inf")))
                 state = _load_state(resume_root / f"model_{model_name}" / "trainer_state.json")
+                if meta_path.exists():
+                    best_epe = _best_validation_on_resume(meta, state)
                 if state:
                     best_sintel_epe = float(state.get("best_sintel_epe", best_sintel_epe))
                     if "train_rng_state" in state and hasattr(train_provider, "rng"):
@@ -345,11 +354,12 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                         training_mode=bool(eval_cfg.get("validation_training_mode", False)),
                     )
 
-                _save_standalone_checkpoint(sess, graph_obj["saver"], ckpt_paths["last"], epoch_idx, global_step, val_epe, best_epe, arch_code)
                 if do_eval and val_epe < best_epe:
                     best_epe = val_epe
                     _save_standalone_checkpoint(sess, graph_obj["saver"], ckpt_paths["best"], epoch_idx, global_step, val_epe, best_epe, arch_code)
                     logger.info("best updated val_epe=%.4f", val_epe)
+
+                _save_standalone_checkpoint(sess, graph_obj["saver"], ckpt_paths["last"], epoch_idx, global_step, val_epe, best_epe, arch_code)
 
                 if sintel_every > 0 and do_eval and (epoch_idx % sintel_every == 0 or epoch_idx == num_epochs):
                     sintel_result = _run_sintel_if_configured(model_dir=model_dir, config=config, epoch_idx=epoch_idx, ckpt_name="last")
