@@ -2,7 +2,7 @@
   "runtime": {
     "output_root": "/runs",
     "seed": 42,
-    "experiment_name": "20260917-label-prep-l-raw",
+    "experiment_name": "20260917-label-prep-v2-l-raw",
     "audit_initial_state": true,
     "stop_after_epoch": 1
   },

@@ -150,6 +150,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
 
     seed = int(runtime_cfg.get("seed", 42))
     set_global_seed(seed)
+    tf.compat.v1.set_random_seed(seed)
     experiment_dir = _resolve_output_dir(config)
     model_name = str(config.get("model_name", "candidate")).strip() or "candidate"
     model_dir = experiment_dir / f"model_{model_name}"

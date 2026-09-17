@@ -36,7 +36,7 @@ FC2每轮验证全部640对。不同训练目标的训练loss不能直接排名�
 .\tools\setup\run-local.ps1 python tools/validation/run_label_ab_smoke.py
 ```
 
-运行摘要写入 `C:/00Work/Runs/MCUFlowNet/20260917-label-prep-summary/`，四组权重和历史分别存入 `20260917-label-prep-{s,l}-{clip50,raw}`。存在的实验目录不会覆盖。
+运行摘要写入 `C:/00Work/Runs/MCUFlowNet/20260917-label-prep-v2-summary/`，四组权重和历史分别存入 `20260917-label-prep-v2-{s,l}-{clip50,raw}`。存在的实验目录不会覆盖。
 
 同模型两组记录初始化参数摘要、每段第一批输入摘要；专项测试另外检查连续批次抽样和裁剪一致。摘要相同不是跨硬件逐位可复现承诺。恢复会核对参数/BN/优化器，保护标签设置、训练周期、batch和监控清单；当前只支持这组配置的轮次边界恢复。中间突然被杀的未完成轮次需要重跑，不支持逐步精确恢复。
 

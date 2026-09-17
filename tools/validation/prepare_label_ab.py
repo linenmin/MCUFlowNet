@@ -62,7 +62,7 @@ def main():
             write_json(OUT / f'{model}_{variant}.json', cfg)
             # Engineering runs stop and resume after 50 updates. Never candidate weights.
             smoke = copy.deepcopy(cfg)
-            smoke['runtime'].update(experiment_name=f'20260917-label-prep-{model}-{variant}', stop_after_epoch=1)
+            smoke['runtime'].update(experiment_name=f'20260917-label-prep-v2-{model}-{variant}', stop_after_epoch=1)
             smoke['train'].update(num_epochs=2, batch_size=2, micro_batch_size=2, smoke_steps_per_epoch=50)
             smoke['eval']['eval_batches'] = 2
             smoke['eval']['sintel_full_monitor']['eval_every_epoch'] = 2

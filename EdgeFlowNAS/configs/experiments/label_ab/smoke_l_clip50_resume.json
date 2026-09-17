@@ -2,7 +2,7 @@
   "runtime": {
     "output_root": "/runs",
     "seed": 42,
-    "experiment_name": "20260917-label-prep-l-clip50",
+    "experiment_name": "20260917-label-prep-v2-l-clip50",
     "audit_initial_state": true,
     "stop_after_epoch": 2
   },

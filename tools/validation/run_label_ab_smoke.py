@@ -12,7 +12,7 @@ CONFIG = ROOT / 'EdgeFlowNAS/configs/experiments/label_ab'
 
 
 def main():
-    output = Path('/runs/20260917-label-prep-summary')
+    output = Path('/runs/20260917-label-prep-v2-summary')
     output.mkdir(exist_ok=False)
     started = time.time()
     results = {}
