@@ -18,6 +18,14 @@ env/
 
 # Secrets / local config
 *.local
+!tools/setup/Dockerfile.local
+.env.*
+!.env.example
+*.local.yaml
+*.local.yml
+*.local.json
+.secrets/
+.ssh/
 
 # Model weights (hosted on Google Drive — see README "Pretrained weights")
 *.ckpt
@@ -28,6 +36,8 @@ checkpoint
 *.pt
 *.tflite
 *.onnx
+*.safetensors
+*.npz
 
 # Large training artifacts / logs (curated results are committed explicitly)
 *.log
@@ -45,3 +55,11 @@ release_weights/
 # Local environment checks and machine-specific configuration
 .local-runs/
 EdgeFlowNAS/configs/local/*.local.yaml
+
+# New run outputs and datasets belong outside this repository.
+# Keep existing curated EdgeFlowNAS/outputs records tracked.
+/runs/
+/datasets/
+/data-cache/
+/downloads/
+/tmp/
