@@ -41,3 +41,7 @@ Thumbs.db
 
 # Pretrained weights staging (upload to Google Drive; never commit)
 release_weights/
+
+# Local environment checks and machine-specific configuration
+.local-runs/
+EdgeFlowNAS/configs/local/*.local.yaml
