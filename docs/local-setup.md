@@ -1,6 +1,8 @@
 # 本机开发准备：Windows + RTX 5060 Ti
 
-状态（2026-09-17）：代码已克隆并完成静态核查；环境尚未安装，GPU和旧权重尚未验证。本文是安装及验收安排，不代表已经跑通。
+状态（2026-09-17）：代码已克隆并完成静态核查；经用户同意，已安装Git for Windows 2.55.0.windows.3及WSL 2.7.13.0，并启用VirtualMachinePlatform。Windows明确要求重启，Ubuntu发行版列表仍为空。Docker、TensorFlow和GPU/旧权重验收尚未完成。
+
+下一步：保存工作并重启Windows；随后检查`wsl --list --verbose`，必要时继续`wsl --install -d Ubuntu-24.04 --no-launch --web-download`。确认Ubuntu可以启动和识别GPU后，再安装Docker及NVIDIA Container Toolkit，执行下文验收。不要把安装命令返回成功当作模型运行成功。
 
 ## 先看目录
 
@@ -73,13 +75,13 @@ python tools/setup/check_tensorflow.py --device gpu --output /mnt/c/00Work/Lem_b
 
 ## Git与SSH：先本地提交，再连接远端
 
-目前两个仓库通过公开HTTPS下载；SSH只用于后续远端认证。当前能用的Git来自Codex附带工具，不保证普通终端能找到，建议为日常使用安装Git for Windows。此项和WSL/容器安装均尚未执行。
+目前两个仓库通过公开HTTPS下载；SSH只用于后续远端认证。Git for Windows已安装到`C:/Program Files/Git`，新开终端后可使用；WSL组件已装，等待重启后继续Ubuntu与容器安装。
 
-在普通PowerShell配置本仓库提交署名（替换为实际姓名和邮箱；noreply邮箱也可以）：
+两个仓库已按用户指定设置本地提交署名，以下命令仅供日后核对或重新配置：
 
 ```powershell
-git -C C:/00Work/Code/MCUFlowNet config user.name "你的提交姓名"
-git -C C:/00Work/Code/MCUFlowNet config user.email "你的提交邮箱"
+git -C C:/00Work/Code/MCUFlowNet config user.name "Enmin Lin"
+git -C C:/00Work/Code/MCUFlowNet config user.email "1780474486@qq.com"
 ```
 
 本机初查没有`.ssh`目录。生成专用钥匙时在自己的终端运行，下列操作需在检查目标文件不存在后执行；为钥匙设置口令，不把口令发到聊天中：
