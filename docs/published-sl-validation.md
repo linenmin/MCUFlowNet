@@ -23,4 +23,4 @@ Sintel training Final，436×1024原图中心裁为416×1024；同一预测分�
 
 原运行清单保留Linux Git的CRLF差异报告。补查Windows Git工作区干净；Linux `git -c core.autocrlf=true -c core.filemode=false status --porcelain`为空，`git diff --ignore-cr-at-eol --stat`为空，未发现内容差异。补充核查记录单独保存，不修改原清单。
 
-下一步需补测EdgeFlowNet，并接入训练监控、短跑。用户要求需要审查时暂停，因此当前先审查本轮对论文表注与比较口径的影响；未修改论文表格、未启动正式重训。
+本次结果用于ISCAS新训练准备，不修改已定稿硕士论文，也不设旧论文审查门槛。固定旧权重、改变计分标签不能判断取消训练截断的收益。下一步从随机初始化做真实数据短跑和持续监控，再以相同评测、预算及其他设置比较保留/取消训练标签截断；FT3D的12.5单位缩放与截断分开处理。EdgeFlowNet同条件补测仍待做。
