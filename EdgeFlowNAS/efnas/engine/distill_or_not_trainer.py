@@ -249,6 +249,8 @@ def _run_sintel_if_configured(model_dir: Path, config: Dict[str, Any], epoch_idx
         ckpt_name=ckpt_name,
         max_samples=sintel_cfg.get("max_samples", None),
         progress_desc=f"Sintel {model_dir.name} e{epoch_idx}",
+        primary_metric=str(config.get("eval", {}).get("sintel", {}).get("primary_metric", "legacy")),
+        prediction_flow_scale=float(config.get("data", {}).get("ft3d_flow_divisor", 12.5)) if str(config.get("data", {}).get("dataset", "FC2")).upper() == "FT3D" else 1.0,
     )
 
 

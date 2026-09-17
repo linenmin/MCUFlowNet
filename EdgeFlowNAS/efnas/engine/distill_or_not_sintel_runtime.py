@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 import tensorflow as tf
+import numpy as np
 
 from efnas.engine.eval_step import accumulate_predictions
 from efnas.engine.retrain_eval_scaling import (
@@ -77,6 +78,8 @@ def evaluate_v3_checkpoint_dir_on_sintel(
     ckpt_name: str = "best",
     max_samples: Optional[int] = None,
     progress_desc: Optional[str] = None,
+    primary_metric: str = "legacy",
+    prediction_flow_scale: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Evaluate one fixed V3 checkpoint on the configured Sintel split."""
     from EdgeFlowNet.code.misc.processor import FlowPostProcessor
@@ -91,7 +94,12 @@ def evaluate_v3_checkpoint_dir_on_sintel(
         patch_size=tuple(patch_size),
         ckpt_name=str(ckpt_name),
     )
-    flow_scale = _resolve_prediction_flow_scale(Path(model_dir), meta_data)
+    if primary_metric not in ("legacy", "raw"):
+        raise ValueError("primary_metric must be legacy or raw")
+    if primary_metric == "raw" and tuple(patch_size) != (416, 1024):
+        raise ValueError("Raw dual evaluation currently supports only 416x1024 center crop")
+    flow_scale = _resolve_prediction_flow_scale(Path(model_dir), meta_data) if prediction_flow_scale is None else float(prediction_flow_scale)
+    raw_values, legacy_values = [], []
     img1_list, img2_list, flo_list = _prepare_sintel_lists(dataset_root=dataset_root_path, sintel_list_text=sintel_list)
     total_samples = len(img1_list)
     if max_samples is not None:
@@ -103,15 +111,31 @@ def evaluate_v3_checkpoint_dir_on_sintel(
         for idx in iterator:
             input_comb, gt_flow = get_sintel_batch(img1_list[idx], img2_list[idx], flo_list[idx], list(patch_size))
             if input_comb is None or gt_flow is None:
-                continue
+                raise RuntimeError(f"Sintel sample could not be read: {img1_list[idx]}")
             input_batch = preprocess_eval_batch(input_comb[None, ...])
             preds = sess.run(pred_tensor, feed_dict={input_ph: input_batch})
             flow_prediction = _scale_prediction_for_sintel_eval(preds[:, :, :, :2], flow_scale)
-            processor.update(label=gt_flow, prediction=flow_prediction, Args=args)
+            if primary_metric == "raw":
+                from EdgeFlowNet.code.misc.MiscUtils import readFlow
+                raw = readFlow(flo_list[idx])
+                if raw.shape != (436,1024,2):
+                    raise ValueError(f"Unexpected Sintel GT shape: {raw.shape}")
+                raw = raw[10:426]
+                np.testing.assert_array_equal(np.asarray(gt_flow)[0], np.clip(raw,-50,50))
+                predicted = flow_prediction[0]
+                if not np.isfinite(predicted).all():
+                    raise FloatingPointError("Nonfinite Sintel prediction")
+                raw_values.append(float(np.sqrt(np.sum((predicted-raw)**2,axis=-1)).mean(dtype=np.float64)))
+                legacy_values.append(float(np.sqrt(np.sum((predicted-np.asarray(gt_flow)[0])**2,axis=-1)).mean(dtype=np.float64)))
+            else:
+                processor.update(label=gt_flow, prediction=flow_prediction, Args=args)
     finally:
         sess.close()
-    mean_epe = _extract_processor_mean_epe(processor)
+    mean_epe = float(np.mean(raw_values)) if primary_metric == "raw" and raw_values else _extract_processor_mean_epe(processor)
+    if mean_epe is None or not np.isfinite(mean_epe):
+        raise RuntimeError("No finite Sintel metric")
     return {
+        **({"sintel_raw_epe": mean_epe, "sintel_legacy_epe": float(np.mean(legacy_values)), "evaluated_samples": len(raw_values), "prediction_flow_scale": flow_scale} if primary_metric == "raw" else {}),
         "model_name": meta_data["scope_name"],
         "arch_code": ",".join(str(v) for v in meta_data["arch_code"]),
         "checkpoint_path": meta_data["checkpoint_path"],

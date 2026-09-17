@@ -57,17 +57,21 @@ def _evaluate_with_progress(
     batch_size: int,
     eval_batches: int,
     desc: str,
+    training_mode: bool = False,
 ) -> float:
     if hasattr(val_provider, "reset_cursor"):
         val_provider.reset_cursor(0)
     num_batches = max(1, int(math.ceil(len(val_provider) / float(batch_size)))) if eval_batches <= 0 else int(eval_batches)
     values: List[float] = []
-    for _ in tqdm(range(num_batches), total=num_batches, desc=desc, leave=False):
-        input_batch, _, _, label_batch = val_provider.next_batch(batch_size=batch_size)
+    weights: List[int] = []
+    for batch_index in tqdm(range(num_batches), total=num_batches, desc=desc, leave=False):
+        current_batch = min(batch_size, len(val_provider) - batch_index * batch_size) if eval_batches <= 0 else batch_size
+        input_batch, _, _, label_batch = val_provider.next_batch(batch_size=current_batch)
         input_batch = standardize_image_tensor(input_batch)
-        epe = sess.run(graph_obj["epe"], feed_dict={input_ph: input_batch, label_ph: label_batch, is_training_ph: True})
+        epe = sess.run(graph_obj["epe"], feed_dict={input_ph: input_batch, label_ph: label_batch, is_training_ph: training_mode})
         values.append(float(epe))
-    return float(np.mean(values)) if values else float("inf")
+        weights.append(current_batch)
+    return float(np.average(values, weights=weights)) if values else float("inf")
 
 
 def _resolve_init_checkpoint_path(config: Dict[str, Any], model_name: str) -> Optional[Path]:
@@ -117,10 +121,15 @@ def _load_state(path: Path) -> Dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _as_tuple(value):
+    return tuple(_as_tuple(v) for v in value) if isinstance(value, list) else value
+
+
 def train_retrain_v3(config: Dict[str, Any]) -> int:
     """Run one fixed V3 subnet retrain stage."""
     tf.compat.v1.disable_eager_execution()
     tf.compat.v1.reset_default_graph()
+    tf.config.experimental.enable_tensor_float_32_execution(False)
 
     runtime_cfg = config.get("runtime", {})
     train_cfg = config.get("train", {})
@@ -134,6 +143,8 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
     experiment_dir = _resolve_output_dir(config)
     model_name = str(config.get("model_name", "candidate")).strip() or "candidate"
     model_dir = experiment_dir / f"model_{model_name}"
+    if model_dir.exists() and any(model_dir.iterdir()) and not checkpoint_cfg.get("load_checkpoint", False):
+        raise FileExistsError(f"Refusing to overwrite existing model run: {model_dir}")
     model_dir.mkdir(parents=True, exist_ok=True)
     logger = build_logger(f"retrain_v3_{model_name}", str(model_dir / "train.log"))
     logger.info("start retrain_v3 dataset=%s model=%s", dataset, model_name)
@@ -165,7 +176,11 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
     train_provider = _wrap_prefetch(train_provider, int(data_cfg.get("prefetch_batches", 0)))
     val_provider = _wrap_prefetch(val_provider, int(data_cfg.get("eval_prefetch_batches", 0)))
     steps_per_epoch = int(math.ceil(len(train_provider) / float(max(1, batch_size))))
+    smoke_steps = int(train_cfg.get("smoke_steps_per_epoch", 0))
+    if smoke_steps > 0:
+        steps_per_epoch = min(steps_per_epoch, smoke_steps)
     total_steps = max(1, steps_per_epoch * num_epochs)
+    stop_after_epoch = int(runtime_cfg.get("stop_after_epoch", num_epochs))
 
     logger.info("arch=%s", ",".join(str(v) for v in arch_code))
     logger.info("input=%dx%d batch=%d micro_batch=%d epochs=%d steps_per_epoch=%d", input_h, input_w, batch_size, micro_batch_size, num_epochs, steps_per_epoch)
@@ -195,8 +210,9 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
     ckpt_paths = _build_standalone_checkpoint_paths(model_dir)
     state_path = model_dir / "trainer_state.json"
     eval_history_path = model_dir / "eval_history.csv"
+    manifest_path = model_dir / (f"resume_manifest_{time.time_ns()}.json" if checkpoint_cfg.get("load_checkpoint", False) else "run_manifest.json")
     write_json(
-        str(model_dir / "run_manifest.json"),
+        str(manifest_path),
         {
             "model_name": model_name,
             "arch_code": [int(v) for v in arch_code],
@@ -214,7 +230,9 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
     global_step = 0
 
     try:
-        with tf.compat.v1.Session() as sess:
+        session_config = tf.compat.v1.ConfigProto()
+        session_config.gpu_options.allow_growth = True
+        with tf.compat.v1.Session(config=session_config) as sess:
             sess.run(tf.compat.v1.global_variables_initializer())
             if bool(checkpoint_cfg.get("load_checkpoint", False)):
                 resume_root = _resolve_resume_root(config=config, experiment_dir=experiment_dir)
@@ -223,6 +241,13 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                 if not _checkpoint_exists(resume_ckpt):
                     raise FileNotFoundError(f"resume checkpoint not found: {resume_ckpt}")
                 graph_obj["saver"].restore(sess, str(resume_ckpt))
+                if checkpoint_cfg.get("verify_restored_tensors", False):
+                    reader = tf.train.load_checkpoint(str(resume_ckpt))
+                    checked = 0
+                    for variable in graph_obj["scope_global_vars"]:
+                        np.testing.assert_array_equal(sess.run(variable), reader.get_tensor(variable.op.name))
+                        checked += 1
+                    write_json(str(model_dir / "restore_check.json"), {"checkpoint": str(resume_ckpt), "identical_tensors": checked, "includes_optimizer_and_bn": True})
                 meta_path = Path(str(resume_ckpt) + ".meta.json")
                 if meta_path.exists():
                     meta = read_json(str(meta_path))
@@ -232,6 +257,8 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                 state = _load_state(resume_root / f"model_{model_name}" / "trainer_state.json")
                 if state:
                     best_sintel_epe = float(state.get("best_sintel_epe", best_sintel_epe))
+                    if "train_rng_state" in state and hasattr(train_provider, "rng"):
+                        train_provider.rng.setstate(_as_tuple(state["train_rng_state"]))
                 logger.info("resume checkpoint=%s start_epoch=%d global_step=%d", resume_ckpt, start_epoch, global_step)
             else:
                 init_ckpt = _resolve_init_checkpoint_path(config=config, model_name=model_name)
@@ -241,7 +268,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                     init_saver.restore(sess, str(init_ckpt))
                     logger.info("initialized model weights from %s", init_ckpt)
 
-            for epoch_idx in range(start_epoch, num_epochs + 1):
+            for epoch_idx in range(start_epoch, min(num_epochs, stop_after_epoch) + 1):
                 epoch_start = time.time()
                 if hasattr(train_provider, "start_epoch"):
                     train_provider.start_epoch(shuffle=True)
@@ -289,6 +316,8 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                         step_uncertainty += float(result["uncertainty"]) * grad_scale
                     apply_result = sess.run({"grad_norm": graph_obj["grad_norm"], "train": graph_obj["train_op"]}, feed_dict={lr_ph: lr_now})
                     grad_norms.append(float(apply_result["grad_norm"]))
+                    if not np.isfinite(step_loss) or not np.isfinite(apply_result["grad_norm"]):
+                        raise FloatingPointError(f"Nonfinite training value at step {global_step}")
                     epoch_loss += step_loss
                     optical_loss += step_optical
                     uncertainty_loss += step_uncertainty
@@ -313,6 +342,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                         batch_size,
                         eval_batches,
                         desc=f"{dataset} val {model_name} e{epoch_idx}",
+                        training_mode=bool(eval_cfg.get("validation_training_mode", False)),
                     )
 
                 _save_standalone_checkpoint(sess, graph_obj["saver"], ckpt_paths["last"], epoch_idx, global_step, val_epe, best_epe, arch_code)
@@ -352,6 +382,9 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                 }
                 if sintel_epe is not None:
                     row["sintel_epe"] = sintel_epe
+                    for key in ("sintel_raw_epe", "sintel_legacy_epe", "evaluated_samples", "prediction_flow_scale"):
+                        if key in sintel_result:
+                            row[key] = sintel_result[key]
                     row["best_sintel_epe"] = best_sintel_epe
                 eval_history.append(row)
                 _write_csv(eval_history_path, eval_history)
@@ -365,6 +398,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                         "model_name": model_name,
                         "arch_code": [int(v) for v in arch_code],
                         "dataset": dataset,
+                        **({"train_rng_state": train_provider.rng.getstate()} if dataset == "FC2" and hasattr(train_provider, "rng") else {}),
                     },
                 )
                 logger.info(
