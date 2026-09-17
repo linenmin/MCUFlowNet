@@ -1,0 +1,20 @@
+{
+  "sintel_training": "/datasets/Sintel/training",
+  "expected_samples": 1041,
+  "prediction_flow_scale": 12.5,
+  "scale_evidence": "configs/retrain_ft3d.yaml ft3d_flow_divisor; historical retrain_eval_scaling.py FT3D rule",
+  "models": [
+    {
+      "name": "MCUFlowNet-S",
+      "scope": "v3_light",
+      "arch_code": [0,0,0,0,0,0,0,0,0,0,0],
+      "checkpoint": "/runs/pretrained/published-20260917/MCUFlowNet_checkpoint/MCUFlowNet-S/sintel_best.ckpt"
+    },
+    {
+      "name": "MCUFlowNet-L",
+      "scope": "v3_efn_fps",
+      "arch_code": [2,0,0,2,2,1,0,0,0,0,0],
+      "checkpoint": "/runs/pretrained/published-20260917/MCUFlowNet_checkpoint/MCUFlowNet-L/sintel_best.ckpt"
+    }
+  ]
+}
