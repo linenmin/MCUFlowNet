@@ -40,16 +40,21 @@ def main():
             traces={}
             for phase,op in [('forward_backward',model['accum_op']),('optimizer',model['train_op'])]:
                 metadata=tf.compat.v1.RunMetadata()
-                sess.run(op,feed,options=tf.compat.v1.RunOptions(trace_level=tf.compat.v1.RunOptions.FULL_TRACE),run_metadata=metadata)
-                traces[phase]={d.device:[n.node_name for n in d.node_stats] for d in metadata.step_stats.dev_stats}
+                sess.run(op,feed,options=tf.compat.v1.RunOptions(output_partition_graphs=True),run_metadata=metadata)
+                traces[phase]={}
+                for partition in metadata.partition_graphs:
+                    for node in partition.node:
+                        traces[phase].setdefault(node.device,[]).append(node.name+' ['+node.op+']')
             started=time.perf_counter()
-            for _ in range(30):
+            cached_steps=0
+            while time.perf_counter()-started < 20:
+                cached_steps+=1
                 sess.run(model['zero_grad_op']);sess.run(model['accum_op'],feed);sess.run(model['train_op'])
             seconds=time.perf_counter()-started
         gpu_nodes=[n for devices in traces.values() for device,nodes in devices.items() if 'GPU' in device.upper() for n in nodes]
         assert gpu_nodes, 'No actual GPU nodes recorded'
-        result['models'][scope]={'traces':traces,'cached_30_steps_seconds':seconds,'gpu_node_entries':len(gpu_nodes)}
-        print(scope, 'GPU node entries:',len(gpu_nodes),'30 cached steps:',seconds,flush=True)
+        result['models'][scope]={'traces':traces,'cached_steps':cached_steps,'cached_steps_seconds':seconds,'gpu_node_entries':len(gpu_nodes)}
+        print(scope, 'GPU node entries:',len(gpu_nodes),'cached steps:',cached_steps,'seconds:',seconds,flush=True)
     args.output.parent.mkdir(parents=True,exist_ok=True)
     args.output.write_text(json.dumps(result,indent=2)+'\n')
 
