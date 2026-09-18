@@ -308,9 +308,14 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                 lr_last = base_lr
                 desc = f"{model_name} {dataset} epoch {epoch_idx}/{num_epochs}"
                 iterator = tqdm(range(steps_per_epoch), total=steps_per_epoch, desc=desc, leave=False)
+                data_seconds = 0.0
+                update_seconds = 0.0
                 first_batch_digest = None
                 for _ in iterator:
+                    tick = time.perf_counter()
                     input_batch, _, _, label_batch = train_provider.next_batch(batch_size=batch_size)
+                    data_seconds += time.perf_counter() - tick
+                    tick = time.perf_counter()
                     if first_batch_digest is None:
                         first_batch_digest = hashlib.sha256(input_batch.tobytes()).hexdigest()
                     input_batch = standardize_image_tensor(input_batch)
@@ -353,6 +358,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                     epoch_loss += step_loss
                     optical_loss += step_optical
                     uncertainty_loss += step_uncertainty
+                    update_seconds += time.perf_counter() - tick
                     global_step += 1
                     iterator.set_postfix(lr=f"{lr_now:.2e}", loss=f"{epoch_loss / max(1, len(grad_norms)):.4f}")
 
@@ -420,6 +426,9 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                     "lr": lr_last,
                     "loss": avg_loss,
                     "first_batch_input_sha256": first_batch_digest,
+                    "data_seconds": data_seconds,
+                    "update_seconds": update_seconds,
+                    "epoch_wall_seconds": time.time() - epoch_start,
                     "loss_optical": avg_optical,
                     "loss_uncertainty": avg_uncertainty,
                     "val_epe": val_epe,

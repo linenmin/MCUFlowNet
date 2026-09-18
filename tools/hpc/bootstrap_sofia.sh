@@ -20,14 +20,14 @@ if [ ! -f "$image" ]; then
     mv -n "$image.partial-${SLURM_JOB_ID}" "$image"
 fi
 sha256sum "$image" | tee "$root/bootstrap/image.sha256"
-environment="$root/environments/tf2502-v1"
+environment="$root/environments/tf2502-v2"
 runner=(apptainer exec --nv --cleanenv --bind "$project:$project" --bind "$code:/workspace:ro" --pwd /workspace
         --env TF_USE_LEGACY_KERAS=1 --env PYTHONDONTWRITEBYTECODE=1
         --env "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:?Slurm GPU assignment missing}"
         --env TF_NUM_INTRAOP_THREADS=12 --env TF_NUM_INTEROP_THREADS=2 "$image")
 if [ ! -f "$environment/READY" ]; then
     if [ -e "$environment" ]; then echo 'Unfinished environment exists; inspect it before retrying.'; exit 3; fi
-    "${runner[@]}" python -m venv --system-site-packages "$environment"
+    "${runner[@]}" python -m venv --without-pip --system-site-packages "$environment"
     printf 'numpy==1.26.4\nscipy==1.12.0\n' > "$root/bootstrap/constraints.txt"
     "${runner[@]}" "$environment/bin/python" -m pip install --no-cache-dir -c "$root/bootstrap/constraints.txt" \
       opencv-python-headless==4.11.0.86 scikit-image==0.24.0 matplotlib==3.9.2 pillow==11.1.0

@@ -31,9 +31,14 @@ class LabelTests(unittest.TestCase):
             clipped = build_fc2_provider(cfg, 'train')
             rawcfg = copy.deepcopy(cfg); rawcfg['data']['fc2_train_label_clip'] = None
             raw = build_fc2_provider(rawcfg, 'train')
+            parallelcfg = copy.deepcopy(rawcfg); parallelcfg['data']['fc2_num_workers'] = 4
+            parallel = build_fc2_provider(parallelcfg, 'train')
             default = FC2BatchProvider(clipped.samples, 4, 5)
             for _ in range(3):
                 a, b, historical = clipped.next_batch(2), raw.next_batch(2), default.next_batch(2)
+                parallel_batch = parallel.next_batch(2)
+                np.testing.assert_array_equal(parallel_batch[0], b[0])
+                np.testing.assert_array_equal(parallel_batch[3], b[3])
                 np.testing.assert_array_equal(a[0], b[0])
                 np.testing.assert_array_equal(a[3], np.clip(b[3], -50,50))
                 np.testing.assert_array_equal(a[3], historical[3])
