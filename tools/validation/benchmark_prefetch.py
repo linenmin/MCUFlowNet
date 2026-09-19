@@ -39,12 +39,13 @@ def digest(batch, full=False):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--variant', required=True, choices=['s_fc2','s_ft3d','l_fc2','l_ft3d'])
+    p.add_argument('--deterministic', action='store_true', help='Separate GPU numerical correctness recheck; performance is conditional on deterministic kernels')
     args = p.parse_args()
-    out = Path('/runs/PREFETCH-01')/('benchmark-'+args.variant)
+    out = Path('/runs/PREFETCH-01')/('benchmark-'+args.variant+('-deterministic' if args.deterministic else ''))
     out.mkdir(parents=True, exist_ok=False)
     manifest = {'job_id': os.environ.get('SLURM_JOB_ID'), 'code_commit': os.environ.get('MCUFLOW_COMMIT'),
                 'status':'running', 'started_unix':time.time(), 'variant':args.variant,
-                'order':[0,1,2,2,1,0], 'trials':[]}
+                'order':[0,1,2,2,1,0], 'trials':[], 'deterministic_gpu':args.deterministic}
     def save():
         (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
     save()
@@ -52,6 +53,9 @@ def main():
     try:
         tf.compat.v1.disable_eager_execution()
         tf.config.experimental.enable_tensor_float_32_execution(False)
+        if args.deterministic:
+            tf.compat.v1.set_random_seed(42)
+            tf.config.experimental.enable_op_determinism()
         gpus = tf.config.list_physical_devices('GPU'); assert len(gpus)==1, gpus
         tf.config.experimental.set_memory_growth(gpus[0], True)
         cfg = config_for(args.variant,'train')
@@ -113,7 +117,10 @@ def main():
                 if reference is None:reference=(hashes,losses,state)
                 else:
                     assert hashes==reference[0] and state==reference[2]
-                    np.testing.assert_allclose(losses,reference[1],rtol=1e-4,atol=1e-4)
+                    if args.deterministic:
+                        np.testing.assert_array_equal(losses,reference[1])
+                    else:
+                        np.testing.assert_allclose(losses,reference[1],rtol=1e-4,atol=1e-4)
                 manifest['trials'].append({'trial':trial,'depth':depth,'timed_steps':80,
                     'wall_seconds':wall,'data_wait_seconds':data_s,'update_seconds':update_s,
                     'steps_per_second':80/wall,'max_loss_delta':float(np.max(np.abs(np.array(losses)-reference[1])))})
