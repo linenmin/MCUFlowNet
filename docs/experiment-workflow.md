@@ -50,6 +50,8 @@
 python3 tools/hpc/build_run_index.py --runs /path/to/runs --sources /path/to/runs/index-sources.json
 ```
 
+工程验收使用同样的`checks`登记项，目录结构为`<登记目录>/<验收编号>/manifest.json`，manifest至少包含`job_id`，并保留代码版本、检查结果与日志位置。无需把小测试伪装成训练或另建wiki页。
+
 这是按需执行的收集步骤，没有后台服务，也不会自动改写wiki。
 
 ## 小测试代码与正式实验共用什么

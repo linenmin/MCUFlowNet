@@ -27,6 +27,8 @@ class IndexTests(unittest.TestCase):
             self.assertEqual(len(rows), 3)
             self.assertEqual(rows[0]['run_id'], rows[1]['run_id'])
             self.assertEqual(rows[2]['parent_run'], '')
+            checks = collect(root, {'checks': sources['evaluations']})
+            self.assertEqual(checks[0]['kind'], 'check')
             sources['campaigns'].append(sources['campaigns'][0])
             with self.assertRaises(ValueError):
                 collect(root, sources)

@@ -1,6 +1,6 @@
 """Build a location-only CSV from existing job manifests; never rewrite results.
 
-Sources JSON contains campaigns/evaluations lists, each with path and experiment_id.
+Sources JSON contains campaigns/evaluations/checks lists, each with path and experiment_id.
 Paths are relative to --runs. Register a group once, then rebuild after collection.
 One row is one job attempt: repeated run_id values are intentional for resumes.
 """
@@ -23,7 +23,7 @@ def relative_run(value, root):
 def collect(root, sources):
     rows = []
     seen = set()
-    for kind in ('campaigns', 'evaluations'):
+    for kind in ('campaigns', 'evaluations', 'checks'):
         for group in sources.get(kind, []):
             base = (root / group['path']).resolve()
             if not base.is_relative_to(root):
@@ -44,7 +44,7 @@ def collect(root, sources):
                     parent = ''
                 else:
                     run = path.parent.relative_to(root).as_posix()
-                    run_kind = 'eval'
+                    run_kind = 'eval' if kind == 'evaluations' else 'check'
                     # Early failures may precede source_run recording; leave unknown.
                     parent = relative_run(record['source_run'], root) if record.get('source_run') else ''
                 rows.append(dict(experiment_id=group['experiment_id'], run_id=run,
