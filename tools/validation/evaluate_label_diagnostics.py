@@ -87,10 +87,20 @@ def main():
         frozen = args.output / 'snapshot' / model_name
         (frozen / 'checkpoints').mkdir(parents=True)
         fingerprints = {}
+        available = []
+        missing = []
         for name in ('last', 'sintel_monitor_best'):
             files = sorted((run / 'checkpoints').glob(name + '.ckpt.*'))
-            assert any(p.suffix == '.index' for p in files)
-            assert any('.data-' in p.name for p in files)
+            complete = any(p.suffix == '.index' for p in files) and any('.data-' in p.name for p in files)
+            if not complete:
+                if name == 'last':
+                    raise FileNotFoundError('Required epoch-100 checkpoint is incomplete')
+                missing.append(dict(name=name, reason='Checkpoint index/data absent; metadata is not a restorable model',
+                                    remaining_files=[p.name for p in files]))
+                for src in files:
+                    shutil.copy2(src, frozen / 'checkpoints' / src.name)
+                continue
+            available.append(name)
             for src in files:
                 dst = frozen / 'checkpoints' / src.name
                 before = sha256(src)
@@ -112,7 +122,7 @@ def main():
             assert not set(lines) & set(holdout.read_text().splitlines())
         shutil.copy2(split, args.output / 'monitor_all.txt')
         record.update(source_run=str(run), checkpoint_sha256=fingerprints,
-                      monitor_sha256=sha256(split), training_epoch=100)
+                      monitor_sha256=sha256(split), training_epoch=100, missing_checkpoints=missing)
         save(args.output / 'manifest.json', record)
 
         os.environ.setdefault('TF_USE_LEGACY_KERAS', '1')
@@ -130,7 +140,7 @@ def main():
         im1s, im2s, flows = _prepare_sintel_lists(args.dataset, str(split))
         assert len(flows) == 845
         results = {}
-        for name in ('last', 'sintel_monitor_best'):
+        for name in available:
             prefix = frozen / 'checkpoints' / (name + '.ckpt')
             metadata = json.loads(Path(str(prefix) + '.meta.json').read_text())
             assert metadata['arch_code'] == cfg['arch_code']
