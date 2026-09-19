@@ -189,5 +189,7 @@ def build_ft3d_provider(
         flow_divisor=float(data_cfg.get("ft3d_flow_divisor", 12.5)),
         augment_cfg=augment_cfg,
         num_workers=train_num_workers if mode == "train" else eval_num_workers,
+        strict_loading=bool(data_cfg.get("ft3d_strict_loading", False)),
+        label_clip=data_cfg.get("ft3d_train_label_clip" if mode == "train" else "ft3d_eval_label_clip", 50.0),
     )
     return provider

@@ -41,7 +41,7 @@ def collect(root, sources):
                 if kind == 'campaigns':
                     run = relative_run(record['run'], root)
                     run_kind = 'smoke' if record['mode'] == 'probe' else 'train'
-                    parent = ''
+                    parent = relative_run(record['source_run'], root) if record.get('source_run') else ''
                 else:
                     run = path.parent.relative_to(root).as_posix()
                     run_kind = 'eval' if kind == 'evaluations' else 'check'

@@ -331,6 +331,8 @@ class FT3DBatchProvider:
         flow_divisor: float = 12.5,
         augment_cfg: Optional[Dict[str, Any]] = None,
         num_workers: int = 1,
+        strict_loading: bool = False,
+        label_clip: Optional[float] = 50.0,
     ):
         self.samples = list(samples)
         self.crop_h = int(crop_h)
@@ -342,6 +344,8 @@ class FT3DBatchProvider:
         self.crop_mode = str(crop_mode).strip().lower()
         self.augment_cfg = dict(augment_cfg or {})
         self.num_workers = max(1, int(num_workers))
+        self.strict_loading = bool(strict_loading)
+        self.label_clip = label_clip
         self.skipped_nonfinite_count = 0
         if self.sampling_mode not in ("random", "sequential", "shuffle_no_replacement"):
             raise ValueError(f"unsupported sampling_mode: {sampling_mode}")
@@ -412,25 +416,36 @@ class FT3DBatchProvider:
         for attempt in range(retry_limit):
             img0_path, img1_path, flow_path = sample_path
             if not os.path.exists(img0_path) or not os.path.exists(img1_path) or not os.path.exists(flow_path):
+                if self.strict_loading:
+                    raise FileNotFoundError(sample_path)
                 sample_path = self._claim_sample_path()
                 continue
             img0 = cv2.imread(img0_path, cv2.IMREAD_COLOR)
             img1 = cv2.imread(img1_path, cv2.IMREAD_COLOR)
             if img0 is None or img1 is None:
+                if self.strict_loading:
+                    raise ValueError(f"Unreadable FT3D image: {sample_path}")
                 sample_path = self._claim_sample_path()
                 continue
             try:
                 flow = _read_flow(flow_path)
             except Exception:
+                if self.strict_loading:
+                    raise
                 sample_path = self._claim_sample_path()
                 continue
             if not np.all(np.isfinite(flow)):
+                if self.strict_loading:
+                    raise ValueError(f"Nonfinite FT3D flow: {flow_path}")
                 self.skipped_nonfinite_count += 1
                 sample_path = self._claim_sample_path()
                 continue
             img0 = img0.astype(np.float32)
             img1 = img1.astype(np.float32)
-            flow = np.clip(flow / self.flow_divisor, a_min=-50.0, a_max=50.0).astype(np.float32)
+            flow = flow / self.flow_divisor
+            if self.label_clip is not None:
+                flow = np.clip(flow, -float(self.label_clip), float(self.label_clip))
+            flow = flow.astype(np.float32)
             if not np.all(np.isfinite(flow)):
                 self.skipped_nonfinite_count += 1
                 sample_path = self._claim_sample_path()
@@ -450,6 +465,8 @@ class FT3DBatchProvider:
                     )
                 return _center_crop_triplet(img0, img1, flow, self.crop_h, self.crop_w)
             except Exception:
+                if self.strict_loading:
+                    raise
                 if attempt + 1 < retry_limit:
                     sample_path = self._claim_sample_path()
                 continue

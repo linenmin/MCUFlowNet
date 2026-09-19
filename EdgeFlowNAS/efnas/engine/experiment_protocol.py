@@ -5,7 +5,7 @@ from pathlib import Path
 
 def label_ab_protocol(config):
     data = config.get('data', {})
-    if 'fc2_train_label_clip' not in data:
+    if 'fc2_train_label_clip' not in data and not config.get('runtime', {}).get('record_training_protocol', False):
         return None  # Keep existing historical runs compatible.
     monitors = {}
     for name in ('sintel', 'sintel_full_monitor'):

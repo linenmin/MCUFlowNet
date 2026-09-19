@@ -39,6 +39,7 @@ from efnas.utils.json_io import read_json, write_json
 from efnas.utils.logger import build_logger
 from efnas.utils.seed import set_global_seed
 from efnas.engine.experiment_protocol import label_ab_protocol, check_resume_protocol
+from efnas.engine.stage_state import stage_steps, save_rng, restore_rng
 
 
 def _build_provider(config: Dict[str, Any], split: str, seed_offset: int, provider_mode: str):
@@ -186,10 +187,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
         raise RuntimeError("val split is empty")
     train_provider = _wrap_prefetch(train_provider, int(data_cfg.get("prefetch_batches", 0)))
     val_provider = _wrap_prefetch(val_provider, int(data_cfg.get("eval_prefetch_batches", 0)))
-    steps_per_epoch = int(math.ceil(len(train_provider) / float(max(1, batch_size))))
-    smoke_steps = int(train_cfg.get("smoke_steps_per_epoch", 0))
-    if smoke_steps > 0:
-        steps_per_epoch = min(steps_per_epoch, smoke_steps)
+    steps_per_epoch = stage_steps(len(train_provider), batch_size, train_cfg)
     total_steps = max(1, steps_per_epoch * num_epochs)
     stop_after_epoch = int(runtime_cfg.get("stop_after_epoch", num_epochs))
 
@@ -280,7 +278,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                     best_full_monitor_epe = float(state.get("best_full_monitor_epe", float("inf")))
                     best_sintel_epe = float(state.get("best_sintel_epe", best_sintel_epe))
                     if "train_rng_state" in state and hasattr(train_provider, "rng"):
-                        train_provider.rng.setstate(_as_tuple(state["train_rng_state"]))
+                        restore_rng(train_provider.rng, state["train_rng_state"])
                 logger.info("resume checkpoint=%s start_epoch=%d global_step=%d", resume_ckpt, start_epoch, global_step)
             else:
                 init_ckpt = _resolve_init_checkpoint_path(config=config, model_name=model_name)
@@ -288,6 +286,14 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                     if not _checkpoint_exists(init_ckpt):
                         raise FileNotFoundError(f"init checkpoint not found: {init_ckpt}")
                     init_saver.restore(sess, str(init_ckpt))
+                    if checkpoint_cfg.get("verify_initialized_tensors", False):
+                        reader = tf.train.load_checkpoint(str(init_ckpt))
+                        variables = _model_weight_vars(model_name)
+                        for variable in variables:
+                            np.testing.assert_array_equal(sess.run(variable), reader.get_tensor(variable.op.name))
+                        write_json(str(model_dir / "initialization_check.json"), {
+                            "checkpoint": str(init_ckpt), "identical_model_tensors": len(variables),
+                            "includes_bn": True, "optimizer": "fresh Adam", "stage_step": 0})
                     logger.info("initialized model weights from %s", init_ckpt)
 
             if runtime_cfg.get("audit_initial_state", False) and not checkpoint_cfg.get("load_checkpoint", False):
@@ -457,7 +463,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                         "model_name": model_name,
                         "arch_code": [int(v) for v in arch_code],
                         "dataset": dataset,
-                        **({"train_rng_state": train_provider.rng.getstate()} if dataset == "FC2" and hasattr(train_provider, "rng") else {}),
+                        **({"train_rng_state": save_rng(train_provider.rng)} if hasattr(train_provider, "rng") else {}),
                     },
                 )
                 logger.info(
