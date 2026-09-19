@@ -105,3 +105,15 @@ Sofia入口仓库的HEAD可以落后于已fetch的远端分支；实际作业版
 ## 当前验证的边界
 
 旧S/L论文权重的全量复测、本机与H200短跑已经完成；正式实验状态统一查wiki实验总表与Slurm，不在本操作说明重复维护。操作和边界见[标签对照说明](fc2-label-ab.md)与[Sofia说明](sofia-workflow.md)。工程短跑不能用于选择训练方案；原始标签与历史截断标签两列均为416×1024中心裁剪，不称为完整图像标准成绩。
+
+## EdgeFlowNet基线的双口径复测
+
+`tools/validation/evaluate_edgeflownet.py`使用已有845对监控清单和416×1024中心裁剪，遵循EdgeFlowNet的BGR 0–255输入、BN推理模式和输出尺度1。一次预测同时对原始GT及分量截断±50的GT计分；不更改权重或训练标签。`--limit 2`用于恢复与读取验收，正式运行省略该参数。输出目录必须新建，保存manifest、逐样本CSV和汇总结果。
+
+本机示例：
+
+```powershell
+./tools/setup/run-local.ps1 python tools/validation/evaluate_edgeflownet.py --checkpoint /runs/pretrained/edgeflownet-archived/best.ckpt --output /runs/BASELINE-EFN-01/edgeflownet-monitor
+```
+
+权重来源核验保存在pretrained目录的`upstream-verification.json`，应核对Git blob与固定上游提交，并记录推理代码差异。这项监控集复测不能自动视为论文Table III的6.31复现；原表其他模型的GT与尺寸协议不能由EdgeFlowNet单行倒推。文献转载与共同评测分组展示，避免跨协议排名。
