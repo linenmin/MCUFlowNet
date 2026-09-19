@@ -71,9 +71,8 @@ def main():
     cfg = config_for(args.variant, args.mode)
     if args.experiment_id != 'DATA-ROUTE-01':
         cfg['runtime']['output_root'] = f'/runs/{args.experiment_id}'
+    if args.experiment_id != 'DATA-ROUTE-01' or args.prefetch:
         cfg['runtime']['experiment_name'] += f'-pf{args.prefetch}'
-    elif args.prefetch:
-        p.error('Prefetch candidates must use their own PREFETCH-01 experiment')
     cfg['data']['prefetch_batches'] = args.prefetch
     control = Path(cfg['runtime']['output_root']) / 'control' / cfg['runtime']['experiment_name']
     control.mkdir(parents=True, exist_ok=True)
