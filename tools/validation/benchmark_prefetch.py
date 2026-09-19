@@ -23,7 +23,7 @@ from run_data_route import config_for
 from efnas.data.dataloader_builder import build_fc2_provider, build_ft3d_provider
 from efnas.data.prefetch_provider import PrefetchBatchProvider
 from efnas.data.transforms_180x240 import standardize_image_tensor
-from efnas.engine.distill_or_not_trainer import _build_graph
+from efnas.engine.distill_or_not_trainer import _build_graph, _close_provider
 from efnas.engine.retrain_trainer import _model_weight_vars
 from efnas.engine.stage_state import save_rng, restore_rng
 
@@ -138,7 +138,7 @@ def main():
     except BaseException as error:
         manifest.update(status='failed',error=repr(error));raise
     finally:
-        if base is not None:base.close()
+        if base is not None:_close_provider(base)
         manifest['elapsed_seconds']=time.time()-manifest['started_unix'];save()
 
 
