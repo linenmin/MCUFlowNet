@@ -65,9 +65,17 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--variant', choices=['s_fc2','s_ft3d','l_fc2','l_ft3d'], required=True)
     p.add_argument('--mode', choices=['probe','train'], required=True)
+    p.add_argument('--prefetch', type=int, choices=[0,1,2], default=0)
+    p.add_argument('--experiment-id', choices=['DATA-ROUTE-01','PREFETCH-01'], default='DATA-ROUTE-01')
     args = p.parse_args()
     cfg = config_for(args.variant, args.mode)
-    control = Path('/runs/DATA-ROUTE-01/control') / f'{args.mode}-{args.variant}'
+    if args.experiment_id != 'DATA-ROUTE-01':
+        cfg['runtime']['output_root'] = f'/runs/{args.experiment_id}'
+        cfg['runtime']['experiment_name'] += f'-pf{args.prefetch}'
+    elif args.prefetch:
+        p.error('Prefetch candidates must use their own PREFETCH-01 experiment')
+    cfg['data']['prefetch_batches'] = args.prefetch
+    control = Path(cfg['runtime']['output_root']) / 'control' / cfg['runtime']['experiment_name']
     control.mkdir(parents=True, exist_ok=True)
     manifest = control/f"job-{os.environ.get('SLURM_JOB_ID', 'local')}.json"
     if manifest.exists(): raise FileExistsError(manifest)

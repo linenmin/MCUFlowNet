@@ -368,6 +368,9 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                     global_step += 1
                     iterator.set_postfix(lr=f"{lr_now:.2e}", loss=f"{epoch_loss / max(1, len(grad_norms)):.4f}")
 
+                if hasattr(train_provider, "pause"):
+                    # RNG written below must describe consumed, not queued, batches.
+                    train_provider.pause()
                 avg_loss = epoch_loss / max(1, steps_per_epoch)
                 avg_optical = optical_loss / max(1, steps_per_epoch)
                 avg_uncertainty = uncertainty_loss / max(1, steps_per_epoch)
