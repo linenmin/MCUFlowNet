@@ -180,7 +180,9 @@ def _build_graph(
         train_op = optimizer.apply_gradients(apply_pairs)
         epe_tensor = build_epe_metric(pred_tensor=accumulate_predictions(preds), label_ph=label_ph, num_out=flow_channels)
         scope_global_vars = [v for v in tf.compat.v1.global_variables() if v.name.startswith(f"{scope_name}/")]
-        saver = tf.compat.v1.train.Saver(var_list=scope_global_vars, max_to_keep=3)
+        # Fixed names (last/FC2 best/quick best/full-monitor best) overwrite
+        # themselves. A shared FIFO must never delete a different selection's best.
+        saver = tf.compat.v1.train.Saver(var_list=scope_global_vars, max_to_keep=0)
     return {
         "scope_name": scope_name,
         "arch_code": [int(v) for v in arch_code],
