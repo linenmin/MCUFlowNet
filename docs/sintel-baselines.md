@@ -62,3 +62,7 @@ NanoFlowNet也做过2对416×1024直接输入的工程探测；这与低分辨�
 ```
 
 TensorFlow模型改用`sintel-tf/python.exe`；NanoFlowNet低分辨率设置额外指定`--nano-native`。完整环境冻结文件在Runs的torch-freeze.txt/tf-freeze.txt。测量耗时包含并发任务影响，不作为模型FPS或能效比较。
+
+重建环境可用`tools/baselines/environment.yml`创建两个不同名称的Conda环境，再分别安装`requirements-torch.txt`和`requirements-tf.txt`；完全复刻本次依赖应使用Runs的freeze文件。`dataset_manifest.py`一次性核对原图尺寸和所有文件SHA256；`summarize.py`还将每组逐图CSV与该数据清单核对。
+
+参数量来自实际加载图的计数，不能直接沿用原表：当前公开实现RAFT 5,257,536、SPyNet 1,440,300、PWC-Net 9,374,340、EdgeFlowNet 2,743,804，NanoFlowNet H5总参数170,881（含辅助输出及非训练状态）。各自计数对象不同，最终论文如要比较参数量应另统一去除训练专用分支等计数规则。本轮只提供EPE复测，不复用端侧FPS形成新的性能名次。

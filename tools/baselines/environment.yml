@@ -1,0 +1,9 @@
+name: sintel-benchmark
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.11
+  - pip
+# Create two environments from this base, then install the corresponding
+# requirements file below. TensorFlow on Windows is CPU-only.
