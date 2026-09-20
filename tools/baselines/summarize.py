@@ -11,6 +11,7 @@ from evaluate import sha
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--runs',type=Path,required=True)
+    p.add_argument('--mcu-reference',type=Path,help='Existing published S/L CSV directory; audit, do not pretend to re-run')
     args=p.parse_args()
     registry=json.loads(Path(__file__).with_name('models.json').read_text())
     rows=[]
@@ -45,6 +46,20 @@ def main():
     result=dict(checked_at=datetime.now(timezone.utc).isoformat(),protocol=registry['protocol_id'],models=rows,
                 dataset_manifest_sha256=sha(args.runs/'dataset-manifest.json'),
                 source_inventory_sha256=sha(args.runs/'inventory.json'))
+    if args.mcu_reference:
+        references=[]
+        old_results=json.loads((args.mcu_reference/'results.json').read_text())
+        for name in ['MCUFlowNet-S','MCUFlowNet-L']:
+            path=args.mcu_reference/f'{name}.csv'
+            samples=list(csv.DictReader(path.open()))
+            assert ['training/'+x['sample'] for x in samples]==expected
+            values={col:float(np.mean([float(x[col]) for x in samples])) for col in ('raw_epe','clipped_epe')}
+            for col,value in values.items():
+                assert abs(value-old_results[name][col])<1e-10
+            references.append(dict(name=name,**values,samples=len(samples),
+                                   evidence=str(path),csv_sha256=sha(path),
+                                   note='Reused 2026-09-17 measurement, not re-inferred. Matching sample list and scoring crop; published sintel_best checkpoint selected using Sintel.'))
+        result['previous_mcu_measurements']=references
     (args.runs/'summary.json').write_text(json.dumps(result,indent=2)+'\n')
     for r in rows:
         print(r['run'],r.get('raw_epe','pending'),r['status'])
