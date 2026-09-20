@@ -64,7 +64,7 @@ def main():
     if manifest.exists(): raise FileExistsError(manifest)
     record=dict(job_id=jid, array_task=array, mode=args.mode, experiment_id='COMP-ABL-01',
                 code_commit=os.environ.get('MCUFLOW_COMMIT'), started_unix=time.time(), status='running',
-                run=str(Path(cfg['runtime']['output_root'])/cfg['runtime']['experiment_name']), config=cfg)
+                run=str(Path(cfg['runtime']['output_root'])/cfg['runtime']['experiment_name']/('model_'+cfg['model_name'])), config=cfg)
     save(manifest,record)
     env=dict(os.environ)
     env['PYTHONHASHSEED']=str(cfg['runtime']['seed'])
