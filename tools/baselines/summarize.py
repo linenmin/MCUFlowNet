@@ -47,7 +47,7 @@ def main():
                 dataset_manifest_sha256=sha(args.runs/'dataset-manifest.json'),
                 source_inventory_sha256=sha(args.runs/'inventory.json'))
     result['checks']={name:json.loads((args.runs/filename).read_text(encoding='utf-8'))
-                      for name,filename in [('spynet_weights','spynet-weight-check.json'),('nano_export','nano-export-check.json'),('raft_small_weights','raft-small-weight-check.json')]
+                      for name,filename in [('spynet_weights','spynet-weight-check.json'),('nano_export','nano-export-check.json'),('raft_small_weights','raft-small-weight-check.json'),('extension_probe','extension-probe-check.json')]
                       if (args.runs/filename).exists()}
     if (args.runs/'extension-provenance.json').exists():
         result['extension_provenance_sha256']=sha(args.runs/'extension-provenance.json')

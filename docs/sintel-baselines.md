@@ -71,6 +71,8 @@ NanoFlowNet也做过2对416×1024直接输入的工程探测；这与低分辨�
 
 权重URL见模型登记表、作者仓库和`extension-provenance.json`；外部源码与权重仍在Code/optical-flow-upstream及Runs，评测代码不复制作者网络。新依赖仅安装到已有独立Conda `sintel-torch`，不修改base或训练环境；本次完整依赖见Runs/torch-extension-freeze.txt。未用Sintel微调并不保证未用它验证或挑选checkpoint。
 
+六项全量均完成1041对，逐图清单及均值由汇总器核对。正式运行与两对短跑的首对预测：五项逐元素相同；FastFlowNet最大绝对差1.0967e-5像素、平均绝对差4.4383e-7，首对EPE差5.4954e-8。未强制CUDA确定性，不能声称所有输出逐位相同；初始1e-5绝对阈值被触发的记录及完整比较保存在`extension-probe-check.json`。这个量级不改变报告的五位小数，但不是另一轮全量重复实验。
+
 在工作树根目录，以独立Conda环境的python直接运行，无需激活base。输出目录必须不存在，防止覆盖：
 
 ```powershell
