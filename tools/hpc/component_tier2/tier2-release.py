@@ -43,7 +43,8 @@ balance_text=subprocess.check_output(['sam-balance'],text=True)
 lines=[x for x in balance_text.splitlines() if 'lp_embaivision' in x]
 assert len(lines)==1,balance_text
 available=int(lines[0].split()[-1])
-base=['--clusters=wice','--partition=gpu_a100','--account=lp_embaivision','--nodes=1','--ntasks=1','--cpus-per-task=18','--gpus-per-node=1','--time='+str(wall_minutes)]
+wall_time=f'{wall_minutes//1440}-{(wall_minutes%1440)//60:02d}:{wall_minutes%60:02d}:00'
+base=['--clusters=wice','--partition=gpu_a100','--account=lp_embaivision','--nodes=1','--ntasks=1','--cpus-per-task=18','--gpus-per-node=1','--time='+wall_time]
 quote_text=subprocess.check_output(['sam-quote','srun',*base],text=True)
 quote=int(quote_text.strip().splitlines()[-1])
 reservation=quote*len(indices)*segments

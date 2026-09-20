@@ -22,7 +22,9 @@ class ReleaseChecks(unittest.TestCase):
    calls=[]
    def external(args,**kwargs):
     if args[0]=='sam-balance':return f'100536 lp_embaivision {available} 0 {available}\n'
-    if args[0]=='sam-quote':return '10000\n'
+    if args[0]=='sam-quote':
+     self.assertIn('--time=' + ('2-00:31:00' if slow else '1-15:07:00'),args)
+     return '10000\n'
     if args[0]=='sbatch':calls.append(args);return f'{123+len(calls)};wice\n'
     raise AssertionError(args)
    source=SOURCE.replace('/data/leuven/379/vsc37996/MCUFlowNet-component',root.as_posix()).replace('/scratch/leuven/379/vsc37996/MCUFlowNet-component/runs/COMP-ABL-01',runs.as_posix())
