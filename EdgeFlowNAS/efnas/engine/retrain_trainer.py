@@ -41,6 +41,9 @@ from efnas.utils.seed import set_global_seed
 from efnas.engine.experiment_protocol import label_ab_protocol, check_resume_protocol
 from efnas.engine.stage_state import stage_steps, save_rng, restore_rng
 from efnas.engine.lr_stage import stage_lr, check_lr_fork
+from efnas.engine.recovery_bundle import (
+    check_output_target, committed_model, commit_boundary, restore_aliases,
+)
 
 
 def _build_provider(config: Dict[str, Any], split: str, seed_offset: int, provider_mode: str):
@@ -156,8 +159,9 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
     experiment_dir = _resolve_output_dir(config)
     model_name = str(config.get("model_name", "candidate")).strip() or "candidate"
     model_dir = experiment_dir / f"model_{model_name}"
-    if model_dir.exists() and any(model_dir.iterdir()) and not checkpoint_cfg.get("load_checkpoint", False):
-        raise FileExistsError(f"Refusing to overwrite existing model run: {model_dir}")
+    resume_model = _resolve_resume_root(config, experiment_dir) / f"model_{model_name}"
+    check_output_target(model_dir, resume_model, checkpoint_cfg.get('load_checkpoint', False),
+                        checkpoint_cfg.get('fork_lr_stage', False))
     model_dir.mkdir(parents=True, exist_ok=True)
     logger = build_logger(f"retrain_v3_{model_name}", str(model_dir / "train.log"))
     logger.info("start retrain_v3 dataset=%s model=%s", dataset, model_name)
@@ -195,6 +199,8 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
     logger.info("arch=%s", ",".join(str(v) for v in arch_code))
     logger.info("input=%dx%d batch=%d micro_batch=%d epochs=%d steps_per_epoch=%d", input_h, input_w, batch_size, micro_batch_size, num_epochs, steps_per_epoch)
     logger.info("lr=%.2e lr_min=%.2e weight_decay=%.2e grad_clip=%.1f", base_lr, lr_min, weight_decay, grad_clip)
+    if 'lr_stage' in train_cfg:
+        logger.info("ACTIVE lr_stage=%s (overrides base lr/lr_min above)", train_cfg['lr_stage'])
     logger.info("eval_every=%d sintel_every=%d prefetch train/eval=%s/%s", eval_every_epoch, sintel_every, data_cfg.get("prefetch_batches"), data_cfg.get("eval_prefetch_batches"))
 
     input_ph = tf.compat.v1.placeholder(tf.float32, shape=[None, input_h, input_w, 6], name="Input")
@@ -229,6 +235,11 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
             check_lr_fork(read_json(str(original)).get("protocol"), protocol)
         else:
             check_resume_protocol(read_json(str(original)).get("protocol"), protocol)
+        if str(checkpoint_cfg.get('resume_ckpt_name', 'last')) != 'last':
+            raise ValueError('Full-state resume requires last; use weight initialization for other checkpoints')
+        resume_bundle = committed_model(resume_model)
+        if not checkpoint_cfg.get('fork_lr_stage', False):
+            restore_aliases(model_dir, resume_bundle)
     is_resume = checkpoint_cfg.get("load_checkpoint", False) and not checkpoint_cfg.get("fork_lr_stage", False)
     manifest_path = model_dir / (f"resume_manifest_{time.time_ns()}.json" if is_resume else "run_manifest.json")
     write_json(
@@ -251,6 +262,16 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
     start_epoch = 1
     global_step = 0
 
+    def state_record(epoch):
+        return {
+            'epoch': epoch, 'global_step': global_step,
+            'best_val_epe': best_epe, 'best_sintel_epe': best_sintel_epe,
+            'best_full_monitor_epe': best_full_monitor_epe,
+            'model_name': model_name, 'arch_code': [int(v) for v in arch_code],
+            'dataset': dataset,
+            **({'train_rng_state': save_rng(train_provider.rng)} if hasattr(train_provider, 'rng') else {}),
+        }
+
     try:
         session_config = tf.compat.v1.ConfigProto()
         session_config.gpu_options.allow_growth = True
@@ -259,7 +280,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
             if bool(checkpoint_cfg.get("load_checkpoint", False)):
                 resume_root = _resolve_resume_root(config=config, experiment_dir=experiment_dir)
                 resume_ckpt_name = str(checkpoint_cfg.get("resume_ckpt_name", "last")).strip() or "last"
-                resume_ckpt = resume_root / f"model_{model_name}" / "checkpoints" / f"{resume_ckpt_name}.ckpt"
+                resume_ckpt = resume_bundle / "checkpoints" / f"{resume_ckpt_name}.ckpt"
                 if not _checkpoint_exists(resume_ckpt):
                     raise FileNotFoundError(f"resume checkpoint not found: {resume_ckpt}")
                 graph_obj["saver"].restore(sess, str(resume_ckpt))
@@ -276,7 +297,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                     start_epoch = int(meta.get("epoch", 0)) + 1
                     global_step = int(meta.get("global_step", 0))
                     best_epe = float(meta.get("best_metric", float("inf")))
-                state = _load_state(resume_root / f"model_{model_name}" / "trainer_state.json")
+                state = _load_state(resume_bundle / "trainer_state.json")
                 if meta_path.exists():
                     best_epe = _best_validation_on_resume(meta, state)
                 if protocol is not None and int(state.get("epoch", -1)) != start_epoch - 1:
@@ -315,6 +336,15 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                     digest.update(variable.op.name.encode())
                     digest.update(sess.run(variable).tobytes())
                 write_json(str(model_dir / "initial_state.json"), {"model_sha256": digest.hexdigest()})
+
+            # Seed a complete recovery boundary before the first update, including
+            # forks and legacy runs. Parent directories are never modified.
+            if not (model_dir/'recovery/current.json').exists():
+                if not is_resume:
+                    _save_standalone_checkpoint(sess, graph_obj['saver'], ckpt_paths['last'],
+                                                start_epoch-1, global_step, float('inf'), best_epe, arch_code)
+                    _save_json_atomic(state_path, state_record(start_epoch-1))
+                commit_boundary(model_dir)
 
             for epoch_idx in range(start_epoch, min(num_epochs, stop_after_epoch) + 1):
                 epoch_start = time.time()
@@ -469,20 +499,8 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                     row["best_full_monitor_epe"] = best_full_monitor_epe
                 eval_history.append(row)
                 _write_csv(eval_history_path, eval_history)
-                _save_json_atomic(
-                    state_path,
-                    {
-                        "epoch": epoch_idx,
-                        "global_step": global_step,
-                        "best_val_epe": best_epe,
-                        "best_sintel_epe": best_sintel_epe,
-                        "best_full_monitor_epe": best_full_monitor_epe,
-                        "model_name": model_name,
-                        "arch_code": [int(v) for v in arch_code],
-                        "dataset": dataset,
-                        **({"train_rng_state": save_rng(train_provider.rng)} if hasattr(train_provider, "rng") else {}),
-                    },
-                )
+                _save_json_atomic(state_path, state_record(epoch_idx))
+                commit_boundary(model_dir)
                 logger.info(
                     "epoch=%d/%d global_step=%d lr=%.2e time_sec=%.1f loss=%.6f optical=%.6f uncertainty=%.6f val_epe=%s sintel_epe=%s grad_mean=%.4f grad_p90=%.4f clip_rate=%.4f",
                     epoch_idx,
