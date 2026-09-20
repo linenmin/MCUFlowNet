@@ -13,16 +13,16 @@ def main():
     p.add_argument('--runs',type=Path,required=True)
     p.add_argument('--mcu-reference',type=Path,help='Existing published S/L CSV directory; audit, do not pretend to re-run')
     args=p.parse_args()
-    registry=json.loads(Path(__file__).with_name('models.json').read_text())
+    registry=json.loads(Path(__file__).with_name('models.json').read_text(encoding='utf-8'))
     rows=[]
     samples_reference=None
-    dataset=json.loads((args.runs/'dataset-manifest.json').read_text())
+    dataset=json.loads((args.runs/'dataset-manifest.json').read_text(encoding='utf-8'))
     expected=[p['flow'] for p in dataset['pairs']]
     for model in registry['models']:
         row=dict(model)
         path=args.runs/model['run']
         if (path/'results.json').exists():
-            manifest=json.loads((path/'manifest.json').read_text())
+            manifest=json.loads((path/'manifest.json').read_text(encoding='utf-8'))
             assert manifest['status']=='completed',path
             samples=list(csv.DictReader((path/'samples.csv').open()))
             keys=[x['sample'] for x in samples]
@@ -46,12 +46,12 @@ def main():
     result=dict(checked_at=datetime.now(timezone.utc).isoformat(),protocol=registry['protocol_id'],models=rows,
                 dataset_manifest_sha256=sha(args.runs/'dataset-manifest.json'),
                 source_inventory_sha256=sha(args.runs/'inventory.json'))
-    result['checks']={name:json.loads((args.runs/filename).read_text())
+    result['checks']={name:json.loads((args.runs/filename).read_text(encoding='utf-8'))
                       for name,filename in [('spynet_weights','spynet-weight-check.json'),('nano_export','nano-export-check.json')]
                       if (args.runs/filename).exists()}
     if args.mcu_reference:
         references=[]
-        old_results=json.loads((args.mcu_reference/'results.json').read_text())
+        old_results=json.loads((args.mcu_reference/'results.json').read_text(encoding='utf-8'))
         for name in ['MCUFlowNet-S','MCUFlowNet-L']:
             path=args.mcu_reference/f'{name}.csv'
             samples=list(csv.DictReader(path.open()))
