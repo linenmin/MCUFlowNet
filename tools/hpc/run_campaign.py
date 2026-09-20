@@ -10,12 +10,7 @@ import re
 import subprocess
 import sys
 import time
-
-
-def save(path, value):
-    temp = path.with_suffix('.tmp')
-    temp.write_text(json.dumps(value, indent=2)+'\n')
-    temp.replace(path)
+from experiment_io import save
 
 
 def main():

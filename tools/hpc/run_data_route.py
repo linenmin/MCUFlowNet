@@ -13,6 +13,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+from experiment_io import save
 
 import yaml
 
@@ -54,11 +55,6 @@ def config_for(variant, mode):
         cfg['eval']['sintel'].update(eval_every_epoch=1, max_samples=2)
         cfg['eval']['sintel_full_monitor'].update(eval_every_epoch=2, max_samples=4)
     return cfg
-
-
-def save(path, value):
-    temp = path.with_suffix('.tmp')
-    temp.write_text(json.dumps(value, indent=2)+'\n'); temp.replace(path)
 
 
 def main():

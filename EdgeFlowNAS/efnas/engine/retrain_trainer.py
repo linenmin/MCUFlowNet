@@ -198,9 +198,11 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
 
     logger.info("arch=%s", ",".join(str(v) for v in arch_code))
     logger.info("input=%dx%d batch=%d micro_batch=%d epochs=%d steps_per_epoch=%d", input_h, input_w, batch_size, micro_batch_size, num_epochs, steps_per_epoch)
-    logger.info("lr=%.2e lr_min=%.2e weight_decay=%.2e grad_clip=%.1f", base_lr, lr_min, weight_decay, grad_clip)
     if 'lr_stage' in train_cfg:
-        logger.info("ACTIVE lr_stage=%s (overrides base lr/lr_min above)", train_cfg['lr_stage'])
+        logger.info("active lr_stage=%s", train_cfg['lr_stage'])
+    else:
+        logger.info("active cosine lr=%.2e lr_min=%.2e total_steps=%d", base_lr, lr_min, total_steps)
+    logger.info("weight_decay=%.2e grad_clip=%.1f", weight_decay, grad_clip)
     logger.info("eval_every=%d sintel_every=%d prefetch train/eval=%s/%s", eval_every_epoch, sintel_every, data_cfg.get("prefetch_batches"), data_cfg.get("eval_prefetch_batches"))
 
     input_ph = tf.compat.v1.placeholder(tf.float32, shape=[None, input_h, input_w, 6], name="Input")

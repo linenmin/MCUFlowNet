@@ -1,0 +1,13 @@
+{
+  "experiment_id": "FT3D-LR-01",
+  "parent_step": 20000,
+  "stage_steps": 20000,
+  "midpoint_step": 30000,
+  "min_lr": 1e-6,
+  "variants": {
+    "s_low": {"parent_run": "/runs/DATA-ROUTE-01/train-s_ft3d-pf1", "model": "v3_light", "peak_lr": 1e-6, "warmup_steps": 0},
+    "s_rewarm": {"parent_run": "/runs/DATA-ROUTE-01/train-s_ft3d-pf1", "model": "v3_light", "peak_lr": 3e-6, "warmup_steps": 500},
+    "l_low": {"parent_run": "/runs/DATA-ROUTE-01/train-l_ft3d-pf1", "model": "v3_efn_fps", "peak_lr": 1e-6, "warmup_steps": 0},
+    "l_rewarm": {"parent_run": "/runs/DATA-ROUTE-01/train-l_ft3d-pf1", "model": "v3_efn_fps", "peak_lr": 3e-6, "warmup_steps": 500}
+  }
+}

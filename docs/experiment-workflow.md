@@ -56,6 +56,20 @@ python3 tools/hpc/build_run_index.py --runs /path/to/runs --sources /path/to/run
 
 ## 小测试代码与正式实验共用什么
 
+新学习率实验使用`run_retrain_experiment.py`和`configs/experiments/`中的配置，支持start/resume/continue。run_lr_stage.py只兼容旧命令；run_campaign.py、run_data_route.py保留用于已有阶段复现，不继续为新参数对照复制它们。公用小型记录写入放experiment_io.py。
+
+## 完整保存与故障恢复
+
+重训器保留`model_*/recovery/`中的最近两组完整保存点，每组包含last与已有best权重、trainer_state和eval_history。写完后才原子切换current.json；评测期间退出时从上一组完整状态恢复，丢弃未完成区间的曲线与临时best。普通checkpoints目录仍供评测和导出，恢复以recovery为准。
+
+旧运行没有recovery时，先检查last权重元信息、状态和曲线的轮次/步数是否一致，进入新代码后建立第一组完整保存点；不猜测或拼接不一致的旧文件。新分支必须使用空输出目录，恢复必须写回同一运行，训练器和启动器均检查。
+
+这是进程中断保护，不替代异机备份。两组完整副本会增加检查点I/O及磁盘占用；保留数量固定为2，待下一次正式运行检查实际开销。临时未发布的一组不会作为恢复起点，下一次成功发布时清理。不要在运行期间手工清理recovery。
+
+训练算法、损失与数据配方没有因此改变。学习率日志只显示生效的调度。空间增强前后截断的次序本次不改，以免改变已登记配方；未来启用空间增强时必须明确选择并单独验收。
+
+## 小测试的保留原则
+
 修改参数使用配置，修改算法使用Git提交，不为每个种子复制Python文件。短跑调用正式训练入口，仅减少步数；其权重必须与正式候选分开。可复用检查保留为`tools/validation/test_*.py`等测试；临时排查命令放已忽略的`tmp/`，结果确认后清理。重复出现的操作再提取成公共函数，不为单次查询建立一个长期脚本。
 
 同主题配置放`EdgeFlowNAS/configs/experiments/<主题>/`。当前label_ab配置有少量重复，这是已运行版本；下一次相关改动可整理共同配置与差异，但每个运行仍保存完整的实际生效配置，不能只留依赖未来默认值的参数差异。
