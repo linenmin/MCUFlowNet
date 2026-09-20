@@ -87,6 +87,11 @@ def _resolve_init_checkpoint_path(config: Dict[str, Any], model_name: str) -> Op
     init_mode = str(checkpoint_cfg.get("init_mode", "")).strip().lower()
     if not init_mode or init_mode == "none":
         return None
+    if init_mode == "checkpoint":
+        path = str(checkpoint_cfg.get("init_checkpoint_path", "")).strip()
+        if not path:
+            raise ValueError("checkpoint.init_checkpoint_path is required")
+        return Path(path)
     if init_mode != "experiment_dir":
         raise ValueError(f"unsupported retrain_v3 checkpoint.init_mode: {init_mode}")
     exp_dir = str(checkpoint_cfg.get("init_experiment_dir", "")).strip()

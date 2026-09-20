@@ -31,6 +31,8 @@ def prepare(recipe, variant, action, stop_step, runs_root):
     for name in (recipe['experiment_id'], variant):
         if not re.fullmatch(r'[A-Za-z0-9_-]+', name):
             raise ValueError('Invalid experiment/run name')
+    if recipe.get('kind') == 'weight_init':
+        return prepare_weight_init(recipe, variant, action, stop_step, runs_root)
     choice = recipe['variants'][variant]
     run_root = Path(runs_root)/recipe['experiment_id']/variant
     model = run_root/f"model_{choice['model']}"
@@ -85,6 +87,68 @@ def prepare(recipe, variant, action, stop_step, runs_root):
     return cfg, model, bundle, state, target
 
 
+def prepare_weight_init(recipe, variant, action, stop_step, runs_root):
+    """A new dataset phase keeps model/BN weights and starts fresh Adam/RNG."""
+    choice = recipe['variants'][variant]
+    run_root = Path(runs_root)/recipe['experiment_id']/variant
+    model = run_root/f"model_{choice['model']}"
+    cfg = copy.deepcopy(recipe['config'])
+    cfg.update(model_name=choice['model'], arch_code=choice['arch_code'])
+    cfg['data']['ft3d_train_augment'] = copy.deepcopy(choice['augment'])
+    block = int(cfg['train']['updates_per_epoch'])
+    target = recipe['stage_steps'] if stop_step is None else stop_step
+    if recipe['parent_step'] != 0 or not 0 < target <= recipe['stage_steps']:
+        raise ValueError('Weight initialization starts a new phase at step zero')
+    if target % block or recipe['stage_steps'] % block:
+        raise ValueError('Stop must be a complete reporting boundary')
+    cfg['runtime'].update(output_root=str(run_root.parent), experiment_name=variant,
+                          stop_after_epoch=target//block)
+    cfg['train'].update(num_epochs=recipe['stage_steps']//block,
+                        lr_stage=stage_spec(recipe, variant))
+    if action == 'start':
+        if run_root.exists(): raise FileExistsError(run_root)
+        source = Path(choice['parent_run'])/model.name
+        # Historical frozen weight-only snapshots need not contain a consistent
+        # optimizer/history bundle; validate the weight metadata directly.
+        bundle = committed_model(source) if (source/'recovery/current.json').exists() else source
+        meta = json.loads((bundle/'checkpoints/last.ckpt.meta.json').read_text())
+        if (meta['epoch'], meta['global_step'], meta['arch_code']) != (
+                choice['source_epoch'], choice['source_step'], choice['arch_code']):
+            raise ValueError('Unexpected source checkpoint counters/architecture')
+        for suffix in ('index', 'data-00000-of-00001'):
+            if (bundle/f'checkpoints/last.ckpt.{suffix}').stat().st_size == 0:
+                raise ValueError('Empty source checkpoint')
+        cfg['checkpoint'].update(load_checkpoint=False, init_mode='checkpoint',
+            init_checkpoint_path=str(bundle/'checkpoints/last.ckpt'),
+            verify_initialized_tensors=True, fork_lr_stage=False)
+        state = {'epoch':0, 'global_step':0}
+    else:
+        saved = json.loads((model/'run_manifest.json').read_text())
+        if saved['protocol'] != label_ab_protocol(cfg):
+            raise ValueError('Recipe changed; recovery must keep the original protocol')
+        bundle = committed_model(model)
+        state = validate_boundary(bundle)
+        cfg['checkpoint'].update(load_checkpoint=True, resume_experiment_name=str(run_root),
+            resume_ckpt_name='last', verify_restored_tensors=True, fork_lr_stage=False)
+    if not state['global_step'] < target or state['epoch']*block != state['global_step']:
+        raise ValueError('No work remains or inconsistent phase counters')
+    return cfg, model, bundle, state, target
+
+
+def probe_recipe(recipe):
+    """Same inputs/optimizer/augmentation, shortened engineering acceptance run."""
+    if recipe.get('kind') != 'weight_init':
+        raise ValueError('Probe currently supports weight-initialized phases')
+    recipe = copy.deepcopy(recipe)
+    recipe.update(experiment_id=recipe['experiment_id']+'-PROBE', stage_steps=100, midpoint_step=100)
+    cfg = recipe['config']
+    cfg['train']['updates_per_epoch'] = 50
+    cfg['eval'].update(eval_every_epoch=1, eval_batches=1)
+    cfg['eval']['sintel'].update(eval_every_epoch=1, max_samples=2)
+    cfg['eval']['sintel_full_monitor'].update(eval_every_epoch=2, max_samples=4)
+    return recipe
+
+
 def verify_result(model, cfg, recipe, target):
     complete = committed_model(model)
     if validate_boundary(complete)['global_step'] != target:
@@ -106,6 +170,8 @@ def verify_result(model, cfg, recipe, target):
     if [int(r['global_step']) for r in full] != expected_full:
         raise ValueError('Missing full monitor evaluations')
     count = len([line for line in Path(monitor['sintel_list']).read_text().splitlines() if line.strip()])
+    if monitor.get('max_samples'):
+        count = min(count, monitor['max_samples'])
     if any(int(r['full_monitor_evaluated_samples']) != count for r in full):
         raise ValueError('Incomplete full monitor')
 
@@ -117,8 +183,10 @@ def main(default_recipe=None):
     parser.add_argument('--action', choices=['start','resume','continue'], default='start')
     parser.add_argument('--stop-step', type=int)
     parser.add_argument('--runs-root', type=Path, default=Path('/runs'))
+    parser.add_argument('--probe', action='store_true')
     args = parser.parse_args()
     recipe = json.loads(args.recipe.read_text())
+    if args.probe: recipe = probe_recipe(recipe)
     for name in (recipe['experiment_id'], args.variant):
         if not re.fullmatch(r'[A-Za-z0-9_-]+', name): parser.error('Invalid experiment/run name')
     control = args.runs_root/recipe['experiment_id']/'control'/args.variant
@@ -129,9 +197,9 @@ def main(default_recipe=None):
         fcntl.flock(lock, fcntl.LOCK_EX|fcntl.LOCK_NB)
         cfg, model, bundle, state, target = prepare(recipe, args.variant, args.action, args.stop_step, args.runs_root)
         jid = os.environ.get('SLURM_JOB_ID', f'local-{time.time_ns()}')
-        manifest = control/f'job-{jid}.json'
+        manifest = control/f'job-{jid}-{args.action}.json'
         if manifest.exists(): raise FileExistsError(manifest)
-        config = control/f'config-{jid}.json'
+        config = control/f'config-{jid}-{args.action}.json'
         save(config, cfg)
         command = [sys.executable, 'EdgeFlowNAS/wrappers/run_retrain_fc2.py', '--config', str(config),
                    '--arch_code', ','.join(map(str,cfg['arch_code']))]
@@ -140,6 +208,7 @@ def main(default_recipe=None):
                       source_run=str(Path(recipe['variants'][args.variant]['parent_run'])/model.name),
                       resume_from=str(bundle), status='running', started_unix=time.time(),
                       start_step=state['global_step'], target_step=target, recipe=recipe,
+                      source_metadata=json.loads((bundle/'checkpoints/last.ckpt.meta.json').read_text()),
                       config_files=[str(config)], commands=[command],
                       checkpoint_sha256={p.name:hashlib.sha256(p.read_bytes()).hexdigest()
                         for p in (bundle/'checkpoints').glob('last.ckpt.*')})

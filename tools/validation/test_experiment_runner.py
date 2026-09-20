@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'hpc'))
-from run_retrain_experiment import prepare
+from run_retrain_experiment import prepare, probe_recipe
 from efnas.engine.experiment_protocol import label_ab_protocol
 
 
@@ -61,3 +61,28 @@ class ExperimentRunnerTest(unittest.TestCase):
         cfg,model,_,_,_=self.start();write_run(model,cfg,3)
         recipe=copy.deepcopy(self.recipe);recipe['variants']['s']['peak_lr']=9e-6
         with self.assertRaises(ValueError):prepare(recipe,'s','continue',4,self.root)
+
+    def test_weight_phase_starts_fresh_and_checks_recipe_on_resume(self):
+        recipe=copy.deepcopy(self.recipe)
+        recipe.update(kind='weight_init',parent_step=0,stage_steps=4,midpoint_step=4,config=self.cfg)
+        recipe['variants']['s'].update(source_epoch=2,source_step=2,arch_code=[0]*11,augment={'enabled':False})
+        meta=self.root/'parent/model_tiny/checkpoints/last.ckpt.meta.json'
+        meta.write_text(json.dumps(dict(epoch=2,global_step=2,arch_code=[0]*11)))
+        cfg,model,_,state,target=prepare(recipe,'s','start',2,self.root)
+        self.assertEqual(state['global_step'],0)
+        self.assertFalse(cfg['checkpoint']['load_checkpoint'])
+        self.assertEqual(cfg['checkpoint']['init_mode'],'checkpoint')
+        write_run(model,cfg,2)
+        resumed,_,_,state,target=prepare(recipe,'s','resume',None,self.root)
+        self.assertEqual((state['global_step'],target),(2,4))
+        self.assertTrue(resumed['checkpoint']['load_checkpoint'])
+        recipe['variants']['s']['augment']={'enabled':True}
+        with self.assertRaises(ValueError):prepare(recipe,'s','resume',None,self.root)
+
+    def test_wrong_parent_is_rejected(self):
+        recipe=copy.deepcopy(self.recipe)
+        recipe.update(kind='weight_init',parent_step=0,stage_steps=4,config=self.cfg)
+        recipe['variants']['s'].update(source_epoch=3,source_step=3,arch_code=[0]*11,augment={})
+        meta=self.root/'parent/model_tiny/checkpoints/last.ckpt.meta.json'
+        meta.write_text(json.dumps(dict(epoch=2,global_step=2,arch_code=[0]*11)))
+        with self.assertRaises(ValueError):prepare(recipe,'s','start',None,self.root)

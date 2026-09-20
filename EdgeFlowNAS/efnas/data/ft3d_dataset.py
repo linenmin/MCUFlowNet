@@ -452,6 +452,16 @@ class FT3DBatchProvider:
                 continue
             try:
                 if self.crop_mode == "random":
+                    if (self.augment_cfg or {}).get("mode") == "photometric_only":
+                        # Keep the baseline crop and sampling RNG unchanged. Color
+                        # draws use a copy of the per-sample RNG after cropping.
+                        img0, img1, flow = _random_crop_triplet(
+                            img0, img1, flow, self.crop_h, self.crop_w, rng)
+                        color_rng = np.random.RandomState()
+                        color_rng.set_state(rng.get_state())
+                        img0, img1 = _apply_photometric_augment(
+                            img0, img1, color_rng, self.augment_cfg)
+                        return img0, img1, flow
                     img0, img1 = _apply_photometric_augment(img0, img1, rng, self.augment_cfg)
                     img0, img1 = _apply_eraser_augment(img0, img1, rng, self.augment_cfg)
                     return _apply_spatial_augment(
