@@ -14,11 +14,27 @@ import re
 import subprocess
 import sys
 import time
+import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'EdgeFlowNAS'))
 from efnas.engine.recovery_bundle import committed_model, validate_boundary
 from efnas.engine.lr_stage import check_lr_fork, stage_lr
 from efnas.engine.experiment_protocol import label_ab_protocol
 from experiment_io import save
+
+
+def arch_text(value):
+    return value if isinstance(value, str) else ','.join(map(str, value))
+
+
+def wrapper_config(cfg):
+    """Match the existing YAML loader and CLI architecture override exactly.
+
+    PyYAML reads JSON scientific notation without a decimal point as strings.
+    Keep this historical representation, so existing saved protocols resume.
+    """
+    cfg = yaml.safe_load(json.dumps(cfg))
+    cfg['arch_code'] = arch_text(cfg['arch_code'])
+    return cfg
 
 
 def stage_spec(recipe, variant):
@@ -68,7 +84,7 @@ def prepare(recipe, variant, action, stop_step, runs_root):
         if run_root.exists(): raise FileExistsError(run_root)
         if state['global_step'] != recipe['parent_step']:
             raise ValueError('Parent step mismatch')
-    elif cfg['train'].get('lr_stage') != stage_spec(recipe, variant):
+    elif yaml.safe_load(json.dumps(cfg['train'].get('lr_stage'))) != yaml.safe_load(json.dumps(stage_spec(recipe, variant))):
         raise ValueError('Recipe changed; recovery must keep the original LR schedule')
     block = int(cfg['train']['updates_per_epoch'])
     if any(value % block for value in (target, horizon, state['global_step'])):
@@ -79,6 +95,7 @@ def prepare(recipe, variant, action, stop_step, runs_root):
     cfg['train'].update(num_epochs=horizon//block, lr_stage=stage_spec(recipe, variant))
     cfg['checkpoint'].update(load_checkpoint=True, resume_experiment_name=str(source_root),
                              resume_ckpt_name='last', fork_lr_stage=action == 'start', verify_restored_tensors=True)
+    cfg = wrapper_config(cfg)
     current = label_ab_protocol(cfg)
     if action == 'start': check_lr_fork(saved['protocol'], current)
     elif saved['protocol'] != current: raise ValueError('Resume changed the recorded protocol')
@@ -105,6 +122,7 @@ def prepare_weight_init(recipe, variant, action, stop_step, runs_root):
                           stop_after_epoch=target//block)
     cfg['train'].update(num_epochs=recipe['stage_steps']//block,
                         lr_stage=stage_spec(recipe, variant))
+    cfg = wrapper_config(cfg)
     if action == 'start':
         if run_root.exists(): raise FileExistsError(run_root)
         source = Path(choice['parent_run'])/model.name
@@ -202,7 +220,7 @@ def main(default_recipe=None):
         config = control/f'config-{jid}-{args.action}.json'
         save(config, cfg)
         command = [sys.executable, 'EdgeFlowNAS/wrappers/run_retrain_fc2.py', '--config', str(config),
-                   '--arch_code', ','.join(map(str,cfg['arch_code']))]
+                   '--arch_code', arch_text(cfg['arch_code'])]
         record = dict(job_id=jid, code_commit=os.environ.get('MCUFLOW_COMMIT'), mode='probe' if args.probe else 'train',
                       action=args.action, run=str(model),
                       source_run=str(Path(recipe['variants'][args.variant]['parent_run'])/model.name),

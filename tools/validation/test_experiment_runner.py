@@ -6,11 +6,12 @@ import sys
 import tempfile
 import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'hpc'))
-from run_retrain_experiment import prepare, probe_recipe
+from run_retrain_experiment import prepare, probe_recipe, wrapper_config, arch_text
 from efnas.engine.experiment_protocol import label_ab_protocol
 
 
 def write_run(root, cfg, step):
+    cfg=wrapper_config(cfg)
     root.mkdir(parents=True, exist_ok=True)
     (root/'run_manifest.json').write_text(json.dumps({'config':cfg,'protocol':label_ab_protocol(cfg)}))
     ck=root/'checkpoints';ck.mkdir(exist_ok=True)
@@ -23,6 +24,18 @@ def write_run(root, cfg, step):
 
 
 class ExperimentRunnerTest(unittest.TestCase):
+    def test_real_wrapper_representation(self):
+        from importlib.util import spec_from_file_location, module_from_spec
+        spec=spec_from_file_location('retrain_wrapper',Path(__file__).resolve().parents[2]/'EdgeFlowNAS/wrappers/run_retrain_fc2.py')
+        wrapper=module_from_spec(spec);spec.loader.exec_module(wrapper)
+        with tempfile.TemporaryDirectory() as folder:
+            cfg={'arch_code':[2,0,0], 'train':{'lr':1e-5,'lr_stage':{'peak_lr':1e-5}}}
+            path=Path(folder)/'config.json';path.write_text(json.dumps(cfg))
+            args=wrapper._build_parser().parse_args(['--arch_code',arch_text(cfg['arch_code'])])
+            effective=wrapper._apply_common_overrides(wrapper._load_yaml(path),args)
+            self.assertEqual(wrapper_config(cfg),effective)
+            self.assertEqual(arch_text(effective['arch_code']),'2,0,0')
+
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         self.root=Path(self.temp.name)
