@@ -1,4 +1,4 @@
-"""Configured full-state LR forks: start, recover, or continue after review.
+"""Configured weight-initialized phases and full-state learning-rate forks.
 
 Execute inside a GPU allocation. This runner never submits Slurm jobs.
 """
@@ -203,7 +203,7 @@ def main(default_recipe=None):
         save(config, cfg)
         command = [sys.executable, 'EdgeFlowNAS/wrappers/run_retrain_fc2.py', '--config', str(config),
                    '--arch_code', ','.join(map(str,cfg['arch_code']))]
-        record = dict(job_id=jid, code_commit=os.environ.get('MCUFLOW_COMMIT'), mode='train',
+        record = dict(job_id=jid, code_commit=os.environ.get('MCUFLOW_COMMIT'), mode='probe' if args.probe else 'train',
                       action=args.action, run=str(model),
                       source_run=str(Path(recipe['variants'][args.variant]['parent_run'])/model.name),
                       resume_from=str(bundle), status='running', started_unix=time.time(),
@@ -217,7 +217,8 @@ def main(default_recipe=None):
             subprocess.run(command, check=True)
             verify_result(model, cfg, recipe, target)
             record.update(status='completed', final_global_step=target,
-                          awaiting_midpoint_review=target == recipe['midpoint_step'])
+                          awaiting_midpoint_review=(target == recipe['midpoint_step'] and
+                              target < recipe['parent_step']+recipe['stage_steps']))
         except BaseException as error:
             record.update(status='failed', error=repr(error))
             raise

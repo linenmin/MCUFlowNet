@@ -7,9 +7,9 @@
   "min_lr": 1e-06,
   "config": {
     "runtime": {
-      "output_root": "/runs/DATA-ROUTE-01",
+      "output_root": "/runs/FT3D-RECIPE-01",
       "seed": 42,
-      "experiment_name": "train-s_ft3d",
+      "experiment_name": "selected-by-runner",
       "audit_initial_state": true,
       "stop_after_epoch": 40,
       "record_training_protocol": true
