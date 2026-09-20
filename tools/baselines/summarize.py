@@ -47,8 +47,10 @@ def main():
                 dataset_manifest_sha256=sha(args.runs/'dataset-manifest.json'),
                 source_inventory_sha256=sha(args.runs/'inventory.json'))
     result['checks']={name:json.loads((args.runs/filename).read_text(encoding='utf-8'))
-                      for name,filename in [('spynet_weights','spynet-weight-check.json'),('nano_export','nano-export-check.json')]
+                      for name,filename in [('spynet_weights','spynet-weight-check.json'),('nano_export','nano-export-check.json'),('raft_small_weights','raft-small-weight-check.json')]
                       if (args.runs/filename).exists()}
+    if (args.runs/'extension-provenance.json').exists():
+        result['extension_provenance_sha256']=sha(args.runs/'extension-provenance.json')
     if args.mcu_reference:
         references=[]
         old_results=json.loads((args.mcu_reference/'results.json').read_text(encoding='utf-8'))
@@ -90,6 +92,8 @@ def main():
             '- dataset-manifest.json：数据文件指纹；inventory.json：上游代码版本与文件清单。',
             '- spynet-weight-check.json：转换权重与作者Lua张量的逐个比较。',
             '- nano-export-check.json：H5与浮点TFLite的两对预测比较，不能消除物理单位疑问。',
+            '- raft-small-weight-check.json：原版106个权重张量与Torchvision原论文C+T转换版的数值身份检查。',
+            '- extension-provenance.json、torch-extension-freeze.txt：新增权重入口、实际PTLFlow安装源码指纹与依赖版本。',
             '- EdgeFlowNet四块为208×512非重叠拼接，不能混写成176×240部署块。',
             '- 本次没有测端侧FPS、功耗或INT8精度。', '', '核对时间（UTC）：'+result['checked_at']]
     (args.runs/'report.md').write_text('\n'.join(lines)+'\n',encoding='utf-8')
