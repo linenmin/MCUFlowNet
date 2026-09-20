@@ -1,5 +1,6 @@
 """Step-counted stages and JSON-safe RNG state for both dataset providers."""
 import math
+import json
 import numpy as np
 
 
@@ -17,6 +18,13 @@ def save_rng(rng):
         state = rng.get_state()
         return {'kind': 'numpy_random_state', 'state': [state[0], state[1].tolist(), *state[2:]]}
     return {'kind': 'python_random', 'state': rng.getstate()}
+
+
+def rng_matches(rng, value):
+    """Compare current and legacy JSON RNG formats, including tuple/list conversion."""
+    if not isinstance(value, dict):
+        value = {'kind': 'python_random', 'state': value}
+    return json.loads(json.dumps(save_rng(rng))) == json.loads(json.dumps(value))
 
 
 def restore_rng(rng, value):

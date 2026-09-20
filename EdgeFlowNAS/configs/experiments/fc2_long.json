@@ -1,0 +1,18 @@
+{
+  "kind": "schedule_continue",
+  "experiment_id": "FC2-LONG-01",
+  "parent_step": 104250,
+  "stage_steps": 173750,
+  "midpoint_step": 278000,
+  "approved_stop_step": 278000,
+  "updates_per_epoch": 695,
+  "schedule_epochs": 400,
+  "lr": 0.0001,
+  "lr_min": 0.000001,
+  "prefetch_batches": 1,
+  "milestone_epochs": [200, 300, 400],
+  "variants": {
+    "s": {"model": "v3_light", "parent_run": "/runs/20260918-fc2-label01-s_clip50"},
+    "l": {"model": "v3_efn_fps", "parent_run": "/runs/20260918-fc2-label01-l_clip50"}
+  }
+}

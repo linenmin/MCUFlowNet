@@ -17,7 +17,7 @@ import time
 import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'EdgeFlowNAS'))
 from efnas.engine.recovery_bundle import committed_model, validate_boundary
-from efnas.engine.lr_stage import check_lr_fork, check_crop_fork, stage_lr
+from efnas.engine.lr_stage import check_lr_fork, check_crop_fork, check_schedule_fork, stage_lr
 from efnas.engine.experiment_protocol import label_ab_protocol
 from experiment_io import save
 
@@ -49,6 +49,8 @@ def prepare(recipe, variant, action, stop_step, runs_root):
             raise ValueError('Invalid experiment/run name')
     if recipe.get('kind') == 'weight_init':
         return prepare_weight_init(recipe, variant, action, stop_step, runs_root)
+    if recipe.get('kind') == 'schedule_continue':
+        return prepare_schedule_continue(recipe, variant, action, stop_step, runs_root)
     choice = recipe['variants'][variant]
     run_root = Path(runs_root)/recipe['experiment_id']/variant
     model = run_root/f"model_{choice['model']}"
@@ -160,8 +162,66 @@ def prepare_weight_init(recipe, variant, action, stop_step, runs_root):
     return cfg, model, bundle, state, target
 
 
+def prepare_schedule_continue(recipe, variant, action, stop_step, runs_root):
+    """Fork FC2 without changing the parent's original cosine or epoch length."""
+    choice = recipe['variants'][variant]
+    root = Path(runs_root)/recipe['experiment_id']/variant
+    model = root/f"model_{choice['model']}"
+    source = Path(choice['parent_run']) if action == 'start' else root
+    saved = json.loads((source/model.name/'run_manifest.json').read_text())
+    cfg = copy.deepcopy(saved['config'])
+    block, horizon = recipe['updates_per_epoch'], recipe['schedule_epochs']
+    bundle = committed_model(source/model.name)
+    state = validate_boundary(bundle)
+    target = recipe['midpoint_step'] if stop_step is None else stop_step
+    if action == 'resume' and stop_step is None:
+        target = int(cfg['runtime']['stop_after_epoch'])*block
+        for path in (root.parent/'control'/variant).glob('job-*.json'):
+            attempt = json.loads(path.read_text())
+            if attempt.get('run') == str(model): target = max(target, int(attempt.get('target_step', 0)))
+    if cfg['model_name'] != choice['model'] or cfg['train']['num_epochs'] != horizon:
+        raise ValueError('Parent model/schedule horizon mismatch')
+    if (float(cfg['train']['lr']), float(cfg['train']['lr_min'])) != (recipe['lr'], recipe['lr_min']):
+        raise ValueError('Original cosine endpoints changed')
+    if recipe['parent_step']+recipe['stage_steps'] != horizon*block:
+        raise ValueError('Recipe does not complete the original schedule')
+    if not recipe['parent_step'] <= state['global_step'] < target <= recipe['approved_stop_step'] <= horizon*block:
+        raise ValueError('No work remains or target exceeds approved schedule')
+    if any(n % block for n in (target, state['global_step'])) or state['epoch']*block != state['global_step']:
+        raise ValueError('Epoch/update counters disagree')
+    if action == 'start':
+        if root.exists(): raise FileExistsError(root)
+        if state['global_step'] != recipe['parent_step']: raise ValueError('Wrong parent step')
+        if target > recipe['midpoint_step']: raise ValueError('Start exceeds its approved first stop')
+    else:
+        if cfg['runtime'].get('milestone_epochs') != recipe['milestone_epochs']:
+            raise ValueError('Recovery changed frozen checkpoint epochs')
+        if cfg['data'].get('prefetch_batches') != recipe['prefetch_batches']:
+            raise ValueError('Recovery changed input prefetch')
+        if action == 'continue' and (stop_step is None or state['global_step'] < recipe['midpoint_step']):
+            raise ValueError('Continue requires completing the first stop and an explicit target')
+    cfg['runtime'].update(output_root=str(root.parent), experiment_name=variant,
+        stop_after_epoch=target//block, expected_steps_per_epoch=block, milestone_epochs=recipe['milestone_epochs'])
+    cfg['data']['prefetch_batches'] = recipe['prefetch_batches']
+    cfg['checkpoint'].update(load_checkpoint=True, resume_experiment_name=str(source), resume_ckpt_name='last',
+        fork_lr_stage=False, fork_crop_stage=False, fork_schedule_continue=action=='start',
+        fork_parent_step=recipe['parent_step'], verify_restored_tensors=True)
+    cfg = wrapper_config(cfg)
+    if action == 'start': check_schedule_fork(saved['protocol'], label_ab_protocol(cfg))
+    elif saved['protocol'] != label_ab_protocol(cfg): raise ValueError('Recovery changed the original schedule protocol')
+    return cfg, model, bundle, state, target
+
+
 def probe_recipe(recipe):
     """Same inputs/optimizer/augmentation, shortened engineering acceptance run."""
+    if recipe.get('kind') == 'schedule_continue':
+        recipe = copy.deepcopy(recipe)
+        block = recipe['updates_per_epoch']; epoch = recipe['parent_step']//block
+        recipe.update(experiment_id=recipe['experiment_id']+'-PROBE',
+                      midpoint_step=recipe['parent_step']+block,
+                      approved_stop_step=recipe['parent_step']+2*block,
+                      milestone_epochs=[epoch+1, epoch+2])
+        return recipe
     if recipe.get('kind') == 'crop_fork':
         recipe = copy.deepcopy(recipe)
         # Keep the parent's 500-update reporting blocks and step/epoch counters.
@@ -186,12 +246,12 @@ def verify_result(model, cfg, recipe, target):
         raise ValueError('Training stopped at an unexpected step')
     with (complete/'eval_history.csv').open() as stream:
         rows = list(csv.DictReader(stream))
-    block = cfg['train']['updates_per_epoch']
+    block = cfg['train'].get('updates_per_epoch', recipe.get('updates_per_epoch'))
     expected = list(range(recipe['parent_step']+block, target+1, block))
     if [int(r['global_step']) for r in rows] != expected:
         raise ValueError('Missing/duplicated history boundaries')
     for row in rows:
-        for field in ('loss', 'sintel_raw_epe', 'full_monitor_sintel_raw_epe'):
+        for field in ('loss', 'val_epe', 'sintel_raw_epe', 'full_monitor_sintel_raw_epe'):
             if row.get(field) and not math.isfinite(float(row[field])):
                 raise ValueError(f'Nonfinite {field}')
     monitor = cfg['eval']['sintel_full_monitor']
@@ -205,6 +265,23 @@ def verify_result(model, cfg, recipe, target):
         count = min(count, monitor['max_samples'])
     if any(int(r['full_monitor_evaluated_samples']) != count for r in full):
         raise ValueError('Incomplete full monitor')
+    if recipe.get('kind') == 'schedule_continue':
+        quick = cfg['eval']['sintel']
+        quick_count = len([line for line in Path(quick['sintel_list']).read_text().splitlines() if line.strip()])
+        if quick.get('max_samples'): quick_count = min(quick_count, quick['max_samples'])
+        for row in rows:
+            if int(row['evaluated_samples']) != quick_count:
+                raise ValueError('Incomplete quick Sintel monitor')
+            # CSV records the LR used on the final update, before incrementing the counter.
+            progress = (int(row['global_step'])-1)/(block*cfg['train']['num_epochs'])
+            expected_lr = float(cfg['train']['lr_min']) + (float(cfg['train']['lr'])-float(cfg['train']['lr_min']))*.5*(1+math.cos(math.pi*progress))
+            if not math.isclose(float(row['lr']), expected_lr, rel_tol=1e-10):
+                raise ValueError('Training did not use the original cosine schedule')
+        for epoch in recipe['milestone_epochs']:
+            if epoch*block > target: continue
+            frozen = model.parent/'milestones'/f'epoch-{epoch:04d}'/model.name
+            if validate_boundary(frozen)['global_step'] != epoch*block:
+                raise ValueError('Missing or inconsistent frozen checkpoint')
 
 
 def main(default_recipe=None):

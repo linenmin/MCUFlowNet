@@ -4,6 +4,7 @@ The ordinary checkpoint names remain evaluation/export aliases. Recovery uses
 only the committed bundle, never an alias potentially overwritten mid-epoch.
 """
 import csv
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -121,6 +122,37 @@ def restore_aliases(model, bundle):
         source, destination = bundle/filename, model/filename
         if source.exists(): shutil.copy2(source, destination)
         elif destination.exists(): destination.unlink()
+
+
+def keep_milestone(model, epochs):
+    """Freeze a committed boundary outside the rolling two-generation recovery."""
+    model = Path(model)
+    bundle = committed_model(model)
+    state = validate_boundary(bundle)
+    if state['epoch'] not in epochs:
+        return None
+    root = model.parent/'milestones'
+    root.mkdir(exist_ok=True)
+    target = root/f"epoch-{state['epoch']:04d}"
+    if target.exists():
+        frozen = target/model.name
+        if validate_boundary(frozen) != state:
+            raise ValueError('Existing milestone has a different trainer state')
+        for path in (bundle/'checkpoints').glob('last.ckpt.*'):
+            if hashlib.sha256(path.read_bytes()).digest() != hashlib.sha256((frozen/'checkpoints'/path.name).read_bytes()).digest():
+                raise ValueError('Existing milestone has different weights')
+        return frozen
+    temp = root/('.pending-'+uuid.uuid4().hex)
+    frozen = temp/model.name
+    # Copy only a committed generation, never the rolling recovery directory.
+    frozen.mkdir(parents=True)
+    shutil.copytree(bundle/'checkpoints', frozen/'checkpoints')
+    for filename in ('trainer_state.json', 'eval_history.csv'):
+        if (bundle/filename).exists(): shutil.copy2(bundle/filename, frozen/filename)
+    shutil.copy2(model/'run_manifest.json', frozen/'run_manifest.json')
+    validate_boundary(frozen)
+    os.replace(temp, target)
+    return target/model.name
 
 
 def check_output_target(model, resume_model, load, fork):

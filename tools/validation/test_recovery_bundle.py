@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'EdgeFlowNAS'))
 from efnas.engine.recovery_bundle import (
-    commit_boundary, committed_model, restore_aliases, check_output_target,
+    commit_boundary, committed_model, restore_aliases, check_output_target, keep_milestone,
 )
 
 
@@ -21,6 +21,21 @@ def boundary(root, epoch):
 
 
 class RecoveryTest(unittest.TestCase):
+    def test_milestone_survives_rolling_retention_and_refuses_overwrite(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)/'run/model_tiny'; root.mkdir(parents=True)
+            (root/'run_manifest.json').write_text('{}')
+            boundary(root, 1); commit_boundary(root)
+            frozen = keep_milestone(root, [1])
+            self.assertEqual(keep_milestone(root, [1]), frozen)
+            for epoch in [2,3,4]:
+                boundary(root, epoch); commit_boundary(root); keep_milestone(root, [1])
+            self.assertEqual((frozen/'checkpoints/last.ckpt.data-00000-of-00001').read_bytes(), b'1')
+            boundary(root, 1)
+            (root/'checkpoints/last.ckpt.data-00000-of-00001').write_bytes(b'wrong')
+            commit_boundary(root)
+            with self.assertRaisesRegex(ValueError, 'different weights'): keep_milestone(root, [1])
+
     def test_crash_during_evaluation_recovers_matching_history_and_rng(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);boundary(root,1);first=commit_boundary(root)

@@ -24,6 +24,29 @@ def write_run(root, cfg, step):
 
 
 class ExperimentRunnerTest(unittest.TestCase):
+    def test_schedule_continuation_preserves_horizon_and_rejects_lr_changes(self):
+        cfg = copy.deepcopy(self.cfg)
+        cfg['data'].update(dataset='FC2', prefetch_batches=0)
+        cfg['train'].update(num_epochs=4, lr=1e-4, lr_min=1e-6)
+        write_run(self.root/'parent/model_tiny', cfg, 2)
+        recipe = dict(kind='schedule_continue', experiment_id='LONG', parent_step=2, stage_steps=2,
+                      midpoint_step=4, approved_stop_step=4, updates_per_epoch=1, schedule_epochs=4,
+                      lr=1e-4, lr_min=1e-6, prefetch_batches=1, milestone_epochs=[3,4],
+                      variants=self.recipe['variants'])
+        child, model, _, _, target = prepare(recipe, 's', 'start', None, self.root)
+        self.assertEqual(child['train'], wrapper_config(cfg)['train'])
+        self.assertEqual(target, 4)
+        self.assertTrue(child['checkpoint']['fork_schedule_continue'])
+        write_run(model, child, 3)
+        resumed, _, _, _, _ = prepare(recipe, 's', 'resume', None, self.root)
+        self.assertEqual(resumed['train'], child['train'])
+        self.assertFalse(resumed['checkpoint']['fork_schedule_continue'])
+        probe = probe_recipe(recipe)
+        self.assertEqual(probe['schedule_epochs'], 4)
+        self.assertEqual(probe['stage_steps'], 2)
+        altered = copy.deepcopy(recipe); altered['lr'] = 1e-5
+        with self.assertRaises(ValueError): prepare(altered, 's', 'resume', None, self.root)
+
     def test_real_wrapper_representation(self):
         from importlib.util import spec_from_file_location, module_from_spec
         spec=spec_from_file_location('retrain_wrapper',Path(__file__).resolve().parents[2]/'EdgeFlowNAS/wrappers/run_retrain_fc2.py')

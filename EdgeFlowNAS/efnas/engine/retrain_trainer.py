@@ -39,11 +39,11 @@ from efnas.utils.json_io import read_json, write_json
 from efnas.utils.logger import build_logger
 from efnas.utils.seed import set_global_seed
 from efnas.engine.experiment_protocol import label_ab_protocol, check_resume_protocol
-from efnas.engine.stage_state import stage_steps, save_rng, restore_rng
-from efnas.engine.lr_stage import stage_lr, check_lr_fork, check_crop_fork
+from efnas.engine.stage_state import stage_steps, save_rng, restore_rng, rng_matches
+from efnas.engine.lr_stage import stage_lr, check_lr_fork, check_crop_fork, check_schedule_fork
 from efnas.engine.validation_graph import build_validation_graph
 from efnas.engine.recovery_bundle import (
-    check_output_target, committed_model, commit_boundary, restore_aliases,
+    check_output_target, committed_model, commit_boundary, restore_aliases, keep_milestone,
 )
 
 
@@ -157,6 +157,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
     data_cfg = config.get("data", {})
     eval_cfg = config.get("eval", {})
     checkpoint_cfg = config.get("checkpoint", {})
+    is_fork = bool(checkpoint_cfg.get('fork_lr_stage') or checkpoint_cfg.get('fork_schedule_continue'))
     dataset = str(data_cfg.get("dataset", "FC2")).strip().upper()
 
     seed = int(runtime_cfg.get("seed", 42))
@@ -167,7 +168,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
     model_dir = experiment_dir / f"model_{model_name}"
     resume_model = _resolve_resume_root(config, experiment_dir) / f"model_{model_name}"
     check_output_target(model_dir, resume_model, checkpoint_cfg.get('load_checkpoint', False),
-                        checkpoint_cfg.get('fork_lr_stage', False))
+                        is_fork)
     model_dir.mkdir(parents=True, exist_ok=True)
     logger = build_logger(f"retrain_v3_{model_name}", str(model_dir / "train.log"))
     logger.info("start retrain_v3 dataset=%s model=%s", dataset, model_name)
@@ -199,6 +200,8 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
     train_provider = _wrap_prefetch(train_provider, int(data_cfg.get("prefetch_batches", 0)))
     val_provider = _wrap_prefetch(val_provider, int(data_cfg.get("eval_prefetch_batches", 0)))
     steps_per_epoch = stage_steps(len(train_provider), batch_size, train_cfg)
+    if int(runtime_cfg.get('expected_steps_per_epoch', steps_per_epoch)) != steps_per_epoch:
+        raise ValueError('Dataset size no longer matches the original LR schedule')
     total_steps = max(1, steps_per_epoch * num_epochs)
     stop_after_epoch = int(runtime_cfg.get("stop_after_epoch", num_epochs))
 
@@ -247,19 +250,20 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
     protocol = label_ab_protocol(config)
     if checkpoint_cfg.get("load_checkpoint", False):
         original = _resolve_resume_root(config, experiment_dir) / f"model_{model_name}" / "run_manifest.json"
-        if checkpoint_cfg.get("fork_lr_stage", False):
+        if is_fork:
             if _resolve_resume_root(config, experiment_dir).resolve() == experiment_dir.resolve():
                 raise ValueError("LR fork must use a separate output directory")
             checker = check_crop_fork if checkpoint_cfg.get('fork_crop_stage', False) else check_lr_fork
+            if checkpoint_cfg.get('fork_schedule_continue'): checker = check_schedule_fork
             checker(read_json(str(original)).get("protocol"), protocol)
         else:
             check_resume_protocol(read_json(str(original)).get("protocol"), protocol)
         if str(checkpoint_cfg.get('resume_ckpt_name', 'last')) != 'last':
             raise ValueError('Full-state resume requires last; use weight initialization for other checkpoints')
         resume_bundle = committed_model(resume_model)
-        if not checkpoint_cfg.get('fork_lr_stage', False):
+        if not is_fork:
             restore_aliases(model_dir, resume_bundle)
-    is_resume = checkpoint_cfg.get("load_checkpoint", False) and not checkpoint_cfg.get("fork_lr_stage", False)
+    is_resume = checkpoint_cfg.get("load_checkpoint", False) and not is_fork
     manifest_path = model_dir / (f"resume_manifest_{time.time_ns()}.json" if is_resume else "run_manifest.json")
     write_json(
         str(manifest_path),
@@ -311,7 +315,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                         checked += 1
                     restore_result = {"checkpoint": str(resume_ckpt), "identical_tensors": checked, "includes_optimizer_and_bn": True}
                     write_json(str(model_dir / "restore_check.json"), restore_result)
-                    if checkpoint_cfg.get('fork_lr_stage', False):
+                    if is_fork:
                         write_json(str(model_dir / 'parent_restore_check.json'), restore_result)
                 meta_path = Path(str(resume_ckpt) + ".meta.json")
                 if meta_path.exists():
@@ -329,16 +333,18 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                     best_sintel_epe = float(state.get("best_sintel_epe", best_sintel_epe))
                     if "train_rng_state" in state and hasattr(train_provider, "rng"):
                         restore_rng(train_provider.rng, state["train_rng_state"])
-                        if checkpoint_cfg.get('fork_crop_stage', False):
-                            if save_rng(train_provider.rng) != state['train_rng_state']:
-                                raise ValueError('Crop fork failed to restore training RNG')
+                        if is_fork:
+                            if not rng_matches(train_provider.rng, state['train_rng_state']):
+                                raise ValueError('Fork failed to restore training RNG')
                             write_json(str(model_dir/'parent_rng_check.json'), {
                                 'identical': True, 'global_step': global_step,
                                 'state_sha256': hashlib.sha256(str(state['train_rng_state']).encode()).hexdigest()})
                 logger.info("resume checkpoint=%s start_epoch=%d global_step=%d", resume_ckpt, start_epoch, global_step)
-                if checkpoint_cfg.get("fork_lr_stage", False):
-                    if global_step != int(train_cfg['lr_stage']['start_step']):
-                        raise ValueError('LR fork parent does not match stage start')
+                if is_fork:
+                    expected_start = (checkpoint_cfg['fork_parent_step'] if checkpoint_cfg.get('fork_schedule_continue')
+                                      else train_cfg['lr_stage']['start_step'])
+                    if global_step != int(expected_start):
+                        raise ValueError('Fork parent does not match the expected step')
                     # Parent best checkpoints stay with the parent run; this run
                     # must save its own best even when it does not beat them.
                     best_epe = best_sintel_epe = best_full_monitor_epe = float('inf')
@@ -373,6 +379,9 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                                                 start_epoch-1, global_step, float('inf'), best_epe, arch_code)
                     _save_json_atomic(state_path, state_record(start_epoch-1))
                 commit_boundary(model_dir)
+
+            milestones = runtime_cfg.get('milestone_epochs', [])
+            if milestones: keep_milestone(model_dir, milestones)
 
             for epoch_idx in range(start_epoch, min(num_epochs, stop_after_epoch) + 1):
                 epoch_start = time.time()
@@ -529,6 +538,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                 _write_csv(eval_history_path, eval_history)
                 _save_json_atomic(state_path, state_record(epoch_idx))
                 commit_boundary(model_dir)
+                if milestones: keep_milestone(model_dir, milestones)
                 logger.info(
                     "epoch=%d/%d global_step=%d lr=%.2e time_sec=%.1f loss=%.6f optical=%.6f uncertainty=%.6f val_epe=%s sintel_epe=%s grad_mean=%.4f grad_p90=%.4f clip_rate=%.4f",
                     epoch_idx,

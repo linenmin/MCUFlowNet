@@ -75,3 +75,21 @@ HPC路径和运行环境由本机配置派生为忽略的 `*.local.json`，启�
 启动前核对100轮state、last元信息、index/data及独立备份；启动后须检查本次日志和恢复结果，不能把上次留下的restore_check当成本次验收。若改变LR、数据或增强，必须另建运行目录并记录父保存点，不覆盖这两条参照。
 
 标签专项的结束是研究优先级决定，不表示已证明两种处理等价。旧正式V3 FC2每轮556步，当前695步；比较历史训练量须按更新次数，不能直接按epoch。后续完整方案重复的随机种子仍应独立。
+
+## 将150轮参照继续训练到400轮
+
+`EdgeFlowNAS/configs/experiments/fc2_long.json`登记FC2-LONG-01：S/L各从150轮last完整恢复到400轮。使用新目录，保留原参照；每轮695次更新、总278000次，原来的400轮余弦下降不重启，Adam、BN和抽样随机状态全部继承。唯一执行调整为训练prefetch从0改为1，batch32、352×480裁剪、标签和评测不变。启动时检查实际每轮步数，避免数据数量变化悄悄改变学习率曲线。
+
+在H200作业内执行：
+
+```bash
+python tools/hpc/run_retrain_experiment.py --recipe EdgeFlowNAS/configs/experiments/fc2_long.json --variant s
+# 进程中断后的恢复（不是重新从150轮开始）：
+python tools/hpc/run_retrain_experiment.py --recipe EdgeFlowNAS/configs/experiments/fc2_long.json --variant s --action resume
+```
+
+L将`s`替换为`l`。该配方已批准完整400轮；200/300轮只是保存节点，不自动暂停或转入FT3D。工程验收加`--probe`：先只跑到151轮，再用`--action continue --stop-step 105640 --probe`恢复到152轮；配置中的余弦周期仍为400轮。两支通过`tools/validation/check_schedule_probes.py`后，正式作业才可更新权重。验收核对S/L全部状态张量、旧格式随机状态、原曲线学习率、跨进程恢复、独立快照和完整640对FC2/76对Sintel快速监控；845对完整监控仍沿用每5轮一次。
+
+正式输出`/runs/FC2-LONG-01/{s,l}/model_*`，固定节点存于同一分支的`milestones/epoch-0200/model_*`、`epoch-0300/model_*`、`epoch-0400/model_*`。每个节点包含可独立恢复的权重、Adam/BN、随机状态、曲线和配置，不受滚动恢复点只保留两份的规则影响。新分支的最佳权重从续训阶段重新记录，150轮之前的最佳仍在父目录；比较全程最佳时须同时查父运行。
+
+这次回答“补完FC2训练周期是否仍有收益”。后续400轮末尾权重是否接同样的FT3D对照，按实验计划另行决定；不会由本作业自动开启。代码/配置保存在Git，作业、曲线和权重在Runs，当前状态只在wiki实验总表维护。
