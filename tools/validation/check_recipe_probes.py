@@ -55,4 +55,5 @@ if __name__=='__main__':
     p.add_argument('--runs-root',type=Path,default=Path('/runs'))
     p.add_argument('--output',type=Path,required=True)
     args=p.parse_args();result=check(json.loads(args.recipe.read_text()),args.runs_root)
+    args.output.parent.mkdir(parents=True,exist_ok=True)
     save(args.output,result);print(json.dumps(result))
