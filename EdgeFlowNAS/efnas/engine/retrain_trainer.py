@@ -40,6 +40,7 @@ from efnas.utils.logger import build_logger
 from efnas.utils.seed import set_global_seed
 from efnas.engine.experiment_protocol import label_ab_protocol, check_resume_protocol
 from efnas.engine.stage_state import stage_steps, save_rng, restore_rng
+from efnas.engine.lr_stage import stage_lr, check_lr_fork
 
 
 def _build_provider(config: Dict[str, Any], split: str, seed_offset: int, provider_mode: str):
@@ -222,8 +223,14 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
     protocol = label_ab_protocol(config)
     if checkpoint_cfg.get("load_checkpoint", False):
         original = _resolve_resume_root(config, experiment_dir) / f"model_{model_name}" / "run_manifest.json"
-        check_resume_protocol(read_json(str(original)).get("protocol"), protocol)
-    manifest_path = model_dir / (f"resume_manifest_{time.time_ns()}.json" if checkpoint_cfg.get("load_checkpoint", False) else "run_manifest.json")
+        if checkpoint_cfg.get("fork_lr_stage", False):
+            if _resolve_resume_root(config, experiment_dir).resolve() == experiment_dir.resolve():
+                raise ValueError("LR fork must use a separate output directory")
+            check_lr_fork(read_json(str(original)).get("protocol"), protocol)
+        else:
+            check_resume_protocol(read_json(str(original)).get("protocol"), protocol)
+    is_resume = checkpoint_cfg.get("load_checkpoint", False) and not checkpoint_cfg.get("fork_lr_stage", False)
+    manifest_path = model_dir / (f"resume_manifest_{time.time_ns()}.json" if is_resume else "run_manifest.json")
     write_json(
         str(manifest_path),
         {
@@ -280,6 +287,12 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                     if "train_rng_state" in state and hasattr(train_provider, "rng"):
                         restore_rng(train_provider.rng, state["train_rng_state"])
                 logger.info("resume checkpoint=%s start_epoch=%d global_step=%d", resume_ckpt, start_epoch, global_step)
+                if checkpoint_cfg.get("fork_lr_stage", False):
+                    if global_step != int(train_cfg['lr_stage']['start_step']):
+                        raise ValueError('LR fork parent does not match stage start')
+                    # Parent best checkpoints stay with the parent run; this run
+                    # must save its own best even when it does not beat them.
+                    best_epe = best_sintel_epe = best_full_monitor_epe = float('inf')
             else:
                 init_ckpt = _resolve_init_checkpoint_path(config=config, model_name=model_name)
                 if init_ckpt is not None:
@@ -329,7 +342,8 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                     micro_slices = _iter_micro_slices(logical_batch, micro_batch_size)
                     if not micro_slices:
                         continue
-                    lr_now = _cosine_lr_with_min(base_lr, lr_min, global_step, total_steps)
+                    lr_now = (stage_lr(train_cfg['lr_stage'], global_step) if 'lr_stage' in train_cfg
+                              else _cosine_lr_with_min(base_lr, lr_min, global_step, total_steps))
                     lr_last = lr_now
                     sess.run(graph_obj["zero_grad_op"])
                     step_loss = 0.0
