@@ -46,6 +46,9 @@ def main():
     result=dict(checked_at=datetime.now(timezone.utc).isoformat(),protocol=registry['protocol_id'],models=rows,
                 dataset_manifest_sha256=sha(args.runs/'dataset-manifest.json'),
                 source_inventory_sha256=sha(args.runs/'inventory.json'))
+    result['checks']={name:json.loads((args.runs/filename).read_text())
+                      for name,filename in [('spynet_weights','spynet-weight-check.json'),('nano_export','nano-export-check.json')]
+                      if (args.runs/filename).exists()}
     if args.mcu_reference:
         references=[]
         old_results=json.loads((args.mcu_reference/'results.json').read_text())
