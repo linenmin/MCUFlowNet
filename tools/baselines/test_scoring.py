@@ -5,6 +5,7 @@ import numpy as np
 import torch
 from evaluate import read_flow
 from pwc_compat import Correlation
+from torch_extensions import SpatialCorrelationSampler
 
 
 class Checks(unittest.TestCase):
@@ -29,6 +30,9 @@ class Checks(unittest.TestCase):
                         if 0<=y+dy<5 and 0<=x+dx<6:
                             expected[0,(dy+4)*9+dx+4,y,x]=sum(float(a[0,c,y,x])*float(b[0,c,y+dy,x+dx]) for c in range(3))/3
         np.testing.assert_allclose(actual,expected,rtol=1e-5,atol=1e-6)
+        sampler=SpatialCorrelationSampler(1,9,1,0,1)
+        sampled=sampler(torch.tensor(a),torch.tensor(b)).numpy().reshape(1,81,5,6)/3
+        np.testing.assert_allclose(sampled,expected,rtol=1e-5,atol=1e-6)
 
 
 if __name__=='__main__':

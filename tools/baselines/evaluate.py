@@ -44,14 +44,14 @@ def torch_model(args):
     state = torch.load(args.weights, map_location='cpu', weights_only=True)
     def tensor(image):
         return torch.from_numpy(np.ascontiguousarray(image.transpose(2, 0, 1))).float().cuda()
-    if args.model == 'raft':
+    if args.model in ('raft', 'raft-small'):
         sys.path.insert(0, str(args.upstream / 'RAFT/core'))
         from raft import RAFT
         from utils.utils import InputPadder
         class Config(dict):
             __getattr__ = dict.__getitem__
             __setattr__ = dict.__setitem__
-        model = RAFT(Config(small=False, mixed_precision=False, alternate_corr=False, dropout=0))
+        model = RAFT(Config(small=args.model == 'raft-small', mixed_precision=False, alternate_corr=False, dropout=0))
         model.load_state_dict({k.removeprefix('module.'): v for k, v in state.items()}, strict=True)
         model.cuda().eval()
         def predict(a, b):
@@ -95,7 +95,7 @@ def torch_model(args):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--model', choices=['raft', 'spynet', 'pwc', 'edge', 'edge-chunks', 'nano'], required=True)
+    p.add_argument('--model', choices=['raft', 'raft-small', 'spynet', 'pwc', 'edge', 'edge-chunks', 'nano', 'fastflow', 'neuflow2', 'gmflow', 'sea-raft', 'rapidflow'], required=True)
     p.add_argument('--weights', type=Path, required=True)
     p.add_argument('--upstream', type=Path, required=True)
     p.add_argument('--dataset', type=Path, required=True)
@@ -118,8 +118,11 @@ def main():
         (args.output/'manifest.json').write_text(json.dumps(manifest, indent=2)+'\n')
     save()
     try:
-        if args.model in ('raft','spynet','pwc'):
+        if args.model in ('raft','raft-small','spynet','pwc'):
             predict, info = torch_model(args)
+        elif args.model in ('fastflow','neuflow2','gmflow','sea-raft','rapidflow'):
+            from torch_extensions import extension_model
+            predict, info = extension_model(args)
         else:
             from tf_adapters import tf_model
             predict, info = tf_model(args)
