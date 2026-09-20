@@ -37,3 +37,8 @@ and inspect the same-hardware repeats separately. The audit does not decode the
 
 Run the five release-safety checks with python test-tier2-release.py. They use
 temporary fixtures and mocked submission calls; no jobs are submitted by tests.
+When production A100s are occupied, tier2-debug-probes.sh runs all five probes
+sequentially in one <=1h gpu_a100_debug allocation. That card is A100 80GB PCIe;
+production is A100 80GB SXM. Treat its timings as a planning estimate with the
+configured margin, not a production speed measurement. Point release dependency
+to that debug job, and cancel unused pending probe/release jobs before switching.
