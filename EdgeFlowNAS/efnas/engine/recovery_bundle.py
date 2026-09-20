@@ -15,10 +15,10 @@ import uuid
 PREFIXES = ('last', 'best', 'sintel_best', 'sintel_monitor_best')
 
 
-def validate_boundary(model):
+def validate_boundary(model, *, prefixes=PREFIXES):
     model = Path(model)
     state = json.loads((model/'trainer_state.json').read_text())
-    for name in PREFIXES:
+    for name in prefixes:
         prefix = model/'checkpoints'/f'{name}.ckpt'
         files = list(prefix.parent.glob(prefix.name+'.*'))
         if not files and name != 'last':
@@ -67,6 +67,19 @@ def committed_model(model):
         except (OSError, ValueError, KeyError) as error:
             errors.append(str(error))
     raise ValueError(f'No complete recovery bundle: {errors}')
+
+
+def fork_source(model):
+    """A legacy fork imports last/state/history only, not optional best aliases.
+
+    Early Saver versions could delete an unrelated best checkpoint while leaving
+    its JSON metadata. Never treat that alias as recoverable, and never alter it.
+    Modern committed bundles and in-place recovery retain their strict checks.
+    """
+    model = Path(model)
+    if (model/'recovery/current.json').exists(): return committed_model(model)
+    validate_boundary(model, prefixes=('last',))
+    return model
 
 
 def _publish(root, names):

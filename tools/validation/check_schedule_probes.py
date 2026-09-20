@@ -6,7 +6,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'hpc'))
 from run_retrain_experiment import probe_recipe, verify_result, label_ab_protocol
 from efnas.engine.lr_stage import check_schedule_fork
-from efnas.engine.recovery_bundle import committed_model
+from efnas.engine.recovery_bundle import fork_source
 from experiment_io import save
 
 
@@ -24,7 +24,7 @@ def check(recipe, runs):
         restores = [json.loads((model/file).read_text()) for file in ('parent_restore_check.json', 'restore_check.json')]
         if any(not r['includes_optimizer_and_bn'] or r['identical_tensors'] != shape['state_tensors'] for r in restores):
             raise ValueError('Incomplete state restoration')
-        if restores[0]['checkpoint'] != str(committed_model(parent)/'checkpoints/last.ckpt'):
+        if restores[0]['checkpoint'] != str(fork_source(parent)/'checkpoints/last.ckpt'):
             raise ValueError('Wrong parent checkpoint')
         if not restores[1]['checkpoint'].startswith(str(model/'recovery')+'/'):
             raise ValueError('Probe did not resume its own checkpoint')

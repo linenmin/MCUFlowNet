@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'EdgeFlowNAS'))
 from efnas.engine.recovery_bundle import (
-    commit_boundary, committed_model, restore_aliases, check_output_target, keep_milestone,
+    commit_boundary, committed_model, restore_aliases, check_output_target, keep_milestone, fork_source,
 )
 
 
@@ -21,6 +21,17 @@ def boundary(root, epoch):
 
 
 class RecoveryTest(unittest.TestCase):
+    def test_legacy_fork_requires_complete_last_but_does_not_import_orphan_best(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); boundary(root, 150)
+            orphan = root/'checkpoints/sintel_best.ckpt.meta.json'
+            orphan.write_text('{"epoch":65}')
+            with self.assertRaises(ValueError): committed_model(root)
+            self.assertEqual(fork_source(root), root)
+            self.assertTrue(orphan.exists())
+            (root/'checkpoints/last.ckpt.index').unlink()
+            with self.assertRaises(ValueError): fork_source(root)
+
     def test_milestone_survives_rolling_retention_and_refuses_overwrite(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)/'run/model_tiny'; root.mkdir(parents=True)

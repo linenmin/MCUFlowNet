@@ -16,7 +16,7 @@ import sys
 import time
 import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'EdgeFlowNAS'))
-from efnas.engine.recovery_bundle import committed_model, validate_boundary
+from efnas.engine.recovery_bundle import committed_model, validate_boundary, fork_source
 from efnas.engine.lr_stage import check_lr_fork, check_crop_fork, check_schedule_fork, stage_lr
 from efnas.engine.experiment_protocol import label_ab_protocol
 from experiment_io import save
@@ -171,8 +171,8 @@ def prepare_schedule_continue(recipe, variant, action, stop_step, runs_root):
     saved = json.loads((source/model.name/'run_manifest.json').read_text())
     cfg = copy.deepcopy(saved['config'])
     block, horizon = recipe['updates_per_epoch'], recipe['schedule_epochs']
-    bundle = committed_model(source/model.name)
-    state = validate_boundary(bundle)
+    bundle = fork_source(source/model.name) if action == 'start' else committed_model(source/model.name)
+    state = validate_boundary(bundle, prefixes=('last',))
     target = recipe['midpoint_step'] if stop_step is None else stop_step
     if action == 'resume' and stop_step is None:
         target = int(cfg['runtime']['stop_after_epoch'])*block

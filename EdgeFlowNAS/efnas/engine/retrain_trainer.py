@@ -43,7 +43,7 @@ from efnas.engine.stage_state import stage_steps, save_rng, restore_rng, rng_mat
 from efnas.engine.lr_stage import stage_lr, check_lr_fork, check_crop_fork, check_schedule_fork
 from efnas.engine.validation_graph import build_validation_graph
 from efnas.engine.recovery_bundle import (
-    check_output_target, committed_model, commit_boundary, restore_aliases, keep_milestone,
+    check_output_target, committed_model, commit_boundary, restore_aliases, keep_milestone, fork_source,
 )
 
 
@@ -260,7 +260,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
             check_resume_protocol(read_json(str(original)).get("protocol"), protocol)
         if str(checkpoint_cfg.get('resume_ckpt_name', 'last')) != 'last':
             raise ValueError('Full-state resume requires last; use weight initialization for other checkpoints')
-        resume_bundle = committed_model(resume_model)
+        resume_bundle = fork_source(resume_model) if checkpoint_cfg.get('fork_schedule_continue') else committed_model(resume_model)
         if not is_fork:
             restore_aliases(model_dir, resume_bundle)
     is_resume = checkpoint_cfg.get("load_checkpoint", False) and not is_fork
