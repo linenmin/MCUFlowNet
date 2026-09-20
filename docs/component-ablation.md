@@ -35,6 +35,23 @@ formal runs. Regression suite: `python -m unittest discover -s tools/validation`
 Normal production does not request deterministic GPU kernels; probe timing is
 therefore a conservative engineering estimate, not a speed guarantee.
 
+Preflight code review (2026-09-20) covers model factory, loss/update parity,
+providers/prefetch, RNG and epoch recovery, dual metrics, checkpoint selection,
+portable inference, configuration and Slurm entry points. The23-test suite
+includes all five original-vs-shared graphs with identical initial model/BN
+values, matching loss and one-step updated tensors; corrupt history/step
+recovery is rejected. Standalone evaluation also disables TF32. Verification
+mode copies probe outputs, resumes at the completed boundary without updates,
+and recomputes76 fixed pairs against the saved per-pair results; it must load
+the copy rather than the stale absolute path inside checkpoint metadata.
+
+Historical distinction: the old ablation trainer evaluated FC2 with
+`is_training=True`. This campaign uses inference BN statistics for FC2 and
+Sintel. Consequently the new FC2 curve is not an exact reproduction of the
+historical protocol even when the GT clipping is the same. Model family is
+identified by`component_variant`; the legacy11-zero`arch_code` field is unused
+for component construction and does not mean the S subnet is trained.
+
 Sofia array wrapper: `tools/hpc/component_array.sh PROJECT PINNED_CODE MODE`.
 Use explicit account/partition,1GPU,24CPU,no memory override. Cap arrays at2
 concurrent jobs. Submit first seed then the remaining seeds with afterok on the

@@ -65,7 +65,7 @@ def _evaluate_with_progress(
     desc: str,
     training_mode: bool = False,
     dual: bool = False,
-) -> float:
+) -> float | Dict[str, float]:
     if hasattr(val_provider, "reset_cursor"):
         val_provider.reset_cursor(0)
     num_batches = max(1, int(math.ceil(len(val_provider) / float(batch_size)))) if eval_batches <= 0 else int(eval_batches)
@@ -77,6 +77,8 @@ def _evaluate_with_progress(
         input_batch, _, _, label_batch = val_provider.next_batch(batch_size=current_batch)
         input_batch = standardize_image_tensor(input_batch)
         result = sess.run([graph_obj["epe"], graph_obj["epe_gtclip50"]] if dual else graph_obj["epe"], feed_dict={input_ph: input_batch, label_ph: label_batch, is_training_ph: training_mode})
+        if not np.isfinite(result).all():
+            raise FloatingPointError('Nonfinite validation EPE')
         epe = result[0] if dual else result
         if dual:
             clipped_values.append(float(result[1]))
@@ -305,6 +307,9 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                     best_epe = _best_validation_on_resume(meta, state)
                 if protocol is not None and int(state.get("epoch", -1)) != start_epoch - 1:
                     raise ValueError("This comparison requires last checkpoint and matching epoch-boundary trainer state")
+                if config.get('component_variant'):
+                    from efnas.engine.component_protocol import check_component_resume
+                    check_component_resume(state, global_step, start_epoch-1, eval_history, steps_per_epoch)
                 if state:
                     best_fc2_raw = float(state.get("best_fc2_raw", float("inf")))
                     best_full_monitor_epe = float(state.get("best_full_monitor_epe", float("inf")))

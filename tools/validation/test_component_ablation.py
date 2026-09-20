@@ -10,8 +10,55 @@ sys.path[:0]=[str(ROOT/'EdgeFlowNAS'),str(ROOT/'tools/hpc')]
 from run_component_ablation import configuration, VARIANTS
 from efnas.engine.experiment_protocol import label_ab_protocol, check_resume_protocol
 from efnas.engine.distill_or_not_trainer import _build_graph
+from efnas.engine.component_protocol import check_component_resume
 
 class ComponentTests(unittest.TestCase):
+    def test_reject_inconsistent_recovery(self):
+        state={'global_step':100,'train_rng_state':{}}
+        rows=[{'epoch':1,'global_step':50},{'epoch':2,'global_step':100}]
+        check_component_resume(state,100,2,rows,50)
+        for bad in [rows[:1], rows+rows[-1:], [{'epoch':1,'global_step':51},rows[1]]]:
+            with self.assertRaises(ValueError):check_component_resume(state,100,2,bad,50)
+        with self.assertRaises(ValueError):check_component_resume(state,99,2,rows,50)
+
+    def test_original_and_shared_training_graph_agree(self):
+        from efnas.engine.ablation_trainer import _build_single_model_graph
+        tf.compat.v1.disable_eager_execution()
+        for index in range(5):
+            results=[]
+            for original in [True,False]:
+                graph=tf.Graph()
+                with graph.as_default(),tf.device('/cpu:0'):
+                    tf.compat.v1.set_random_seed(42)
+                    x=tf.compat.v1.placeholder(tf.float32,[2,32,32,6])
+                    y=tf.compat.v1.placeholder(tf.float32,[2,32,32,2])
+                    lr=tf.compat.v1.placeholder(tf.float32,[])
+                    scale=tf.compat.v1.placeholder(tf.float32,[])
+                    mode=tf.compat.v1.placeholder(tf.bool,[])
+                    variant=configuration(index)['component_variant']
+                    if original:
+                        g=_build_single_model_graph('candidate',variant,x,y,lr,scale,mode,2,4,0.,200.)
+                    else:
+                        g=_build_graph('candidate',[0]*11,x,y,lr,scale,mode,2,4,0.,200.,component_variant=variant)
+                    model_vars=[v for v in tf.compat.v1.global_variables() if '/ablation_backbone/' in v.op.name and 'Adam' not in v.op.name and 'grad_accum' not in v.op.name]
+                    init=tf.compat.v1.global_variables_initializer()
+                with tf.compat.v1.Session(graph=graph,config=tf.compat.v1.ConfigProto(device_count={'GPU':0})) as sess:
+                    sess.run(init)
+                    # Explicit identical model/BN values isolate trainer semantics.
+                    if results:
+                        with graph.as_default():
+                            assignments=[v.assign(results[0]['initial'][v.op.name]) for v in model_vars]
+                        sess.run(assignments)
+                    initial={v.op.name:sess.run(v) for v in model_vars}
+                    rng=np.random.RandomState(7)
+                    feed={x:rng.randn(2,32,32,6),y:rng.randn(2,32,32,2),mode:True,lr:1e-4,scale:1.}
+                    sess.run(g['zero_grad_op'])
+                    loss,_=sess.run([g['loss'],g['accum_op']],feed)
+                    sess.run(g['train_op'],feed)
+                    results.append(dict(initial=initial,loss=loss,after={v.op.name:sess.run(v) for v in model_vars}))
+            np.testing.assert_allclose(results[0]['loss'],results[1]['loss'],rtol=1e-6)
+            for name in results[0]['after']:
+                np.testing.assert_allclose(results[0]['after'][name],results[1]['after'][name],rtol=2e-5,atol=2e-6,err_msg=name)
     def test_campaign_is_fifteen_fresh_prefetched_runs(self):
         configs=[configuration(i) for i in range(15)]
         self.assertEqual(len({c['runtime']['experiment_name'] for c in configs}),15)

@@ -30,7 +30,6 @@ from efnas.engine.standalone_trainer import (
 )
 from efnas.engine.train_step import add_weight_decay, build_multiscale_uncertainty_loss
 from efnas.nas.search_space import validate_arch_code
-from efnas.network.fixed_arch_models import FixedArchModelV3
 from efnas.utils.json_io import read_json, write_json
 from efnas.utils.logger import build_logger
 from efnas.utils.seed import set_global_seed
@@ -139,20 +138,8 @@ def _build_graph(
     component_variant=None,
 ) -> Dict[str, Any]:
     with tf.compat.v1.variable_scope(scope_name):
-        model_class = FixedArchModelV3
-        model_args = {"arch_code": arch_code}
-        if component_variant is not None:
-            from efnas.network.ablation_edgeflownet import ABlationEdgeFlowNetV1
-            model_class = ABlationEdgeFlowNetV1
-            model_args = {"variant_config": component_variant}
-        model = model_class(
-            input_ph=input_ph,
-            is_training_ph=is_training_ph,
-            **model_args,
-            num_out=pred_channels,
-            init_neurons=32,
-            expansion_factor=2.0,
-        )
+        from efnas.network.training_model import make_training_model
+        model = make_training_model(input_ph, is_training_ph, pred_channels, arch_code, component_variant)
         preds = model.build()
         loss_terms = build_multiscale_uncertainty_loss(preds=preds, label_ph=label_ph, num_out=flow_channels, return_terms=True)
         loss_core = loss_terms["total"]

@@ -21,7 +21,6 @@ from efnas.engine.retrain_sintel_runtime import (
     _prepare_sintel_lists,
     preprocess_eval_batch,
 )
-from efnas.network.fixed_arch_models import FixedArchModelV3
 
 
 def _load_checkpoint_meta(model_dir: Path, ckpt_name: str) -> Dict[str, Any]:
@@ -35,6 +34,7 @@ def _load_checkpoint_meta(model_dir: Path, ckpt_name: str) -> Dict[str, Any]:
 
 def setup_fixed_v3_eval_model(checkpoint_dir: Path, patch_size: Tuple[int, int], ckpt_name: str = "best"):
     """Build and restore a fixed V3 checkpoint for one-image Sintel inference."""
+    tf.config.experimental.enable_tensor_float_32_execution(False)
     if tf.executing_eagerly():
         tf.compat.v1.disable_eager_execution()
     meta_data = _load_checkpoint_meta(checkpoint_dir, ckpt_name)
@@ -42,26 +42,19 @@ def setup_fixed_v3_eval_model(checkpoint_dir: Path, patch_size: Tuple[int, int],
     arch_list = [int(x) for x in arch_code] if not isinstance(arch_code, str) else [int(x) for x in arch_code.split(",") if str(x).strip()]
     scope_name = checkpoint_dir.name[len("model_") :] if checkpoint_dir.name.startswith("model_") else checkpoint_dir.name
     manifest_path = checkpoint_dir / 'run_manifest.json'
-    variant = json.loads(manifest_path.read_text())['config'].get('component_variant') if manifest_path.exists() else None
+    manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
+    variant = manifest.get('config', {}).get('component_variant')
+    if scope_name.startswith('edgeflownet_') and variant is None:
+        raise ValueError('Component checkpoint requires its explicit model manifest')
+    if variant is not None and variant['name'] != scope_name:
+        raise ValueError('Component manifest does not match checkpoint scope')
     graph = tf.Graph()
     with graph.as_default():
         input_ph = tf.compat.v1.placeholder(tf.float32, shape=[1, int(patch_size[0]), int(patch_size[1]), 6], name="input_ph")
         is_training_ph = tf.compat.v1.placeholder_with_default(tf.constant(False, dtype=tf.bool), shape=[], name="is_training_ph")
         with tf.compat.v1.variable_scope(scope_name):
-            model_class = FixedArchModelV3
-            model_args = {'arch_code': arch_list}
-            if variant is not None:
-                from efnas.network.ablation_edgeflownet import ABlationEdgeFlowNetV1
-                model_class = ABlationEdgeFlowNetV1
-                model_args = {'variant_config': variant}
-            model = model_class(
-                input_ph=input_ph,
-                is_training_ph=is_training_ph,
-                **model_args,
-                num_out=4,
-                init_neurons=32,
-                expansion_factor=2.0,
-            )
+            from efnas.network.training_model import make_training_model
+            model = make_training_model(input_ph, is_training_ph, 4, arch_list, variant)
             preds = model.build()
         pred_tensor = accumulate_predictions(preds)
         scope_vars = [v for v in tf.compat.v1.global_variables() if v.name.startswith(f"{scope_name}/")]
@@ -69,9 +62,14 @@ def setup_fixed_v3_eval_model(checkpoint_dir: Path, patch_size: Tuple[int, int],
     config = tf.compat.v1.ConfigProto()
     config.gpu_options.allow_growth = True
     sess = tf.compat.v1.Session(graph=graph, config=config)
-    ckpt_path = meta_data.get("checkpoint_path") or str(checkpoint_dir / "checkpoints" / f"{ckpt_name}.ckpt")
-    with graph.as_default():
-        saver.restore(sess, ckpt_path)
+    local_prefix = checkpoint_dir / "checkpoints" / f"{ckpt_name}.ckpt"
+    ckpt_path = str(local_prefix) if variant is not None else meta_data.get("checkpoint_path") or str(local_prefix)
+    try:
+        with graph.as_default():
+            saver.restore(sess, ckpt_path)
+    except BaseException:
+        sess.close()
+        raise
     meta = dict(meta_data)
     meta["scope_name"] = scope_name
     meta["checkpoint_dir"] = str(checkpoint_dir)
@@ -99,16 +97,12 @@ def evaluate_v3_checkpoint_dir_on_sintel(
     dataset_root_path = Path(dataset_root)
     if not dataset_root_path.exists():
         raise FileNotFoundError(f"Sintel dataset_root does not exist: {dataset_root_path}")
-    sess, input_ph, pred_tensor, meta_data = setup_fixed_v3_eval_model(
-        checkpoint_dir=Path(model_dir),
-        patch_size=tuple(patch_size),
-        ckpt_name=str(ckpt_name),
-    )
     if primary_metric not in ("legacy", "raw"):
         raise ValueError("primary_metric must be legacy or raw")
     if primary_metric == "raw" and tuple(patch_size) != (416, 1024):
         raise ValueError("Raw dual evaluation currently supports only 416x1024 center crop")
-    flow_scale = _resolve_prediction_flow_scale(Path(model_dir), meta_data) if prediction_flow_scale is None else float(prediction_flow_scale)
+    if per_pair_path is not None and primary_metric != 'raw':
+        raise ValueError('Per-pair dual output requires primary_metric=raw')
     raw_values, legacy_values = [], []
     pair_rows = []
     img1_list, img2_list, flo_list = _prepare_sintel_lists(dataset_root=dataset_root_path, sintel_list_text=sintel_list)
@@ -118,7 +112,10 @@ def evaluate_v3_checkpoint_dir_on_sintel(
     processor = FlowPostProcessor("full", is_multiscale=True)
     args = _build_processor_args()
     iterator = tqdm(range(total_samples), desc=progress_desc, leave=False, unit="sample") if progress_desc else range(total_samples)
+    sess, input_ph, pred_tensor, meta_data = setup_fixed_v3_eval_model(
+        checkpoint_dir=Path(model_dir), patch_size=tuple(patch_size), ckpt_name=str(ckpt_name))
     try:
+        flow_scale = _resolve_prediction_flow_scale(Path(model_dir), meta_data) if prediction_flow_scale is None else float(prediction_flow_scale)
         for idx in iterator:
             input_comb, gt_flow = get_sintel_batch(img1_list[idx], img2_list[idx], flo_list[idx], list(patch_size))
             if input_comb is None or gt_flow is None:
@@ -132,6 +129,8 @@ def evaluate_v3_checkpoint_dir_on_sintel(
                 if raw.shape != (436,1024,2):
                     raise ValueError(f"Unexpected Sintel GT shape: {raw.shape}")
                 raw = raw[10:426]
+                if not np.isfinite(raw).all():
+                    raise FloatingPointError('Nonfinite Sintel GT')
                 np.testing.assert_array_equal(np.asarray(gt_flow)[0], np.clip(raw,-50,50))
                 predicted = flow_prediction[0]
                 if not np.isfinite(predicted).all():
@@ -157,9 +156,11 @@ def evaluate_v3_checkpoint_dir_on_sintel(
     if per_pair_path is not None:
         per_pair_path = Path(per_pair_path)
         per_pair_path.parent.mkdir(parents=True, exist_ok=True)
-        with per_pair_path.open('w', newline='') as handle:
+        temporary = per_pair_path.with_suffix('.tmp')
+        with temporary.open('w', newline='') as handle:
             writer = csv.DictWriter(handle, fieldnames=list(pair_rows[0]))
             writer.writeheader(); writer.writerows(pair_rows)
+        temporary.replace(per_pair_path)
     return {
         **({"sintel_raw_epe": mean_epe, "sintel_legacy_epe": float(np.mean(legacy_values)), "evaluated_samples": len(raw_values), "prediction_flow_scale": flow_scale} if primary_metric == "raw" else {}),
         "model_name": meta_data["scope_name"],

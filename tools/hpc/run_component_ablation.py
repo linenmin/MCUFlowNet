@@ -1,11 +1,10 @@
 """COMP-ABL-01: five scratch component combinations, seeds42/43/44, prefetch1."""
 import argparse
-import copy
 import csv
-import hashlib
 import json
 import math
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -45,7 +44,7 @@ def execute(cfg, control, suffix, environment):
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--index', type=int, choices=range(15))
-    p.add_argument('--mode', choices=['probe','train','resume'], default='train')
+    p.add_argument('--mode', choices=['probe','verify','train','resume'], default='train')
     p.add_argument('--execute-config', type=Path)
     p.add_argument('--stop-after', type=int, default=400)
     args=p.parse_args()
@@ -111,13 +110,45 @@ def main():
             record.update(run=str(split),continuous_run=str(continuous),identical_tensors=len(a.get_variable_to_shape_map()),
                 tensor_max_abs_difference=maximum,rng_identical=True,history=rows,
                 dual_per_pair_verified=True,best_checkpoints_reload=True)
+        elif args.mode=='verify':
+            import numpy as np
+            tag=VARIANTS[args.index%5][0]
+            source=Path(cfg['runtime']['output_root'])/'probe'/tag/'split'
+            destination=Path(cfg['runtime']['output_root'])/'verify'/tag
+            if destination.exists(): raise FileExistsError(destination)
+            shutil.copytree(source,destination)
+            cfg['runtime'].update(experiment_name=f'verify/{tag}',stop_after_epoch=2,milestone_epochs=[2])
+            cfg['train'].update(num_epochs=2,smoke_steps_per_epoch=50)
+            cfg['eval']['sintel']['eval_every_epoch']=2
+            cfg['checkpoint']['load_checkpoint']=True
+            env['TF_DETERMINISTIC_OPS']='1'
+            run=execute(cfg,control,'verify',env)
+            from efnas.engine.distill_or_not_sintel_runtime import evaluate_v3_checkpoint_dir_on_sintel
+            result=evaluate_v3_checkpoint_dir_on_sintel(run,'/datasets/Sintel',
+                cfg['eval']['sintel']['sintel_list'],(416,1024),ckpt_name='last',max_samples=76,
+                primary_metric='raw',prediction_flow_scale=1.)
+            pairs=list(csv.DictReader((run/'evaluations/sintel-e0002.csv').open()))[:76]
+            for column,key in [('raw_sum','sintel_raw_epe'),('clip50_sum','sintel_legacy_epe')]:
+                expected=sum(float(r[column]) for r in pairs)/sum(int(r['pixels']) for r in pairs)
+                np.testing.assert_allclose(result[key],expected,rtol=1e-6,atol=1e-6)
+            assert result['checkpoint_path']==str(run/'checkpoints/last.ckpt')
+            record.update(run=str(run),source_run=str(source/('model_'+cfg['model_name'])),
+                          mode='probe',verification='reviewed release: resume consistency and portable dual evaluation',
+                          result=result)
         else:
             cfg['checkpoint']['load_checkpoint']=args.mode=='resume'
             cfg['runtime']['stop_after_epoch']=args.stop_after
             run=execute(cfg,control,f'{jid}-{array}',env)
             rows=list(csv.DictReader((run/'eval_history.csv').open()))
             assert int(rows[-1]['epoch'])==args.stop_after
-            assert all(math.isfinite(float(r['loss'])) for r in rows)
+            assert len(rows)==args.stop_after
+            assert int(rows[-1]['global_step'])==695*args.stop_after
+            for row in rows:
+                assert int(row['fc2_samples'])==640
+                assert all(math.isfinite(float(row[k])) for k in ['loss','fc2_raw_epe','fc2_gtclip50_epe'])
+                if int(row['epoch'])%5==0:
+                    assert int(row['evaluated_samples'])==845
+                    assert all(math.isfinite(float(row[k])) for k in ['sintel_raw_epe','sintel_legacy_epe'])
             record.update(run=str(run),final_epoch=args.stop_after, final_step=int(rows[-1]['global_step']))
         record['status']='completed'
     except BaseException as error:
