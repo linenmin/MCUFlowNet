@@ -40,7 +40,8 @@ from efnas.utils.logger import build_logger
 from efnas.utils.seed import set_global_seed
 from efnas.engine.experiment_protocol import label_ab_protocol, check_resume_protocol
 from efnas.engine.stage_state import stage_steps, save_rng, restore_rng
-from efnas.engine.lr_stage import stage_lr, check_lr_fork
+from efnas.engine.lr_stage import stage_lr, check_lr_fork, check_crop_fork
+from efnas.engine.validation_graph import build_validation_graph
 from efnas.engine.recovery_bundle import (
     check_output_target, committed_model, commit_boundary, restore_aliases,
 )
@@ -229,6 +230,16 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
         grad_clip_global_norm=grad_clip,
     )
     init_saver = tf.compat.v1.train.Saver(var_list=_model_weight_vars(model_name))
+    val_h = int(data_cfg.get('eval_input_height', input_h)) if dataset == 'FT3D' else input_h
+    val_w = int(data_cfg.get('eval_input_width', input_w)) if dataset == 'FT3D' else input_w
+    val_graph, val_input, val_label = graph_obj, input_ph, label_ph
+    if (val_h, val_w) != (input_h, input_w):
+        if eval_cfg.get('validation_training_mode', False):
+            raise ValueError('Separate validation geometry requires inference-mode BN')
+        val_graph, val_input, val_label = build_validation_graph(model_name, arch_code, val_h, val_w, flow_channels)
+    write_json(str(model_dir/'geometry_check.json'), {
+        'train_hw': [input_h, input_w], 'validation_hw': [val_h, val_w],
+        'shared_model_variables': True, 'state_tensors': len(graph_obj['scope_global_vars'])})
 
     ckpt_paths = _build_standalone_checkpoint_paths(model_dir)
     state_path = model_dir / "trainer_state.json"
@@ -239,7 +250,8 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
         if checkpoint_cfg.get("fork_lr_stage", False):
             if _resolve_resume_root(config, experiment_dir).resolve() == experiment_dir.resolve():
                 raise ValueError("LR fork must use a separate output directory")
-            check_lr_fork(read_json(str(original)).get("protocol"), protocol)
+            checker = check_crop_fork if checkpoint_cfg.get('fork_crop_stage', False) else check_lr_fork
+            checker(read_json(str(original)).get("protocol"), protocol)
         else:
             check_resume_protocol(read_json(str(original)).get("protocol"), protocol)
         if str(checkpoint_cfg.get('resume_ckpt_name', 'last')) != 'last':
@@ -297,7 +309,10 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                     for variable in graph_obj["scope_global_vars"]:
                         np.testing.assert_array_equal(sess.run(variable), reader.get_tensor(variable.op.name))
                         checked += 1
-                    write_json(str(model_dir / "restore_check.json"), {"checkpoint": str(resume_ckpt), "identical_tensors": checked, "includes_optimizer_and_bn": True})
+                    restore_result = {"checkpoint": str(resume_ckpt), "identical_tensors": checked, "includes_optimizer_and_bn": True}
+                    write_json(str(model_dir / "restore_check.json"), restore_result)
+                    if checkpoint_cfg.get('fork_lr_stage', False):
+                        write_json(str(model_dir / 'parent_restore_check.json'), restore_result)
                 meta_path = Path(str(resume_ckpt) + ".meta.json")
                 if meta_path.exists():
                     meta = read_json(str(meta_path))
@@ -314,6 +329,12 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                     best_sintel_epe = float(state.get("best_sintel_epe", best_sintel_epe))
                     if "train_rng_state" in state and hasattr(train_provider, "rng"):
                         restore_rng(train_provider.rng, state["train_rng_state"])
+                        if checkpoint_cfg.get('fork_crop_stage', False):
+                            if save_rng(train_provider.rng) != state['train_rng_state']:
+                                raise ValueError('Crop fork failed to restore training RNG')
+                            write_json(str(model_dir/'parent_rng_check.json'), {
+                                'identical': True, 'global_step': global_step,
+                                'state_sha256': hashlib.sha256(str(state['train_rng_state']).encode()).hexdigest()})
                 logger.info("resume checkpoint=%s start_epoch=%d global_step=%d", resume_ckpt, start_epoch, global_step)
                 if checkpoint_cfg.get("fork_lr_stage", False):
                     if global_step != int(train_cfg['lr_stage']['start_step']):
@@ -432,9 +453,9 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                 if do_eval:
                     val_epe = _evaluate_with_progress(
                         sess,
-                        graph_obj,
-                        input_ph,
-                        label_ph,
+                        val_graph,
+                        val_input,
+                        val_label,
                         is_training_ph,
                         val_provider,
                         batch_size,

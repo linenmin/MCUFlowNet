@@ -26,3 +26,22 @@ def check_lr_fork(saved, current):
             protocol['train'].pop(key, None)
     if a != b:
         raise ValueError('LR fork changed settings other than learning rate/horizon')
+
+
+def check_crop_fork(saved, current):
+    """Allow training crop/LR/horizon/cadence changes, never validation geometry."""
+    a, b = copy.deepcopy(saved), copy.deepcopy(current)
+    if a is None or b is None:
+        raise ValueError('Crop fork requires recorded parent and child protocols')
+    for protocol in (a, b):
+        data = protocol['data']
+        if data.get('dataset') != 'FT3D':
+            raise ValueError('Crop forks require FT3D')
+        for axis in ('height', 'width'):
+            data.setdefault('eval_input_'+axis, data['input_'+axis])
+            if int(data.pop('input_'+axis)) <= 0:
+                raise ValueError('Invalid training crop')
+        monitor = protocol['monitors']['sintel_full_monitor']
+        if int(monitor.pop('eval_every_epoch')) <= 0:
+            raise ValueError('Full monitor must remain enabled')
+    check_lr_fork(a, b)

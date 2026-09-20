@@ -1,0 +1,16 @@
+{
+  "kind": "crop_fork",
+  "experiment_id": "FT3D-CROP-01",
+  "parent_step": 20000,
+  "stage_steps": 10000,
+  "midpoint_step": 30000,
+  "min_lr": 0.000001,
+  "validation_hw": [352, 480],
+  "full_monitor_every": 5,
+  "variants": {
+    "s_small": {"model": "v3_light", "parent_run": "/runs/FT3D-RECIPE-01/s_150_plain", "crop_hw": [352, 480], "peak_lr": 0.000001, "warmup_steps": 0},
+    "s_large": {"model": "v3_light", "parent_run": "/runs/FT3D-RECIPE-01/s_150_plain", "crop_hw": [512, 896], "peak_lr": 0.000001, "warmup_steps": 0},
+    "l_small": {"model": "v3_efn_fps", "parent_run": "/runs/FT3D-RECIPE-01/l_150_plain", "crop_hw": [352, 480], "peak_lr": 0.000001, "warmup_steps": 0},
+    "l_large": {"model": "v3_efn_fps", "parent_run": "/runs/FT3D-RECIPE-01/l_150_plain", "crop_hw": [512, 896], "peak_lr": 0.000001, "warmup_steps": 0}
+  }
+}

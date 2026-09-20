@@ -17,7 +17,7 @@ import time
 import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'EdgeFlowNAS'))
 from efnas.engine.recovery_bundle import committed_model, validate_boundary
-from efnas.engine.lr_stage import check_lr_fork, stage_lr
+from efnas.engine.lr_stage import check_lr_fork, check_crop_fork, stage_lr
 from efnas.engine.experiment_protocol import label_ab_protocol
 from experiment_io import save
 
@@ -95,9 +95,16 @@ def prepare(recipe, variant, action, stop_step, runs_root):
     cfg['train'].update(num_epochs=horizon//block, lr_stage=stage_spec(recipe, variant))
     cfg['checkpoint'].update(load_checkpoint=True, resume_experiment_name=str(source_root),
                              resume_ckpt_name='last', fork_lr_stage=action == 'start', verify_restored_tensors=True)
+    if recipe.get('kind') == 'crop_fork':
+        cfg['data'].update(input_height=choice['crop_hw'][0], input_width=choice['crop_hw'][1],
+                           eval_input_height=recipe['validation_hw'][0], eval_input_width=recipe['validation_hw'][1])
+        cfg['eval']['sintel_full_monitor']['eval_every_epoch'] = recipe['full_monitor_every']
+        cfg['checkpoint']['fork_crop_stage'] = action == 'start'
     cfg = wrapper_config(cfg)
     current = label_ab_protocol(cfg)
-    if action == 'start': check_lr_fork(saved['protocol'], current)
+    if action == 'start':
+        checker = check_crop_fork if recipe.get('kind') == 'crop_fork' else check_lr_fork
+        checker(saved['protocol'], current)
     elif saved['protocol'] != current: raise ValueError('Resume changed the recorded protocol')
     stage_lr(cfg['train']['lr_stage'], state['global_step'])
     stage_lr(cfg['train']['lr_stage'], target-1)
@@ -155,6 +162,12 @@ def prepare_weight_init(recipe, variant, action, stop_step, runs_root):
 
 def probe_recipe(recipe):
     """Same inputs/optimizer/augmentation, shortened engineering acceptance run."""
+    if recipe.get('kind') == 'crop_fork':
+        recipe = copy.deepcopy(recipe)
+        # Keep the parent's 500-update reporting blocks and step/epoch counters.
+        recipe.update(experiment_id=recipe['experiment_id']+'-PROBE', stage_steps=1000,
+                      midpoint_step=recipe['parent_step']+500)
+        return recipe
     if recipe.get('kind') != 'weight_init':
         raise ValueError('Probe currently supports weight-initialized phases')
     recipe = copy.deepcopy(recipe)

@@ -180,8 +180,8 @@ def build_ft3d_provider(
 
     provider = FT3DBatchProvider(
         samples=sample_paths,
-        crop_h=int(data_cfg.get("input_height", 480)),
-        crop_w=int(data_cfg.get("input_width", 640)),
+        crop_h=int(data_cfg.get("eval_input_height", data_cfg.get("input_height", 480)) if mode == "eval" else data_cfg.get("input_height", 480)),
+        crop_w=int(data_cfg.get("eval_input_width", data_cfg.get("input_width", 640)) if mode == "eval" else data_cfg.get("input_width", 640)),
         seed=int(runtime_cfg.get("seed", 42)) + int(seed_offset),
         source_dir=source_dir,
         sampling_mode=sampling_mode,
