@@ -6,6 +6,7 @@ import math
 import copy
 import hashlib
 import time
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -63,20 +64,26 @@ def _evaluate_with_progress(
     eval_batches: int,
     desc: str,
     training_mode: bool = False,
+    dual: bool = False,
 ) -> float:
     if hasattr(val_provider, "reset_cursor"):
         val_provider.reset_cursor(0)
     num_batches = max(1, int(math.ceil(len(val_provider) / float(batch_size)))) if eval_batches <= 0 else int(eval_batches)
     values: List[float] = []
     weights: List[int] = []
+    clipped_values = []
     for batch_index in tqdm(range(num_batches), total=num_batches, desc=desc, leave=False):
         current_batch = min(batch_size, len(val_provider) - batch_index * batch_size) if eval_batches <= 0 else batch_size
         input_batch, _, _, label_batch = val_provider.next_batch(batch_size=current_batch)
         input_batch = standardize_image_tensor(input_batch)
-        epe = sess.run(graph_obj["epe"], feed_dict={input_ph: input_batch, label_ph: label_batch, is_training_ph: training_mode})
+        result = sess.run([graph_obj["epe"], graph_obj["epe_gtclip50"]] if dual else graph_obj["epe"], feed_dict={input_ph: input_batch, label_ph: label_batch, is_training_ph: training_mode})
+        epe = result[0] if dual else result
+        if dual:
+            clipped_values.append(float(result[1]))
         values.append(float(epe))
         weights.append(current_batch)
-    return float(np.average(values, weights=weights)) if values else float("inf")
+    raw = float(np.average(values, weights=weights)) if values else float("inf")
+    return {"raw": raw, "gtclip50": float(np.average(clipped_values, weights=weights)), "samples": sum(weights)} if dual else raw
 
 
 def _resolve_init_checkpoint_path(config: Dict[str, Any], model_name: str) -> Optional[Path]:
@@ -186,6 +193,19 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
         raise RuntimeError("train split is empty")
     if len(val_provider) == 0:
         raise RuntimeError("val split is empty")
+    dataset_audit = None
+    if config.get("component_variant"):
+        dataset_audit = {}
+        for split, provider in (("train", train_provider), ("val", val_provider)):
+            relative = [str(Path(p).relative_to(data_cfg['base_path'])).replace('\\', '/') for p in provider.samples]
+            content = '\n'.join(relative)+'\n'
+            dataset_audit[split] = {'samples': len(relative), 'sha256': hashlib.sha256(content.encode()).hexdigest()}
+            path = model_dir / f'{split}_samples.txt'
+            if path.exists() and path.read_text() != content:
+                raise ValueError('Dataset list changed on resume')
+            path.write_text(content)
+        if set(train_provider.samples) & set(val_provider.samples):
+            raise ValueError('Train and validation overlap')
     train_provider = _wrap_prefetch(train_provider, int(data_cfg.get("prefetch_batches", 0)))
     val_provider = _wrap_prefetch(val_provider, int(data_cfg.get("eval_prefetch_batches", 0)))
     steps_per_epoch = stage_steps(len(train_provider), batch_size, train_cfg)
@@ -214,6 +234,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
         pred_channels=pred_channels,
         weight_decay=weight_decay,
         grad_clip_global_norm=grad_clip,
+        **({"component_variant": config["component_variant"]} if "component_variant" in config else {}),
     )
     init_saver = tf.compat.v1.train.Saver(var_list=_model_weight_vars(model_name))
 
@@ -239,8 +260,10 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
             "dataset": dataset,
             "scratch_init": str(checkpoint_cfg.get("init_mode", "none")).strip().lower() in ("", "none"),
             "config": config,
-            "git_commit": _git_commit_hash(),
+            "git_commit": os.environ.get('MCUFLOW_COMMIT') or _git_commit_hash(),
+            "environment": {'tensorflow': tf.__version__, 'build': tf.sysconfig.get_build_info()},
             "protocol": protocol,
+            **({'dataset_audit': dataset_audit} if dataset_audit else {}),
         },
     )
 
@@ -248,6 +271,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
     best_epe = float("inf")
     best_sintel_epe = float("inf")
     best_full_monitor_epe = float("inf")
+    best_fc2_raw = float("inf")
     start_epoch = 1
     global_step = 0
 
@@ -282,6 +306,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                 if protocol is not None and int(state.get("epoch", -1)) != start_epoch - 1:
                     raise ValueError("This comparison requires last checkpoint and matching epoch-boundary trainer state")
                 if state:
+                    best_fc2_raw = float(state.get("best_fc2_raw", float("inf")))
                     best_full_monitor_epe = float(state.get("best_full_monitor_epe", float("inf")))
                     best_sintel_epe = float(state.get("best_sintel_epe", best_sintel_epe))
                     if "train_rng_state" in state and hasattr(train_provider, "rng"):
@@ -325,11 +350,13 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                 uncertainty_loss = 0.0
                 grad_norms: List[float] = []
                 lr_last = base_lr
+                lr_first = None
                 desc = f"{model_name} {dataset} epoch {epoch_idx}/{num_epochs}"
                 iterator = tqdm(range(steps_per_epoch), total=steps_per_epoch, desc=desc, leave=False)
                 data_seconds = 0.0
                 update_seconds = 0.0
                 first_batch_digest = None
+                first_label_digest = None
                 for _ in iterator:
                     tick = time.perf_counter()
                     input_batch, _, _, label_batch = train_provider.next_batch(batch_size=batch_size)
@@ -337,6 +364,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                     tick = time.perf_counter()
                     if first_batch_digest is None:
                         first_batch_digest = hashlib.sha256(input_batch.tobytes()).hexdigest()
+                        first_label_digest = hashlib.sha256(label_batch.tobytes()).hexdigest()
                     input_batch = standardize_image_tensor(input_batch)
                     logical_batch = int(input_batch.shape[0])
                     micro_slices = _iter_micro_slices(logical_batch, micro_batch_size)
@@ -345,6 +373,8 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                     lr_now = (stage_lr(train_cfg['lr_stage'], global_step) if 'lr_stage' in train_cfg
                               else _cosine_lr_with_min(base_lr, lr_min, global_step, total_steps))
                     lr_last = lr_now
+                    if lr_first is None:
+                        lr_first = lr_now
                     sess.run(graph_obj["zero_grad_op"])
                     step_loss = 0.0
                     step_optical = 0.0
@@ -391,6 +421,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                 grad_stats = _summarize_grad_norms(grad_norms, grad_clip)
                 do_eval = (epoch_idx % eval_every_epoch == 0) or (epoch_idx == num_epochs)
                 val_epe = float("inf")
+                dual_result = None
                 sintel_epe = None
                 if do_eval:
                     val_epe = _evaluate_with_progress(
@@ -404,7 +435,14 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                         eval_batches,
                         desc=f"{dataset} val {model_name} e{epoch_idx}",
                         training_mode=bool(eval_cfg.get("validation_training_mode", False)),
+                        dual=bool(config.get("component_variant")),
                     )
+                    if config.get("component_variant"):
+                        dual_result = val_epe
+                        val_epe = dual_result["gtclip50"]
+                        if dual_result["raw"] < best_fc2_raw:
+                            best_fc2_raw = dual_result["raw"]
+                            _save_standalone_checkpoint(sess, graph_obj["saver"], ckpt_paths["root"] / "fc2_raw_best.ckpt", epoch_idx, global_step, best_fc2_raw, best_fc2_raw, arch_code)
 
                 if do_eval and val_epe < best_epe:
                     best_epe = val_epe
@@ -412,6 +450,8 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                     logger.info("best updated val_epe=%.4f", val_epe)
 
                 _save_standalone_checkpoint(sess, graph_obj["saver"], ckpt_paths["last"], epoch_idx, global_step, val_epe, best_epe, arch_code)
+                if epoch_idx in runtime_cfg.get("milestone_epochs", []):
+                    _save_standalone_checkpoint(sess, graph_obj["saver"], ckpt_paths["root"] / f"epoch{epoch_idx:04d}.ckpt", epoch_idx, global_step, val_epe, best_epe, arch_code)
 
                 if sintel_every > 0 and do_eval and (epoch_idx % sintel_every == 0 or epoch_idx == num_epochs):
                     sintel_result = _run_sintel_if_configured(model_dir=model_dir, config=config, epoch_idx=epoch_idx, ckpt_name="last")
@@ -447,8 +487,12 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                     "epoch": epoch_idx,
                     "global_step": global_step,
                     "lr": lr_last,
+                    "lr_first": lr_first,
+                    "schedule_total_steps": total_steps,
+                    "training_samples_consumed": steps_per_epoch * batch_size,
                     "loss": avg_loss,
                     "first_batch_input_sha256": first_batch_digest,
+                    "first_batch_label_sha256": first_label_digest,
                     "data_seconds": data_seconds,
                     "update_seconds": update_seconds,
                     "epoch_wall_seconds": time.time() - epoch_start,
@@ -464,6 +508,9 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                         if key in sintel_result:
                             row[key] = sintel_result[key]
                     row["best_sintel_epe"] = best_sintel_epe
+                if dual_result is not None:
+                    row.update(fc2_raw_epe=dual_result["raw"], fc2_gtclip50_epe=dual_result["gtclip50"],
+                               fc2_samples=dual_result["samples"], best_fc2_raw=best_fc2_raw)
                 if full_result is not None:
                     row.update({f"full_monitor_{k}": v for k, v in full_result.items() if k in ("sintel_raw_epe", "sintel_legacy_epe", "evaluated_samples")})
                     row["best_full_monitor_epe"] = best_full_monitor_epe
@@ -475,6 +522,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                         "epoch": epoch_idx,
                         "global_step": global_step,
                         "best_val_epe": best_epe,
+                        "best_fc2_raw": best_fc2_raw,
                         "best_sintel_epe": best_sintel_epe,
                         "best_full_monitor_epe": best_full_monitor_epe,
                         "model_name": model_name,

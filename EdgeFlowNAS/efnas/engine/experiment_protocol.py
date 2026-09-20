@@ -19,6 +19,7 @@ def label_ab_protocol(config):
     train.pop('gpu_device', None)
     return {'version': 1, 'train': train, 'seed': config.get('runtime', {}).get('seed', 42),
             'arch': config.get('arch_code'), 'model': config.get('model_name'),
+            **({'component_variant': config['component_variant']} if 'component_variant' in config else {}),
             'data': {k: v for k, v in data.items() if k != 'base_path'},
             'eval': {k: v for k, v in config.get('eval', {}).items() if k not in monitors},
             'monitors': monitors, 'precision': 'float32_tf32_disabled'}

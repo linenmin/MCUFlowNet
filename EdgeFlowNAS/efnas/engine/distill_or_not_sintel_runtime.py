@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import csv
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -40,15 +41,23 @@ def setup_fixed_v3_eval_model(checkpoint_dir: Path, patch_size: Tuple[int, int],
     arch_code = meta_data["arch_code"]
     arch_list = [int(x) for x in arch_code] if not isinstance(arch_code, str) else [int(x) for x in arch_code.split(",") if str(x).strip()]
     scope_name = checkpoint_dir.name[len("model_") :] if checkpoint_dir.name.startswith("model_") else checkpoint_dir.name
+    manifest_path = checkpoint_dir / 'run_manifest.json'
+    variant = json.loads(manifest_path.read_text())['config'].get('component_variant') if manifest_path.exists() else None
     graph = tf.Graph()
     with graph.as_default():
         input_ph = tf.compat.v1.placeholder(tf.float32, shape=[1, int(patch_size[0]), int(patch_size[1]), 6], name="input_ph")
         is_training_ph = tf.compat.v1.placeholder_with_default(tf.constant(False, dtype=tf.bool), shape=[], name="is_training_ph")
         with tf.compat.v1.variable_scope(scope_name):
-            model = FixedArchModelV3(
+            model_class = FixedArchModelV3
+            model_args = {'arch_code': arch_list}
+            if variant is not None:
+                from efnas.network.ablation_edgeflownet import ABlationEdgeFlowNetV1
+                model_class = ABlationEdgeFlowNetV1
+                model_args = {'variant_config': variant}
+            model = model_class(
                 input_ph=input_ph,
                 is_training_ph=is_training_ph,
-                arch_code=arch_list,
+                **model_args,
                 num_out=4,
                 init_neurons=32,
                 expansion_factor=2.0,
@@ -80,6 +89,7 @@ def evaluate_v3_checkpoint_dir_on_sintel(
     progress_desc: Optional[str] = None,
     primary_metric: str = "legacy",
     prediction_flow_scale: Optional[float] = None,
+    per_pair_path=None,
 ) -> Dict[str, Any]:
     """Evaluate one fixed V3 checkpoint on the configured Sintel split."""
     from EdgeFlowNet.code.misc.processor import FlowPostProcessor
@@ -100,6 +110,7 @@ def evaluate_v3_checkpoint_dir_on_sintel(
         raise ValueError("Raw dual evaluation currently supports only 416x1024 center crop")
     flow_scale = _resolve_prediction_flow_scale(Path(model_dir), meta_data) if prediction_flow_scale is None else float(prediction_flow_scale)
     raw_values, legacy_values = [], []
+    pair_rows = []
     img1_list, img2_list, flo_list = _prepare_sintel_lists(dataset_root=dataset_root_path, sintel_list_text=sintel_list)
     total_samples = len(img1_list)
     if max_samples is not None:
@@ -127,6 +138,15 @@ def evaluate_v3_checkpoint_dir_on_sintel(
                     raise FloatingPointError("Nonfinite Sintel prediction")
                 raw_values.append(float(np.sqrt(np.sum((predicted-raw)**2,axis=-1)).mean(dtype=np.float64)))
                 legacy_values.append(float(np.sqrt(np.sum((predicted-np.asarray(gt_flow)[0])**2,axis=-1)).mean(dtype=np.float64)))
+                if per_pair_path is not None:
+                    raw_error = np.linalg.norm(predicted-raw, axis=-1)
+                    clip_error = np.linalg.norm(predicted-np.clip(raw,-50,50), axis=-1)
+                    large = np.any(np.abs(raw)>50, axis=-1)
+                    pair_rows.append(dict(pair_id=str(Path(flo_list[idx]).relative_to(dataset_root_path)),
+                        scene=Path(flo_list[idx]).parent.name, pixels=raw_error.size,
+                        raw_sum=float(raw_error.sum(dtype=np.float64)), clip50_sum=float(clip_error.sum(dtype=np.float64)),
+                        large_pixels=int(large.sum()), large_raw_sum=float(raw_error[large].sum(dtype=np.float64)),
+                        small_raw_sum=float(raw_error[~large].sum(dtype=np.float64))))
             else:
                 processor.update(label=gt_flow, prediction=flow_prediction, Args=args)
     finally:
@@ -134,6 +154,12 @@ def evaluate_v3_checkpoint_dir_on_sintel(
     mean_epe = float(np.mean(raw_values)) if primary_metric == "raw" and raw_values else _extract_processor_mean_epe(processor)
     if mean_epe is None or not np.isfinite(mean_epe):
         raise RuntimeError("No finite Sintel metric")
+    if per_pair_path is not None:
+        per_pair_path = Path(per_pair_path)
+        per_pair_path.parent.mkdir(parents=True, exist_ok=True)
+        with per_pair_path.open('w', newline='') as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(pair_rows[0]))
+            writer.writeheader(); writer.writerows(pair_rows)
     return {
         **({"sintel_raw_epe": mean_epe, "sintel_legacy_epe": float(np.mean(legacy_values)), "evaluated_samples": len(raw_values), "prediction_flow_scale": flow_scale} if primary_metric == "raw" else {}),
         "model_name": meta_data["scope_name"],

@@ -136,12 +136,19 @@ def _build_graph(
     pred_channels: int,
     weight_decay: float,
     grad_clip_global_norm: float,
+    component_variant=None,
 ) -> Dict[str, Any]:
     with tf.compat.v1.variable_scope(scope_name):
-        model = FixedArchModelV3(
+        model_class = FixedArchModelV3
+        model_args = {"arch_code": arch_code}
+        if component_variant is not None:
+            from efnas.network.ablation_edgeflownet import ABlationEdgeFlowNetV1
+            model_class = ABlationEdgeFlowNetV1
+            model_args = {"variant_config": component_variant}
+        model = model_class(
             input_ph=input_ph,
             is_training_ph=is_training_ph,
-            arch_code=arch_code,
+            **model_args,
             num_out=pred_channels,
             init_neurons=32,
             expansion_factor=2.0,
@@ -178,7 +185,9 @@ def _build_graph(
             grad_norm = tf.linalg.global_norm(averaged_grads) if averaged_grads else tf.constant(0.0, dtype=tf.float32)
             apply_pairs = list(zip(averaged_grads, vars_))
         train_op = optimizer.apply_gradients(apply_pairs)
-        epe_tensor = build_epe_metric(pred_tensor=accumulate_predictions(preds), label_ph=label_ph, num_out=flow_channels)
+        prediction = accumulate_predictions(preds)
+        epe_tensor = build_epe_metric(pred_tensor=prediction, label_ph=label_ph, num_out=flow_channels)
+        clipped_epe = build_epe_metric(pred_tensor=prediction, label_ph=tf.clip_by_value(label_ph, -50., 50.), num_out=flow_channels)
         scope_global_vars = [v for v in tf.compat.v1.global_variables() if v.name.startswith(f"{scope_name}/")]
         # Fixed names (last/FC2 best/quick best/full-monitor best) overwrite
         # themselves. A shared FIFO must never delete a different selection's best.
@@ -194,6 +203,7 @@ def _build_graph(
         "train_op": train_op,
         "grad_norm": grad_norm,
         "epe": epe_tensor,
+        "epe_gtclip50": clipped_epe,
         "saver": saver,
         "trainable_vars": trainable_vars,
         "scope_global_vars": scope_global_vars,
@@ -253,6 +263,7 @@ def _run_sintel_if_configured(model_dir: Path, config: Dict[str, Any], epoch_idx
         progress_desc=f"Sintel {model_dir.name} e{epoch_idx}",
         primary_metric=str(config.get("eval", {}).get("sintel", {}).get("primary_metric", "legacy")),
         prediction_flow_scale=float(config.get("data", {}).get("ft3d_flow_divisor", 12.5)) if str(config.get("data", {}).get("dataset", "FC2")).upper() == "FT3D" else 1.0,
+        per_pair_path=(model_dir / "evaluations" / f"sintel-e{epoch_idx:04d}.csv") if config.get("component_variant") else None,
     )
 
 
