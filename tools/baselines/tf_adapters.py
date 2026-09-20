@@ -13,11 +13,14 @@ def tf_model(args):
     if args.model == 'nano':
         model = tf.keras.models.load_model(str(args.weights),compile=False)
         info.update(parameters=model.count_params(), input=str(model.input_shape),output=str(model.output_shape),
-                    unit_note='Upstream loader resizes flow spatially without scaling vectors; output retained in source pixels. Full-resolution input, not native deployment protocol.')
+                    network_resolution=[112,160] if args.nano_native else [416,1024],
+                    unit_note='Upstream loader resizes flow spatially without scaling vectors; output retained in source pixels. Public checkpoint NPY preprocessing provenance not supplied; provisional result, not Table III reproduction.')
         def predict(a,b):
             # Match RGB -> grayscale before normalization. TF float coefficients;
             # upstream DALI grayscale produces uint8 before its float cast.
             import cv2
+            if args.nano_native:
+                a,b=[cv2.resize(i,(160,112)) for i in (a,b)]
             x=np.stack([cv2.cvtColor(i,cv2.COLOR_BGR2GRAY) for i in (a,b)],-1).astype('float32')
             y=model((x[None]-128)/128,training=False)
             if isinstance(y,(tuple,list)):

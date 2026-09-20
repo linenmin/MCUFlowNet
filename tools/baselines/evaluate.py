@@ -101,6 +101,7 @@ def main():
     p.add_argument('--dataset', type=Path, required=True)
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--limit', type=int)
+    p.add_argument('--nano-native', action='store_true', help='NanoFlowNet 112x160 input; bilinear output to common grid; source-pixel vector units')
     args = p.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     files = sorted((args.dataset/'training/flow').glob('*/*.flo'))
@@ -110,6 +111,7 @@ def main():
     manifest = dict(model=args.model, weights=str(args.weights), command=sys.argv,
                     code_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
                     status='running', start=time.time(), samples_expected=len(files),
+                    git_status=subprocess.check_output(['git','status','--short'],text=True).strip(),
                     protocol='Sintel training Final; center crop rows 10:426, width1024; all pixels; raw GT primary; no prediction clipping',
                     weights_sha256={x.name: sha(x) for x in ([args.weights] if args.weights.is_file() else args.weights.parent.glob(args.weights.name+'.*'))})
     def save():
