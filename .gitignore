@@ -65,4 +65,5 @@ EdgeFlowNAS/configs/local/*.local.yaml
 /datasets/
 /data-cache/
 /downloads/
+*.safetensors
 /tmp/

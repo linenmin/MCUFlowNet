@@ -70,7 +70,7 @@
       "weight": "nanoflownet-cnns/pretrained_models/nanoflownet/nanoflownet.h5",
       "input": "112x160 grayscale; output interpolated to 416x1024",
       "status": "provisional",
-      "note": "公开loader只改变NPY光流的空间尺寸，没有缩放向量；但NPY转换来源缺失。当前按源图像素单位计分，确认前不进入正式名次。"
+      "note": "\u516c\u5f00loader\u53ea\u6539\u53d8NPY\u5149\u6d41\u7684\u7a7a\u95f4\u5c3a\u5bf8\uff0c\u6ca1\u6709\u7f29\u653e\u5411\u91cf\uff1b\u4f46NPY\u8f6c\u6362\u6765\u6e90\u7f3a\u5931\u3002\u5f53\u524d\u6309\u6e90\u56fe\u50cf\u7d20\u5355\u4f4d\u8ba1\u5206\uff0c\u786e\u8ba4\u524d\u4e0d\u8fdb\u5165\u6b63\u5f0f\u540d\u6b21\u3002"
     },
     {
       "run": "spynet-sintel",
@@ -115,7 +115,73 @@
       "weight": "449.ckpt (unavailable)",
       "input": "unverified",
       "status": "blocked",
-      "note": "官方Drive链接显示文件不存在，wiki历史仍是同一链接。其他旧架构实验的权重不能替代论文权重。"
+      "note": "\u5b98\u65b9Drive\u94fe\u63a5\u663e\u793a\u6587\u4ef6\u4e0d\u5b58\u5728\uff0cwiki\u5386\u53f2\u4ecd\u662f\u540c\u4e00\u94fe\u63a5\u3002\u5176\u4ed6\u65e7\u67b6\u6784\u5b9e\u9a8c\u7684\u6743\u91cd\u4e0d\u80fd\u66ff\u4ee3\u8bba\u6587\u6743\u91cd\u3002"
+    },
+    {
+      "run": "raft-small",
+      "name": "RAFT-Small",
+      "adapter": "raft-small",
+      "training": "Chairs + Things; Torchvision C_T_V1 identity audit",
+      "sintel_finetuned": false,
+      "source": "https://github.com/princeton-vl/RAFT",
+      "weight": "raft-small.pth",
+      "input": "RGB, 32 iterations",
+      "status": "eligible"
+    },
+    {
+      "run": "fastflow-things",
+      "name": "FastFlowNet",
+      "adapter": "fastflow",
+      "training": "Chairs + Things",
+      "sintel_finetuned": false,
+      "source": "https://github.com/ltkong218/FastFlowNet",
+      "weight": "fastflownet_things3d.pth",
+      "input": "BGR; resize448x1024 and restore flow coordinates",
+      "status": "eligible"
+    },
+    {
+      "run": "neuflow2-things",
+      "name": "NeuFlow v2",
+      "adapter": "neuflow2",
+      "training": "Things stage; preceding training per author release",
+      "sintel_finetuned": false,
+      "source": "https://github.com/neufieldrobotics/NeuFlow_v2",
+      "weight": "neuflow_things.pth",
+      "input": "RGB; iterations 1+8; FP32",
+      "status": "eligible"
+    },
+    {
+      "run": "gmflow-things",
+      "name": "GMFlow scale1",
+      "adapter": "gmflow",
+      "training": "Chairs + Things",
+      "sintel_finetuned": false,
+      "source": "https://github.com/autonomousvision/unimatch",
+      "weight": "gmflow-scale1-things-e9887eda.pth",
+      "input": "RGB; scale1, no refinement",
+      "status": "eligible"
+    },
+    {
+      "run": "sea-raft-tartan-things",
+      "name": "SEA-RAFT-S",
+      "adapter": "sea-raft",
+      "training": "ImageNet backbone + TartanAir + Chairs + Things",
+      "sintel_finetuned": false,
+      "source": "https://huggingface.co/MemorySlices/Tartan-C-T432x960-S",
+      "weight": "model.safetensors",
+      "input": "RGB; 4 iterations, scale0",
+      "status": "eligible"
+    },
+    {
+      "run": "rapidflow-things",
+      "name": "RAPIDFlow",
+      "adapter": "rapidflow",
+      "training": "Chairs + Things",
+      "sintel_finetuned": false,
+      "source": "https://github.com/hmorimitsu/ptlflow",
+      "weight": "rapidflow-things-0377c8fa.ckpt",
+      "input": "BGR; 12 iterations, allpairs; author PyPI ptlflow0.4.2",
+      "status": "eligible"
     }
   ]
 }

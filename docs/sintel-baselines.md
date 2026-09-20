@@ -56,6 +56,21 @@ NanoFlowNet也做过2对416×1024直接输入的工程探测；这与低分辨�
 
 ## 运行示例
 
+### 六项扩展（2026-09-20）
+
+新增`raft-small / fastflow / neuflow2 / gmflow / sea-raft / rapidflow`，仍使用同一评分器。每项先完成两对真实图像GPU推理和严格权重加载，再测1041对；少量样本不用于选择配置或预测最终排名。全部采用FP32、关闭TF32，输出源图像素单位。
+
+| 模型 | 固定设置及来源 |
+| --- | --- |
+| RAFT-Small | 官方模型包small，32次迭代。106个权重张量的形状、dtype和数值指纹多重集合与Torchvision `Raft_Small_Weights.C_T_V1`完全一致，后者明确标注原论文Chairs+Things权重；证据`raft-small-weight-check.json`。不是用Torchvision替换推理图 |
+| FastFlowNet | 作者FastFlowNet_v2.py及things3d权重；依原demo使用BGR/255、两图共同通道均值、448×1024内部尺寸、×20和向量坐标还原。SpatialCorrelationSampler换成纯Torch的dy-major通道求和，网络随后除通道数；81个偏移、边界零填充通过独立标量参考检查。此兼容实现的速度不能冒充原CUDA扩展速度 |
+| NeuFlow v2 | 作者neuflow_things.pth，RGB，16倍尺度1次、8倍尺度8次迭代；显式初始化416×1024状态。原评测用AMP，此处用FP32并记录差别，不声称完全重现论文数字。Things之前的完整训练日志未随权重提供 |
+| GMFlow scale1 | 作者UniMatch代码与gmflow-scale1-things-e9887eda.pth，单尺度、swin、attention splits2、全局相关性与传播、无额外refinement |
+| SEA-RAFT-S | 作者HF `MemorySlices/Tartan-C-T432x960-S`，sintel-S评测结构、4次迭代、scale0。包含ImageNet骨干预训练及TartanAir。构造时跳过会被完整checkpoint覆盖的ImageNet下载；作者BasicBlock共享bn3/downsample BN，safetensors去掉重复名字，按实际共享storage补名称并检查已有别名数值一致后strict加载。首次普通加载及safetensors自动加载失败保留在probe目录，未计分 |
+| RAPIDFlow | 作者发布的PyPI ptlflow==0.4.2及rapidflow-things-0377c8fa.ckpt，默认12次迭代、allpairs。按其cv.imread数据加载使用BGR/255，模型内部归一化。实际执行安装包，**不是**缓存的GitHub HEAD；包版本、已安装源码SHA和环境冻结另存，不能将Git缓存提交当作执行版本 |
+
+权重URL见模型登记表、作者仓库和`extension-provenance.json`；外部源码与权重仍在Code/optical-flow-upstream及Runs，评测代码不复制作者网络。新依赖仅安装到已有独立Conda `sintel-torch`，不修改base或训练环境；本次完整依赖见Runs/torch-extension-freeze.txt。未用Sintel微调并不保证未用它验证或挑选checkpoint。
+
 在工作树根目录，以独立Conda环境的python直接运行，无需激活base。输出目录必须不存在，防止覆盖：
 
 ```powershell

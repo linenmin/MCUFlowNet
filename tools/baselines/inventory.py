@@ -25,7 +25,7 @@ def main():
         for path in sorted(root.rglob('*')):
             if not path.is_file() or '.git' in path.parts:
                 continue
-            if not (path.name.endswith(('.pth', '.pth.tar', '.h5', '.tflite', '.pytorch', '.t7', '.index'))
+            if not (path.name.endswith(('.pth', '.pth.tar', '.h5', '.tflite', '.pytorch', '.t7', '.index', '.ckpt', '.safetensors'))
                     or '.data-00000-of-' in path.name):
                 continue
             with path.open('rb') as stream:
