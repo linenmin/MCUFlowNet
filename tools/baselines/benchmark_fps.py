@@ -145,7 +145,7 @@ def main():
         assert first.shape==(416,1024,2) and np.isfinite(first).all()
         if is_tf and args.model!='nano':
             assert gpu_trace, 'No GPU operations in execution trace'
-            report['gpu_execution_evidence']=gpu_trace[:30]
+            report['gpu_execution_evidence']=gpu_trace
         elif is_tf:
             report['gpu_execution_evidence']='Eager predict inside /GPU:0 scope with soft placement disabled; successful host output'
         else:
