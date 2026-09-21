@@ -38,7 +38,9 @@ def check(recipe, runs):
                 and init['identical_model_tensors']>0 and restored['includes_optimizer_and_bn']
                 and restored['identical_tensors']>init['identical_model_tensors']):
             raise ValueError('Initialization/resume tensor verification missing')
-        if init['checkpoint']!=choice['parent_run']+f"/model_{choice['model']}/checkpoints/last.ckpt":
+        source = Path(choice['parent_run'])/f"model_{choice['model']}"
+        source = committed_model(source) if (source/'recovery/current.json').exists() else source
+        if init['checkpoint']!=str(source/'checkpoints/last.ckpt'):
             raise ValueError('Wrong probe starting weights')
         with (committed_model(model)/'eval_history.csv').open() as f: rows=list(csv.DictReader(f))
         first_inputs[name]=[r['first_batch_input_sha256'] for r in rows]

@@ -153,6 +153,8 @@ def prepare_weight_init(recipe, variant, action, stop_step, runs_root):
         saved = json.loads((model/'run_manifest.json').read_text())
         if saved['protocol'] != label_ab_protocol(cfg):
             raise ValueError('Recipe changed; recovery must keep the original protocol')
+        if saved['config']['runtime'].get('milestone_epochs') != cfg['runtime'].get('milestone_epochs'):
+            raise ValueError('Recovery changed frozen checkpoint epochs')
         bundle = committed_model(model)
         state = validate_boundary(bundle)
         cfg['checkpoint'].update(load_checkpoint=True, resume_experiment_name=str(run_root),
@@ -234,6 +236,8 @@ def probe_recipe(recipe):
     recipe.update(experiment_id=recipe['experiment_id']+'-PROBE', stage_steps=100, midpoint_step=100)
     cfg = recipe['config']
     cfg['train']['updates_per_epoch'] = 50
+    if cfg['runtime'].get('milestone_epochs'):
+        cfg['runtime']['milestone_epochs'] = [1, 2]
     cfg['eval'].update(eval_every_epoch=1, eval_batches=1)
     cfg['eval']['sintel'].update(eval_every_epoch=1, max_samples=2)
     cfg['eval']['sintel_full_monitor'].update(eval_every_epoch=2, max_samples=4)
@@ -272,6 +276,16 @@ def verify_result(model, cfg, recipe, target):
         count = min(count, monitor['max_samples'])
     if any(int(r['full_monitor_evaluated_samples']) != count for r in full):
         raise ValueError('Incomplete full monitor')
+    if recipe.get('kind') == 'weight_init':
+        for row in rows:
+            expected_lr = stage_lr(cfg['train']['lr_stage'], int(row['global_step'])-1)
+            if not math.isclose(float(row['lr']), expected_lr, rel_tol=1e-10):
+                raise ValueError('Training did not use the approved stage schedule')
+        for epoch in cfg['runtime'].get('milestone_epochs', []):
+            if epoch*block > target: continue
+            frozen = model.parent/'milestones'/f'epoch-{epoch:04d}'/model.name
+            if validate_boundary(frozen)['global_step'] != epoch*block:
+                raise ValueError('Missing or inconsistent frozen checkpoint')
     if recipe.get('kind') == 'schedule_continue':
         quick = cfg['eval']['sintel']
         quick_count = len([line for line in Path(quick['sintel_list']).read_text().splitlines() if line.strip()])

@@ -24,6 +24,28 @@ def write_run(root, cfg, step):
 
 
 class ExperimentRunnerTest(unittest.TestCase):
+    def test_long_ft3d_recipe_changes_only_schedule_and_keeps_milestones(self):
+        folder = Path(__file__).resolve().parents[2]/'EdgeFlowNAS/configs/experiments'
+        original = json.loads((folder/'ft3d_recipe.json').read_text())
+        new = json.loads((folder/'ft3d_schedule.json').read_text())
+        for key in ['data', 'eval']:
+            self.assertEqual(new['config'][key], original['config'][key])
+        train = copy.deepcopy(new['config']['train']); train['num_epochs'] = 40
+        self.assertEqual(train, original['config']['train'])
+        self.assertEqual(new['stage_steps'], 60000)
+        self.assertEqual(new['config']['runtime']['milestone_epochs'], [40,80,120])
+        self.assertEqual(probe_recipe(new)['config']['runtime']['milestone_epochs'], [1,2])
+        self.assertEqual(len(new['variants']), 4)
+        from efnas.engine.lr_stage import stage_lr
+        from run_retrain_experiment import stage_spec
+        for name, choice in new['variants'].items():
+            old = original['variants'][name[0]+'_150_plain']
+            self.assertEqual({k:v for k,v in choice.items() if k!='peak_lr'},
+                             {k:v for k,v in old.items() if k!='peak_lr'})
+            spec = stage_spec(new, name)
+            self.assertAlmostEqual(stage_lr(spec,59999),1e-6)
+            self.assertGreater(stage_lr(spec,19999),1e-6)
+
     def test_unmeasured_validation_is_not_a_failed_metric(self):
         cfg = {'eval': {'eval_every_epoch': 2}, 'train': {'num_epochs': 4}}
         rows = [{'epoch': '1', 'loss': '1', 'val_epe': 'inf'},

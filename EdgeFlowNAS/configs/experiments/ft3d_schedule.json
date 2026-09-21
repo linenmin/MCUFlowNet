@@ -1,0 +1,200 @@
+{
+  "kind": "weight_init",
+  "experiment_id": "FT3D-SCHEDULE-01",
+  "parent_step": 0,
+  "stage_steps": 60000,
+  "midpoint_step": 60000,
+  "min_lr": 1e-06,
+  "config": {
+    "runtime": {
+      "output_root": "/runs/FT3D-SCHEDULE-01",
+      "seed": 42,
+      "experiment_name": "selected-by-runner",
+      "audit_initial_state": true,
+      "stop_after_epoch": 120,
+      "record_training_protocol": true,
+      "milestone_epochs": [
+        40,
+        80,
+        120
+      ]
+    },
+    "train": {
+      "gpu_device": 0,
+      "num_epochs": 120,
+      "batch_size": 32,
+      "micro_batch_size": 32,
+      "lr": 1e-05,
+      "lr_min": 1e-06,
+      "grad_clip_global_norm": 200,
+      "weight_decay": 0,
+      "train_sampling_mode": "shuffle_no_replacement",
+      "train_crop_mode": "random",
+      "updates_per_epoch": 500
+    },
+    "data": {
+      "dataset": "FT3D",
+      "train_dir": "TRAIN",
+      "val_dir": "TEST",
+      "ft3d_frames_base_paths": [
+        "/datasets/FlyingThings3D/frames_cleanpass",
+        "/datasets/FlyingThings3D/frames_finalpass"
+      ],
+      "ft3d_flow_base_path": "/datasets/FlyingThings3D/optical_flow",
+      "ft3d_directions": [
+        "into_future",
+        "into_past"
+      ],
+      "ft3d_excluded_flow_paths": [
+        "../Datasets/FlyingThings3D/optical_flow/TEST/A/0085/into_future/left/OpticalFlowIntoFuture_0006_L.pfm",
+        "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0012/into_future/left/OpticalFlowIntoFuture_0006_L.pfm",
+        "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0096/into_future/left/OpticalFlowIntoFuture_0006_L.pfm",
+        "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0186/into_future/left/OpticalFlowIntoFuture_0006_L.pfm",
+        "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0441/into_future/left/OpticalFlowIntoFuture_0006_L.pfm",
+        "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0456/into_future/left/OpticalFlowIntoFuture_0006_L.pfm",
+        "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0483/into_future/left/OpticalFlowIntoFuture_0006_L.pfm",
+        "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0728/into_future/left/OpticalFlowIntoFuture_0006_L.pfm",
+        "../Datasets/FlyingThings3D/optical_flow/TRAIN/B/0459/into_future/left/OpticalFlowIntoFuture_0006_L.pfm",
+        "../Datasets/FlyingThings3D/optical_flow/TRAIN/C/0031/into_future/left/OpticalFlowIntoFuture_0006_L.pfm",
+        "../Datasets/FlyingThings3D/optical_flow/TRAIN/C/0080/into_future/left/OpticalFlowIntoFuture_0006_L.pfm",
+        "../Datasets/FlyingThings3D/optical_flow/TRAIN/C/0140/into_future/left/OpticalFlowIntoFuture_0006_L.pfm",
+        "../Datasets/FlyingThings3D/optical_flow/TRAIN/C/0260/into_future/left/OpticalFlowIntoFuture_0006_L.pfm",
+        "../Datasets/FlyingThings3D/optical_flow/TRAIN/C/0323/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+      ],
+      "ft3d_flow_divisor": 1.0,
+      "ft3d_train_label_clip": 50.0,
+      "ft3d_eval_label_clip": null,
+      "ft3d_strict_loading": true,
+      "ft3d_train_augment": {
+        "enabled": false
+      },
+      "ft3d_num_workers": 16,
+      "ft3d_eval_num_workers": 8,
+      "prefetch_batches": 1,
+      "eval_prefetch_batches": 0,
+      "input_height": 352,
+      "input_width": 480,
+      "flow_channels": 2
+    },
+    "eval": {
+      "eval_every_epoch": 2,
+      "eval_batches": 20,
+      "validation_training_mode": false,
+      "sintel": {
+        "dataset_root": "/datasets/Sintel",
+        "sintel_list": "EdgeFlowNAS/configs/experiments/label_ab/monitor_quick.txt",
+        "patch_size": "416,1024",
+        "max_samples": null,
+        "eval_every_epoch": 2,
+        "primary_metric": "raw"
+      },
+      "sintel_full_monitor": {
+        "dataset_root": "/datasets/Sintel",
+        "sintel_list": "EdgeFlowNAS/configs/experiments/label_ab/monitor_all.txt",
+        "patch_size": "416,1024",
+        "max_samples": null,
+        "eval_every_epoch": 10,
+        "primary_metric": "raw"
+      }
+    },
+    "checkpoint": {}
+  },
+  "variants": {
+    "s_slow": {
+      "model": "v3_light",
+      "arch_code": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "parent_run": "/runs/20260918-fc2-label01-s_clip50",
+      "source_epoch": 150,
+      "source_step": 104250,
+      "peak_lr": 1e-05,
+      "warmup_steps": 0,
+      "augment": {
+        "enabled": false
+      }
+    },
+    "s_higher": {
+      "model": "v3_light",
+      "arch_code": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "parent_run": "/runs/20260918-fc2-label01-s_clip50",
+      "source_epoch": 150,
+      "source_step": 104250,
+      "peak_lr": 3e-05,
+      "warmup_steps": 0,
+      "augment": {
+        "enabled": false
+      }
+    },
+    "l_slow": {
+      "model": "v3_efn_fps",
+      "arch_code": [
+        2,
+        0,
+        0,
+        2,
+        2,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "parent_run": "/runs/20260918-fc2-label01-l_clip50",
+      "source_epoch": 150,
+      "source_step": 104250,
+      "peak_lr": 1e-05,
+      "warmup_steps": 0,
+      "augment": {
+        "enabled": false
+      }
+    },
+    "l_higher": {
+      "model": "v3_efn_fps",
+      "arch_code": [
+        2,
+        0,
+        0,
+        2,
+        2,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "parent_run": "/runs/20260918-fc2-label01-l_clip50",
+      "source_epoch": 150,
+      "source_step": 104250,
+      "peak_lr": 3e-05,
+      "warmup_steps": 0,
+      "augment": {
+        "enabled": false
+      }
+    }
+  }
+}
