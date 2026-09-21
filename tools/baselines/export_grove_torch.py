@@ -32,6 +32,7 @@ def main():
     p.add_argument('--height',type=int,default=128)
     p.add_argument('--width',type=int,default=176)
     p.add_argument('--onnx-only',action='store_true')
+    p.add_argument('--grid-layout-fix',action='store_true',help='Explicitly undo converter NCHW-to-NHWC transpose on GridSample coordinate tensors; numerical acceptance still required')
     args=p.parse_args();args.output.mkdir(parents=True,exist_ok=False)
     manifest=json.loads((args.base/args.run/'manifest.json').read_text())
     model_args=SimpleNamespace(model=manifest['model'],weights=Path(manifest['weights']),upstream=args.upstream)
@@ -98,6 +99,26 @@ def main():
         from onnxsim import simplify
         graph,ok=simplify(graph)
         assert ok
+        # onnx2tf 1.28.3 lacks border padding. For align_corners=True,
+        # clamping normalized coordinates to [-1,1] followed by zero padding
+        # is exactly border sampling. Keep the original PyTorch numerical check.
+        rewritten=[];border_nodes=[]
+        for node in graph.graph.node:
+            attrs={a.name:onnx.helper.get_attribute_value(a) for a in node.attribute}
+            if node.op_type=='GridSample' and attrs.get('padding_mode')==b'border' and attrs.get('align_corners')==1:
+                lo=node.name+'_clip_min';hi=node.name+'_clip_max';clipped=node.name+'_bounded_grid'
+                for name,value in ((lo,-1.0),(hi,1.0)):
+                    graph.graph.initializer.append(onnx.numpy_helper.from_array(np.array(value,dtype=np.float32),name))
+                rewritten.append(onnx.helper.make_node('Clip',[node.input[1],lo,hi],[clipped],name=node.name+'_border_clip'))
+                node.input[1]=clipped
+                for attr in node.attribute:
+                    if attr.name=='padding_mode':attr.s=b'zeros'
+                border_nodes.append(node.name)
+            rewritten.append(node)
+        del graph.graph.node[:];graph.graph.node.extend(rewritten)
+        graph=onnx.shape_inference.infer_shapes(graph)
+        onnx.checker.check_model(graph)
+        report['equivalent_border_clipping']=border_nodes
         onnx.save(graph,str(onnx_path))
         report['onnx_ops']=sorted({n.op_type for n in graph.graph.node})
         opts=ort.SessionOptions();opts.intra_op_num_threads=4
@@ -110,10 +131,35 @@ def main():
         if args.onnx_only:return
         from onnx2tf import convert
         converted=args.output/'converted'
+        extra={}
+        if args.grid_layout_fix:
+            # Coordinate tensors are NHW2 already in ONNX; converter heuristics
+            # inconsistently transpose them. Restore the declared static shape
+            # at this boundary without changing installed packages or weights.
+            import importlib,itertools,tensorflow as tf
+            grids=importlib.import_module('onnx2tf.ops.GridSample')
+            original_make=grids.make_node
+            report['grid_layout_corrections']=[]
+            def make_grid(*,graph_node,tf_layers_dict,**kw):
+                outer=tf_layers_dict
+                name=graph_node.inputs[1].name
+                if name in tf_layers_dict:
+                    tensor=tf_layers_dict[name]['tf_node']
+                    desired=list(graph_node.inputs[1].shape);actual=list(tensor.shape)
+                    if actual!=desired:
+                        perms=[(0,)+perm for perm in itertools.permutations((1,2,3)) if [actual[i] for i in (0,)+perm]==desired]
+                        assert len(perms)==1,(name,actual,desired,perms)
+                        tf_layers_dict=dict(tf_layers_dict)
+                        tf_layers_dict[name]=dict(tf_layers_dict[name],tf_node=tf.transpose(tensor,perms[0]))
+                        report['grid_layout_corrections'].append(dict(node=graph_node.name,actual=actual,desired=desired,perm=perms[0]))
+                result=original_make(graph_node=graph_node,tf_layers_dict=tf_layers_dict,**kw)
+                for output in graph_node.outputs:outer[output.name]=tf_layers_dict[output.name]
+                return result
+            grids.make_node=make_grid
         convert(input_onnx_file_path=str(onnx_path),output_folder_path=str(converted),
             not_use_onnxsim=True,not_use_opname_auto_generate=True,non_verbose=True,
             custom_input_op_name_np_data_path=[['images',str(args.output/'calibration_nhwc.npy'),0.0,1.0]],
-            output_integer_quantized_tflite=True)
+            output_integer_quantized_tflite=True,**extra)
         import tensorflow as tf
         results={}
         for kind in ('float32','full_integer_quant'):
