@@ -29,12 +29,17 @@ def main():
     p.add_argument('--height',type=int,required=True)
     p.add_argument('--width',type=int,required=True)
     p.add_argument('--samples',type=int,default=64)
+    p.add_argument('--prune-aux-heads',action='store_true',
+                   help='MCU diagnostic: remove unused output filters before quantization; keep weights unchanged')
     p.add_argument('--vela-pythonpath',type=Path,required=True)
     p.add_argument('--vela-config',type=Path,required=True)
     p.add_argument('--output',type=Path,required=True)
     args=p.parse_args()
+    if args.prune_aux_heads and not args.model.startswith('MCU'):
+        p.error('--prune-aux-heads is only verified for MCUFlowNet-S/L')
     args.output.mkdir(parents=True,exist_ok=False)
     report=dict(status='running',command=sys.argv,model=args.model,
+        prune_aux_heads=args.prune_aux_heads,
         input_hw=[args.height,args.width],script_sha256=sha(__file__),
         weights_sha256={f.name:sha(f) for f in ([args.weights] if args.weights.is_file() else sorted(args.weights.parent.glob(args.weights.name+'.*')))},
         config_sha256=sha(args.vela_config))
@@ -95,7 +100,19 @@ def main():
                     y=tf.compat.v1.image.resize_bilinear(y,[v.shape[1],v.shape[2]])+v
                 return y
             original=accum(heads)[...,:2]
-            flow=tf.identity(accum([x[...,:2] for x in heads]),name='flow_uv')
+            if args.prune_aux_heads:
+                assert args.model.startswith('MCU'), 'Only verified for MCU bias-free linear heads'
+                uv_heads=[]
+                for i,x in enumerate(heads):
+                    op=x.op
+                    assert op.type=='Conv2D' and x.shape[-1]==4, (op.type,x.shape)
+                    uv_heads.append(tf.nn.conv2d(op.inputs[0],op.inputs[1][...,:2],
+                        strides=op.get_attr('strides'),padding=op.get_attr('padding').decode(),
+                        data_format=op.get_attr('data_format').decode(),dilations=op.get_attr('dilations'),
+                        name=f'flow_only_head_{i}'))
+            else:
+                uv_heads=[x[...,:2] for x in heads]
+            flow=tf.identity(accum(uv_heads),name='flow_uv')
             session=tf.compat.v1.Session(config=tf.compat.v1.ConfigProto(intra_op_parallelism_threads=4,inter_op_parallelism_threads=2))
             variables=tf.compat.v1.global_variables()
             stored=dict(tf.train.list_variables(str(args.weights)))
