@@ -1,0 +1,44 @@
+{
+  "dataset": "FT3D",
+  "train_dir": "TRAIN",
+  "val_dir": "TEST",
+  "ft3d_frames_base_paths": [
+    "/datasets/FlyingThings3D/frames_cleanpass",
+    "/datasets/FlyingThings3D/frames_finalpass"
+  ],
+  "ft3d_flow_base_path": "/datasets/FlyingThings3D/optical_flow",
+  "ft3d_directions": [
+    "into_future",
+    "into_past"
+  ],
+  "ft3d_excluded_flow_paths": [
+    "../Datasets/FlyingThings3D/optical_flow/TEST/A/0085/into_future/left/OpticalFlowIntoFuture_0006_L.pfm",
+    "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0012/into_future/left/OpticalFlowIntoFuture_0006_L.pfm",
+    "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0096/into_future/left/OpticalFlowIntoFuture_0006_L.pfm",
+    "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0186/into_future/left/OpticalFlowIntoFuture_0006_L.pfm",
+    "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0441/into_future/left/OpticalFlowIntoFuture_0006_L.pfm",
+    "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0456/into_future/left/OpticalFlowIntoFuture_0006_L.pfm",
+    "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0483/into_future/left/OpticalFlowIntoFuture_0006_L.pfm",
+    "../Datasets/FlyingThings3D/optical_flow/TRAIN/A/0728/into_future/left/OpticalFlowIntoFuture_0006_L.pfm",
+    "../Datasets/FlyingThings3D/optical_flow/TRAIN/B/0459/into_future/left/OpticalFlowIntoFuture_0006_L.pfm",
+    "../Datasets/FlyingThings3D/optical_flow/TRAIN/C/0031/into_future/left/OpticalFlowIntoFuture_0006_L.pfm",
+    "../Datasets/FlyingThings3D/optical_flow/TRAIN/C/0080/into_future/left/OpticalFlowIntoFuture_0006_L.pfm",
+    "../Datasets/FlyingThings3D/optical_flow/TRAIN/C/0140/into_future/left/OpticalFlowIntoFuture_0006_L.pfm",
+    "../Datasets/FlyingThings3D/optical_flow/TRAIN/C/0260/into_future/left/OpticalFlowIntoFuture_0006_L.pfm",
+    "../Datasets/FlyingThings3D/optical_flow/TRAIN/C/0323/into_future/left/OpticalFlowIntoFuture_0006_L.pfm"
+  ],
+  "ft3d_flow_divisor": 1.0,
+  "ft3d_train_label_clip": 50.0,
+  "ft3d_eval_label_clip": null,
+  "ft3d_strict_loading": true,
+  "ft3d_train_augment": {
+    "enabled": false
+  },
+  "ft3d_num_workers": 16,
+  "ft3d_eval_num_workers": 8,
+  "prefetch_batches": 1,
+  "eval_prefetch_batches": 0,
+  "input_height": 352,
+  "input_width": 480,
+  "flow_channels": 2
+}

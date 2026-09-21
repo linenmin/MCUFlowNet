@@ -190,7 +190,10 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
     pred_channels = flow_channels * 2
 
     train_provider = _build_provider(config=config, split="train", seed_offset=0, provider_mode="train")
-    val_provider = _build_provider(config=config, split="val", seed_offset=999, provider_mode="eval")
+    validation_config = copy.deepcopy(config)
+    if eval_cfg.get('validation_data'):
+        validation_config['data'] = eval_cfg['validation_data']
+    val_provider = _build_provider(config=validation_config, split="val", seed_offset=999, provider_mode="eval")
     if len(train_provider) == 0:
         raise RuntimeError("train split is empty")
     if len(val_provider) == 0:
@@ -199,7 +202,9 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
     if config.get("component_variant"):
         dataset_audit = {}
         for split, provider in (("train", train_provider), ("val", val_provider)):
-            relative = [str(Path(p).relative_to(data_cfg['base_path'])).replace('\\', '/') for p in provider.samples]
+            from efnas.engine.component_protocol import sample_records
+            split_data = data_cfg if split == 'train' else validation_config['data']
+            relative = sample_records(provider.samples, split_data.get('base_path', '/datasets/FlyingThings3D'))
             content = '\n'.join(relative)+'\n'
             dataset_audit[split] = {'samples': len(relative), 'sha256': hashlib.sha256(content.encode()).hexdigest()}
             path = model_dir / f'{split}_samples.txt'
