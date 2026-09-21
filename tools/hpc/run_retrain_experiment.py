@@ -240,6 +240,16 @@ def probe_recipe(recipe):
     return recipe
 
 
+def check_finite_metrics(rows, cfg):
+    """Unmeasured validation rows contain inf; measured metrics must be finite."""
+    for row in rows:
+        epoch = int(row['epoch'])
+        evaluated = epoch % cfg['eval']['eval_every_epoch'] == 0 or epoch == cfg['train']['num_epochs']
+        for field in ('loss', 'sintel_raw_epe', 'full_monitor_sintel_raw_epe') + (('val_epe',) if evaluated else ()):
+            if row.get(field) and not math.isfinite(float(row[field])):
+                raise ValueError(f'Nonfinite {field}')
+
+
 def verify_result(model, cfg, recipe, target):
     complete = committed_model(model)
     if validate_boundary(complete)['global_step'] != target:
@@ -250,10 +260,7 @@ def verify_result(model, cfg, recipe, target):
     expected = list(range(recipe['parent_step']+block, target+1, block))
     if [int(r['global_step']) for r in rows] != expected:
         raise ValueError('Missing/duplicated history boundaries')
-    for row in rows:
-        for field in ('loss', 'val_epe', 'sintel_raw_epe', 'full_monitor_sintel_raw_epe'):
-            if row.get(field) and not math.isfinite(float(row[field])):
-                raise ValueError(f'Nonfinite {field}')
+    check_finite_metrics(rows, cfg)
     monitor = cfg['eval']['sintel_full_monitor']
     every = monitor['eval_every_epoch']
     expected_full = [step for step in expected if (step//block)%every == 0 or step//block == cfg['train']['num_epochs']]

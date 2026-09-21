@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'hpc'))
-from run_retrain_experiment import prepare, probe_recipe, wrapper_config, arch_text
+from run_retrain_experiment import prepare, probe_recipe, wrapper_config, arch_text, check_finite_metrics
 from efnas.engine.experiment_protocol import label_ab_protocol
 
 
@@ -24,6 +24,32 @@ def write_run(root, cfg, step):
 
 
 class ExperimentRunnerTest(unittest.TestCase):
+    def test_unmeasured_validation_is_not_a_failed_metric(self):
+        cfg = {'eval': {'eval_every_epoch': 2}, 'train': {'num_epochs': 4}}
+        rows = [{'epoch': '1', 'loss': '1', 'val_epe': 'inf'},
+                {'epoch': '2', 'loss': '1', 'val_epe': '2'}]
+        check_finite_metrics(rows, cfg)
+        rows[1]['val_epe'] = 'inf'
+        with self.assertRaisesRegex(ValueError, 'val_epe'): check_finite_metrics(rows, cfg)
+        rows[1]['val_epe'] = '2'; rows[0]['loss'] = 'nan'
+        with self.assertRaisesRegex(ValueError, 'loss'): check_finite_metrics(rows, cfg)
+
+    def test_pretraining_length_recipe_keeps_the_150_epoch_ft3d_conditions(self):
+        folder = Path(__file__).resolve().parents[2]/'EdgeFlowNAS/configs/experiments'
+        original = json.loads((folder/'ft3d_recipe.json').read_text())
+        new = json.loads((folder/'ft3d_pretrain.json').read_text())
+        for key in ['train','data','eval']:
+            self.assertEqual(new['config'][key], original['config'][key])
+        self.assertEqual(new['stage_steps'], original['stage_steps'])
+        self.assertEqual(new['config']['runtime']['seed'], original['config']['runtime']['seed'])
+        self.assertEqual(len(new['variants']), 4)
+        for name, choice in new['variants'].items():
+            old = original['variants'][name[0]+'_150_plain']
+            for key in ['model','arch_code','peak_lr','warmup_steps','augment']:
+                self.assertEqual(choice[key], old[key])
+            self.assertIn(choice['source_epoch'], [300,400])
+            self.assertEqual(choice['source_step'], choice['source_epoch']*695)
+
     def test_schedule_continuation_preserves_horizon_and_rejects_lr_changes(self):
         cfg = copy.deepcopy(self.cfg)
         cfg['data'].update(dataset='FC2', prefetch_batches=0)

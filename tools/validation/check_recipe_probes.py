@@ -13,7 +13,9 @@ from experiment_io import save
 
 def check(recipe, runs):
     probe=probe_recipe(recipe);root=runs/probe['experiment_id']
-    pairing=json.loads((root/'pairing.json').read_text())
+    has_color = any(v['augment'].get('enabled') for v in probe['variants'].values())
+    pairing=(json.loads((root/'pairing.json').read_text()) if has_color else
+             dict(status='passed',method='identical plain-input hashes across parent choices'))
     if pairing['status']!='passed': raise ValueError('Input pairing did not pass')
     result=dict(status='passed',pairing=pairing,variants={})
     first_inputs={}
@@ -43,9 +45,14 @@ def check(recipe, runs):
         result['variants'][name]=dict(initialized_tensors=init['identical_model_tensors'],
             restored_tensors=restored['identical_tensors'],final_step=100,
             source_epoch=choice['source_epoch'],source_step=choice['source_step'])
-    for size in ('s','l'):
-        if first_inputs[size+'_100_plain']!=first_inputs[size+'_150_plain']:
+    groups = {}
+    for name, choice in probe['variants'].items():
+        if not choice['augment'].get('enabled'):
+            groups.setdefault(choice['model'], []).append(name)
+    for names in groups.values():
+        if any(first_inputs[name] != first_inputs[names[0]] for name in names[1:]):
             raise ValueError('Plain branches received different input batches')
+    result['paired_input_hashes'] = first_inputs
     return result
 
 
