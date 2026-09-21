@@ -97,3 +97,7 @@ benchmark_fps.py复用已验收预测适配器，batch1、FP32、TF32关闭、�
 逐模型、独立进程运行。首对EPE须与原评测差小于0.005像素，检查有限输出；TensorFlow图模式用未计时的执行trace核对GPU算子，Nano用GPU明确放置且禁止软回退。PyTorch在Windows隔离Conda，TF在既有WSL NVIDIA容器，两框架环境分别记录。CPU线程沿用适配器（Torch4，TF8/2），OpenCV1线程，不宣称跨框架同等优化；没有torch.compile、TensorRT、混合精度或功耗测量。PWC/FastFlow相关性为现有兼容实现，不能冒充上游优化CUDA速度。
 
 全部结果保存在Runs/MCUFlowNet/GPU-FPS-01；JSON记权重SHA、脚本SHA、命令、驱动、验证、时间设置及GPU证据，timings.csv保存逐次耗时。GPU显示/桌面进程仍可能引入波动。失败记录保留，重跑用新输出目录，不覆盖。
+
+GPU-FPS-01于2026-09-21完成：12项Torch（含3套微调权重）和5项TF，共17项正式计时，逐次与每组FPS重算通过；同权重首对EPE最大差1.17e-7。TF FULL_TRACE在当前WSL/CUPTI组合异常退出，保留probe-edge日志；SOFTWARE_TRACE成功，四项图模式另保存GPU Conv2D等节点。Nano使用显式GPU作用域并禁止软回退。补充GPU核验的小样本耗时不替换正式150次计时。
+
+复跑入口为tools/baselines/run_fps.ps1 -Framework torch或-Framework tf，两者须顺序执行，使用新的-RunName避免覆盖。汇总用tools/baselines/summarize_fps.py --runs <正式目录> --output <JSON路径>。首次试跑只需benchmark_fps.py的--warmup/--iterations/--rounds参数；不得将短跑FPS当正式结果。原始运行输出及环境冻结留在Runs，wiki附件只保存核验后的汇总。当前版本主表Nano三组跨度9.27%，报告范围而非挑最快值；不从CPU或文献数字推导GPUFPS。
