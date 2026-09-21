@@ -5,7 +5,7 @@ same learned weights and quantization scales. Any larger passing shape requires
 fresh calibration/accuracy validation before being accepted for deployment.
 """
 import argparse
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import csv
 import json
 import math
@@ -26,6 +26,7 @@ def main():
     config=args.root/'scan/grove-1p4mib.ini'
     env=dict(os.environ,PYTHONPATH='/runs/VELA-01/toolchain')
     sources={'edge':(160,208),'MCUFlowNet-S':(160,224),'MCUFlowNet-L':(160,224),'nano':(304,400)}
+    compile_pool=ThreadPoolExecutor(max_workers=6)
     def worker(model):
         h0,w0=sources[model];source=args.root/'scan'/model/f'{h0}x{w0}'/'model_int8.tflite'
         out=root/model;out.mkdir(exist_ok=True)
@@ -36,7 +37,8 @@ def main():
             budget_bytes=budget,candidates=candidates,observations=[],status='running')
         def save():(out/'scan.json').write_text(json.dumps(report,indent=2)+'\n')
         save()
-        for h,w in candidates:
+        def compile_candidate(hw):
+            h,w=hw
             dest=out/f'{h}x{w}';dest.mkdir(exist_ok=True)
             file=dest/'model_int8.tflite'
             resize(source,file,h,w)
@@ -58,11 +60,16 @@ def main():
                 modes[mode]=dict(status='compiled',peak_bytes=peak,cpu_operators=cpu,fits=peak<=budget and cpu==0)
             assert any(v.get('status')=='compiled' for v in modes.values()),dest
             item=dict(height=h,width=w,modes=modes,fits=any(v.get('fits',False) for v in modes.values()))
-            report['observations'].append(item);save();print(model,h,w,item['fits'],flush=True)
+            return item
+        futures=[compile_pool.submit(compile_candidate,hw) for hw in candidates]
+        for future in as_completed(futures):
+            item=future.result()
+            report['observations'].append(item);save();print(model,item['height'],item['width'],item['fits'],flush=True)
         passing=[v for v in report['observations'] if v['fits']]
         report['selected']=max(passing,key=lambda v:(v['height']*v['width'],-abs(v['width']/v['height']-4/3))) if passing else None
         report['status']='completed';save()
-    with ThreadPoolExecutor(max_workers=2) as pool:list(pool.map(worker,sources))
+    with ThreadPoolExecutor(max_workers=4) as pool:list(pool.map(worker,sources))
+    compile_pool.shutdown()
 
 
 if __name__=='__main__':main()

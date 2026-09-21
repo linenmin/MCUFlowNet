@@ -36,6 +36,7 @@ def main():
     files=sorted((args.dataset/'training/flow').glob('*/*.flo'));assert len(files)==1041
     if args.limit:files=files[:args.limit]
     report=dict(status='running',model=model,input_hw=[h,w],samples_expected=len(files),
+        script_sha256=sha(__file__),tensorflow=tf.__version__,numpy=np.__version__,
         export=str(args.export),export_summary_sha256=sha(args.export/'summary.json'),
         tflite_sha256={k:sha(args.export/f'model_{k}.tflite') for k in engines},
         protocol='Sintel training Final; center crop rows 10:426; resize full crop to input W,H; bilinear flow restoration to 416x1024; raw GT; all pixels; no clipping',

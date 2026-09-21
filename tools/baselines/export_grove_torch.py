@@ -37,7 +37,7 @@ def main():
     manifest=json.loads((args.base/args.run/'manifest.json').read_text())
     model_args=SimpleNamespace(model=manifest['model'],weights=Path(manifest['weights']),upstream=args.upstream)
     report=dict(status='running',run=args.run,adapter=model_args.model,input_hw=[args.height,args.width],command=sys.argv,
-        weights_sha256={model_args.weights.name:sha(model_args.weights)},started=time.time())
+        weights_sha256={model_args.weights.name:sha(model_args.weights)},script_sha256=sha(__file__),started=time.time())
     def save():
         (args.output/'summary.json').write_text(json.dumps(report,indent=2,default=str)+'\n')
     save()
@@ -158,6 +158,8 @@ def main():
             grids.make_node=make_grid
         convert(input_onnx_file_path=str(onnx_path),output_folder_path=str(converted),
             not_use_onnxsim=True,not_use_opname_auto_generate=True,non_verbose=True,
+            disable_strict_mode=True,
+            disable_group_convolution=model_args.model=='fastflow',
             custom_input_op_name_np_data_path=[['images',str(args.output/'calibration_nhwc.npy'),0.0,1.0]],
             output_integer_quantized_tflite=True,**extra)
         import tensorflow as tf
