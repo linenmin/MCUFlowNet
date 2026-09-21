@@ -106,10 +106,10 @@ def main():
                 tf.config.experimental.set_memory_growth(device,True)
             original_run=tf.compat.v1.Session.run
             def traced_run(self, fetches, feed_dict=None, **kw):
-                if feed_dict and not gpu_trace:
+                if feed_dict and any(isinstance(v,np.ndarray) and v.ndim==4 for v in feed_dict.values()) and not gpu_trace:
                     meta=tf.compat.v1.RunMetadata()
                     result=original_run(self,fetches,feed_dict=feed_dict,
-                        options=tf.compat.v1.RunOptions(trace_level=tf.compat.v1.RunOptions.FULL_TRACE),run_metadata=meta,**kw)
+                        options=tf.compat.v1.RunOptions(trace_level=tf.compat.v1.RunOptions.SOFTWARE_TRACE),run_metadata=meta,**kw)
                     for device in meta.step_stats.dev_stats:
                         if 'GPU' in device.device.upper():
                             gpu_trace.extend([{'device':device.device,'node':x.node_name} for x in device.node_stats])
