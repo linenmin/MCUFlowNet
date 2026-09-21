@@ -64,6 +64,8 @@ def main():
     p.add_argument('--rounds', type=int, default=3)
     p.add_argument('--nano-native', action='store_true')
     args = p.parse_args()
+    if os.name == 'nt':
+        args.code_commit = subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip()
     assert min(args.warmup,args.iterations,args.rounds)>0
     args.output.mkdir(parents=True, exist_ok=False)
     cv2.setNumThreads(1)
