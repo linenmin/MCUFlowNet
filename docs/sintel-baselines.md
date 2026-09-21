@@ -89,3 +89,11 @@ TensorFlow模型改用`sintel-tf/python.exe`；NanoFlowNet低分辨率设置额�
 SPyNet权重额外通过`check_spynet_weights.py`核查：Chairs/Final和Sintel/Final两套转换权重各60个张量，与作者仓库的Lua .t7数组逐个完全相等。原spynet.lua对Chairs明确让第六层复用第五层权重，所以PyTorch六套模块的参数计数包含重复存储，不能简单当作六套独立训练参数。该检查证明权重身份，不代表已在原Lua环境中逐像素验证推理一致。证据为Runs的spynet-weight-check.json；torchfile仅用于读取旧格式，不运行Lua程序。
 
 NanoFlowNet另用`check_nano_export.py`对两对真实输入比较H5与作者浮点TFLite输出，最大逐元素差异分别2.12e-5和3.59e-4，结果保存在nano-export-check.json。这支持模型导出对应关系，但不能解决训练NPY标签单位和原论文评测几何关系的缺口，暂定成绩仍不进入正式名次。
+
+## 本机GPU速度：GPU-FPS-01
+
+benchmark_fps.py复用已验收预测适配器，batch1、FP32、TF32关闭、共同416×1024评分区域。Nano仍112×160内部输入，Chunking仍四块208×512顺序运行。20对等间隔抽样图像预先解码到内存，20次预热后测3组各50次；GPU同步后计时，返回CPU光流并同步后停止。报告总次数/总耗时、各组FPS、中位数和P95延迟。包含预处理、传输、推理和还原，排除读盘、权重加载、EPE、日志；不是仅CUDA核或摄像头端到端FPS。
+
+逐模型、独立进程运行。首对EPE须与原评测差小于0.005像素，检查有限输出；TensorFlow图模式用未计时的执行trace核对GPU算子，Nano用GPU明确放置且禁止软回退。PyTorch在Windows隔离Conda，TF在既有WSL NVIDIA容器，两框架环境分别记录。CPU线程沿用适配器（Torch4，TF8/2），OpenCV1线程，不宣称跨框架同等优化；没有torch.compile、TensorRT、混合精度或功耗测量。PWC/FastFlow相关性为现有兼容实现，不能冒充上游优化CUDA速度。
+
+全部结果保存在Runs/MCUFlowNet/GPU-FPS-01；JSON记权重SHA、脚本SHA、命令、驱动、验证、时间设置及GPU证据，timings.csv保存逐次耗时。GPU显示/桌面进程仍可能引入波动。失败记录保留，重跑用新输出目录，不覆盖。
