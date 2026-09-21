@@ -162,28 +162,8 @@ def main():
             disable_group_convolution=model_args.model=='fastflow',
             custom_input_op_name_np_data_path=[['images',str(args.output/'calibration_nhwc.npy'),0.0,1.0]],
             output_integer_quantized_tflite=True,**extra)
-        import tensorflow as tf
-        results={}
-        for kind in ('float32','full_integer_quant'):
-            path=converted/f'model_{kind}.tflite'
-            interpreter=tf.lite.Interpreter(model_path=str(path),num_threads=4)
-            interpreter.allocate_tensors();ii=interpreter.get_input_details()[0];oo=interpreter.get_output_details()[0]
-            x=data[:1]
-            if ii['shape'].tolist()==[1,6,args.height,args.width]:x=x.transpose(0,3,1,2)
-            if np.issubdtype(ii['dtype'],np.integer):
-                scale,zero=ii['quantization'];limits=np.iinfo(ii['dtype']);x=np.clip(np.rint(x/scale+zero),limits.min,limits.max).astype(ii['dtype'])
-            interpreter.set_tensor(ii['index'],x);interpreter.invoke()
-            y=interpreter.get_tensor(oo['index']).astype(np.float32)
-            if np.issubdtype(oo['dtype'],np.integer):
-                scale,zero=oo['quantization'];y=(y-zero)*scale
-            if y.shape[-1]==2:y=y.transpose(0,3,1,2)
-            assert y.shape==expected.shape
-            floating=[t['name'] for t in interpreter.get_tensor_details() if np.issubdtype(t['dtype'],np.floating)]
-            results[kind]=dict(path=str(path),sha256=sha(path),mae=float(np.mean(np.abs(y-expected))),
-                max_abs=float(np.max(np.abs(y-expected))),floating_tensors=floating,ops=sorted({o['op_name'] for o in interpreter._get_ops_details()}))
-        report['tflite']=results
-        assert results['float32']['mae']<0.005,results['float32']['mae']
-        report['status']='strict_int8_candidate' if not results['full_integer_quant']['floating_tensors'] else 'mixed_float_fallback_not_strict_int8'
+        from audit_grove_torch import audit
+        report.update(audit(args.output))
     except BaseException as e:
         report.update(status='conversion_failed',error=repr(e));raise
     finally:

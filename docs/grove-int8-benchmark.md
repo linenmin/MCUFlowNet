@@ -18,6 +18,15 @@
 
 ## 结果边界与记录
 
-原始输出、环境冻结、安装/失败日志及环境小模型测试均在`C:/00Work/Runs/MCUFlowNet/GROVE-INT8-01`。wiki实验总表记录进度，Benchmark总表只收验收后的比较结果。扫描入口为scan_grove.py（--exhaustive检查全部更大候选）；evaluate_grove.py在相同部署尺寸成对评测浮点与INT8。未刷写板卡。
+原始输出、环境冻结、安装/失败日志及环境小模型测试均在`C:/00Work/Runs/MCUFlowNet/GROVE-INT8-01`。wiki实验总表记录进度，Benchmark总表只收验收后的比较结果。先用scan_grove.py找经过64对校准的候选边界，再用scan_grove_frozen.py冻结该模型的权重和量化参数、逐一编译全部更大候选。resize_grove_tflite.py只调整静态空间尺寸及对应常量；四模型均与重新导出的浮点图比对，抽样最大差为0。若扫描出现更大的通过尺寸，须重新用64对校准并验收，不能直接使用筛查图报告精度。evaluate_grove.py在选定尺寸成对评测浮点与INT8。未刷写板卡。
 
 后续评测使用Sintel Final全部1041对、共同416×1024原始GT坐标，同时报告低分辨率浮点和INT8 EPE。先恢复实际输出网格，再按已核实的向量单位转换；Nano单位疑问仍然存在。普通CPU TFLite解释器可评测编译前INT8模型，不能运行Vela Ethos-U命令流，也不代表实际板上输出已验证。
+
+
+## 范围与表格含义
+
+本轮优先检查EdgeFlowNet Full、旧MCUFlowNet S/L、NanoFlowNet，以及SPyNet、FastFlowNet、RAFT-Small、NeuFlow v2、RAPIDFlow。EdgeFlowNet Chunking的整帧缓存和分块调度需要固件实现，不能把单块上限简单乘四当作整帧可部署尺寸。没有公开权重的Ajna不填写虚构结果。
+
+宽高比约束针对输入，Sintel共同评分区域仍是416×1024。输入缩放保留整个区域，会分别压缩横向和纵向；恢复光流时对应乘回1024/W与416/H。INT8使用训练后量化，未做量化感知训练。不同模型各自最大尺寸用于回答部署能力，不是同尺寸结构消融。
+
+运行输出保留在Runs，wiki只保存精简结果、失败原因和证据指纹。完整INT8、零CPU回退、预算内编译是本轮可完成的筛查条件；未完成Grove固件适配、板上SRAM分配或板上输出核验。CPU回退或转换失败不能推导出模型在所有实现中都不可部署。

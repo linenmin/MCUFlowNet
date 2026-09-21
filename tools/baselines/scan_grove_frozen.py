@@ -25,7 +25,11 @@ def main():
     budget=math.floor(1.4*1024*1024)
     config=args.root/'scan/grove-1p4mib.ini'
     env=dict(os.environ,PYTHONPATH='/runs/VELA-01/toolchain')
-    sources={'edge':(160,208),'MCUFlowNet-S':(160,224),'MCUFlowNet-L':(160,224),'nano':(304,400)}
+    sources={}
+    for model in ('edge','MCUFlowNet-S','MCUFlowNet-L','nano'):
+        frontier=json.loads((args.root/'scan'/model/'scan.json').read_text())['selected']
+        assert frontier and frontier['fits'],model
+        sources[model]=(frontier['height'],frontier['width'])
     compile_pool=ThreadPoolExecutor(max_workers=6)
     def worker(model):
         h0,w0=sources[model];source=args.root/'scan'/model/f'{h0}x{w0}'/'model_int8.tflite'
