@@ -136,6 +136,7 @@ def main():
         env=dict(os.environ,PYTHONPATH=str(args.vela_pythonpath))
         report['vela_version']=subprocess.check_output([sys.executable,'-m','ethosu.vela','--version'],env=env,text=True).strip()
         report['reports']={}
+        report['compiler_errors']={}
         for mode in ('Size','Performance'):
             dest=args.output/mode
             command=[sys.executable,'-m','ethosu.vela',str(args.output/'model_int8.tflite'),'--accelerator-config','ethos-u55-64',
@@ -143,8 +144,11 @@ def main():
                 '--output-dir',str(dest),'--verbose-performance','--show-cpu-operations']
             result=subprocess.run(command,env=env,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
             (args.output/f'{mode}.log').write_text(result.stdout)
-            assert result.returncode==0,(mode,result.returncode)
+            if result.returncode:
+                report['compiler_errors'][mode]=dict(returncode=result.returncode,log=str(args.output/f'{mode}.log'))
+                continue
             with next(dest.glob('*_summary_*.csv')).open() as f:report['reports'][mode]=next(csv.DictReader(f))
+        assert report['reports'],report['compiler_errors']
         report['status']='compiled_not_board_validated'
         print(json.dumps(report['reports'],indent=2),flush=True)
     except BaseException as e:

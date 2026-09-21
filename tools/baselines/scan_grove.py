@@ -57,7 +57,11 @@ def main():
                 peak=float(report['sram_memory_used'])*1024
                 modes[mode]=dict(peak_bytes=peak,cpu_operators=cpu,fits=cpu==0 and peak<=BUDGET,
                                 estimated_fps=float(report['inferences_per_second']))
-            valid=d.get('status')=='compiled_not_board_validated' and code==0
+            # An earlier export stopped on a Performance scheduler assertion after
+            # Size had already compiled. Preserve that evidence without treating
+            # failed modes as successful or interpreting them as memory verdicts.
+            partial_size=(d.get('error')=="AssertionError(('Performance', 1))" and 'Size' in modes)
+            valid=(d.get('status')=='compiled_not_board_validated' and code==0) or partial_size
             observations[index]=dict(height=h,width=w,area=h*w,valid=valid,fits=valid and any(v['fits'] for v in modes.values()),modes=modes,
                                      output=str(out),error=d.get('error'))
             save();print(model,h,w,observations[index]['fits'],modes,flush=True)

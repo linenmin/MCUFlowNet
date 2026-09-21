@@ -9,6 +9,8 @@ import math
 import os
 from pathlib import Path
 import sys
+sys.stdout.reconfigure(encoding='utf-8')
+sys.stderr.reconfigure(encoding='utf-8')
 import time
 from types import SimpleNamespace
 import cv2
@@ -91,6 +93,12 @@ def main():
         torch.onnx.export(model,(example,),str(onnx_path),input_names=['images'],output_names=['flow'],opset_version=17,dynamo=False)
         import onnx,onnxruntime as ort
         graph=onnx.load(str(onnx_path));onnx.checker.check_model(graph)
+        # Fold static shape arithmetic before translation (avoids mixed int32/
+        # int64 shape concatenation in onnx2tf). Verify the simplified graph too.
+        from onnxsim import simplify
+        graph,ok=simplify(graph)
+        assert ok
+        onnx.save(graph,str(onnx_path))
         report['onnx_ops']=sorted({n.op_type for n in graph.graph.node})
         opts=ort.SessionOptions();opts.intra_op_num_threads=4
         runtime=ort.InferenceSession(str(onnx_path),opts,providers=['CPUExecutionProvider'])
