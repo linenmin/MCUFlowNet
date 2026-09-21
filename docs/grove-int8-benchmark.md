@@ -43,3 +43,5 @@ diagnose_grove_accuracy.py直接读取既有导出，默认每场景取首、中
       --output /runs/GROVE-INT8-01/diagnostics/S-check
 
 原始报告放Runs/GROVE-INT8-01/diagnostics，解释放wiki Benchmark总表“缩图与量化精度下降的诊断”，状态只放原实验条目。2026-09-21的基准诊断使用mcuflownet-local:20260917容器（TF2.17）；Windows TF2.19仅作运行环境对照，两者INT8结果存在差异，不能混用。可选去辅助头对照重新使用同一64对FC2校准，原权重与旧导出不覆盖。误差来源与后续微调收益尚未完全确认。
+
+增加--center-crop-control时，必须同时提供--highres-weights。程序从共同416×1024区域中央原样裁取输入大小的图块，直接推理，不缩放图片或flow向量；大图原生推理和整图缩放推理也只在这个ROI计分。此次三个模型统一208×160，覆盖23场景首中末69对。原始结果在diagnostics/<model>-crop-control-69，裁剪主结果使用全部ROI像素；另列GT终点仍在裁剪范围内的像素加权诊断，不能据此删除主评分像素。裁剪INT8未测，既有校准使用整图缩放，不能当作已完成裁剪方案的量化验收。

@@ -35,7 +35,11 @@ def main():
     p.add_argument('--highres-weights', type=Path,
                    help='Optional FP32 checkpoint: compare original vs down/up images at 416x1024')
     p.add_argument('--upstream', type=Path)
+    p.add_argument('--center-crop-control', action='store_true',
+                   help='Compare unscaled center crop and both full-view predictions on identical ROI pixels (FP32 only)')
     args = p.parse_args()
+    if args.center_crop_control and not args.highres_weights:
+        p.error('--center-crop-control requires --highres-weights for the full-context reference')
     assert args.per_scene > 0
     args.output.mkdir(parents=True, exist_ok=False)
     meta = json.loads((args.export / 'summary.json').read_text())
@@ -121,6 +125,15 @@ def main():
         report['highres_checkpoint_sha256'] = {p.name:sha(p) for p in sorted(
             args.highres_weights.parent.glob(args.highres_weights.name+'.*'))}
         report['highres_note'] = 'Original and low-pass images use the same 416x1024 native FP32 graph; low-pass = downsize then bilinear restore. Not a deployable variant.'
+    if args.center_crop_control:
+        assert 0 < h <= 416 and 0 < w <= 1024
+        roi_y, roi_x = (416-h)//2, (1024-w)//2
+        report['center_crop_control'] = dict(
+            roi_xywh_in_common_frame=[roi_x,roi_y,w,h],
+            input='Same unscaled ROI from both frames; no input resize or aspect distortion',
+            scoring='All three FP32 paths scored on identical raw-GT ROI; no spatial flow rescaling for direct crop',
+            endpoint_filter='Secondary diagnostic only: both GT endpoints in crop; all-ROI result remains primary',
+            quantization='Not evaluated for crop: existing calibration uses resized full-view FC2')
     def save():
         (args.output/'summary.json').write_text(json.dumps(report, indent=2)+'\n')
     save()
@@ -179,6 +192,28 @@ def main():
                        int8_prediction_difference=float(np.linalg.norm(delta,axis=-1).mean(dtype=np.float64)),
                        int8_bias_u=float(delta[...,0].mean(dtype=np.float64)),
                        int8_bias_v=float(delta[...,1].mean(dtype=np.float64)))
+            if args.center_crop_control:
+                roi = np.s_[roi_y:roi_y+h, roi_x:roi_x+w]
+                xx = np.concatenate([im[10:426][roi] for im in ims],-1).astype(np.float32)[None]
+                if model.startswith('MCU'):
+                    xx = xx/255*2-1
+                fi.set_tensor(fin['index'],xx); fi.invoke()
+                crop_flow = fi.get_tensor(fout['index'])[0] * (12.5 if model.startswith('MCU') else 1.)
+                crop_gt = gt[roi]
+                assert crop_flow.shape == crop_gt.shape and np.isfinite(crop_flow).all()
+                matched = {'crop_direct': crop_flow,
+                           'crop_full_context': predictions['highres_original'][roi],
+                           'crop_fullview_resized': predictions['float'][roi]}
+                grid_y, grid_x = np.mgrid[:h,:w]
+                endpoint = ((grid_x+crop_gt[...,0]>=0)&(grid_x+crop_gt[...,0]<=w-1)
+                            &(grid_y+crop_gt[...,1]>=0)&(grid_y+crop_gt[...,1]<=h-1))
+                row['crop_endpoint_inside_fraction'] = float(endpoint.mean())
+                for name, y in matched.items():
+                    err = np.linalg.norm(y-crop_gt,axis=-1)
+                    row[name+'_epe'] = float(err.mean(dtype=np.float64))
+                    # Store sums and counts for an exact pixel-weighted secondary metric.
+                    row[name+'_inside_sum'] = float(err[endpoint].sum(dtype=np.float64))
+                row['crop_inside_pixels'] = int(endpoint.sum())
             rows.append(row)
             mag = np.linalg.norm(gt, axis=-1)
             for name, mask in zip(bins, (mag<1, (mag>=1)&(mag<10), (mag>=10)&(mag<40), mag>=40)):
@@ -191,6 +226,11 @@ def main():
             writer = csv.DictWriter(f, fieldnames=rows[0].keys())
             writer.writeheader(); writer.writerows(rows)
         report['results'] = {k: float(np.mean([r[k] for r in rows])) for k in rows[0] if k != 'sample'}
+        if args.center_crop_control:
+            pixels = sum(r['crop_inside_pixels'] for r in rows)
+            report['crop_inside_endpoint_results'] = dict(pixels=pixels,
+                **{k:sum(r[k+'_inside_sum'] for r in rows)/pixels if pixels else None
+                   for k in ('crop_direct','crop_full_context','crop_fullview_resized')})
         report['motion_bins'] = {k: dict(pixels=v['n'], **{m+'_epe':v[m+'_sum']/v['n'] if v['n'] else None
                                                        for m in ('float','int8')}) for k,v in bins.items()}
         report['head_ranges'] = [{**v, 'channel_min':v['channel_min'].tolist(),
