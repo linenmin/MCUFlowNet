@@ -17,8 +17,8 @@ def configuration(index):
     cfg['runtime'].update(output_root='/runs/COMP-ABL-01/ft3d', stop_after_epoch=40,
                           milestone_epochs=[20, 40, 60, 80, 90, 100])
     cfg['train'].update(num_epochs=100, updates_per_epoch=500, lr=1e-5, lr_min=1e-6)
-    cfg['eval']['validation_data'] = copy.deepcopy(cfg['data'])
     cfg['data'] = json.loads((ROOT/'EdgeFlowNAS/configs/experiments/component_ablation/ft3d_data.json').read_text())
+    cfg['eval']['eval_batches'] = 20
     cfg['eval']['eval_every_epoch'] = 10
     cfg['eval']['sintel']['eval_every_epoch'] = 10
     cfg['checkpoint'].update(init_mode='experiment_dir', init_experiment_dir=str(parent),
@@ -49,13 +49,13 @@ def main():
     parent_manifest=json.loads((parent/'run_manifest.json').read_text())
     assert parent_manifest['config']['component_variant']==cfg['component_variant']
     assert parent_manifest['config']['runtime']['seed']==cfg['runtime']['seed']
-    control=Path('/runs/COMP-ABL-01/ft3d/control')/str(args.index)
+    control=Path('/runs/COMP-ABL-01/ft3d/control/ft3dval-v2')/str(args.index)
     acceptance=control/'acceptance.json'
     if args.mode=='probe':
         if acceptance.exists(): raise FileExistsError(acceptance)
         os.environ['TF_DETERMINISTIC_OPS']='1'
         cfg['train'].update(updates_per_epoch=5,num_epochs=10000)
-        cfg['runtime'].update(experiment_name=f'probe/{args.index}/split',stop_after_epoch=1,milestone_epochs=[2])
+        cfg['runtime'].update(experiment_name=f'probe-ft3dval/{args.index}/split',stop_after_epoch=1,milestone_epochs=[2])
         cfg['eval']['eval_every_epoch']=2
         cfg['eval']['sintel']['eval_every_epoch']=2
         split=execute(cfg,control,'probe-first')
@@ -63,7 +63,7 @@ def main():
         cfg['runtime']['stop_after_epoch']=2
         execute(cfg,control,'probe-resume')
         cfg['checkpoint']['load_checkpoint']=False
-        cfg['runtime']['experiment_name']=f'probe/{args.index}/continuous'
+        cfg['runtime']['experiment_name']=f'probe-ft3dval/{args.index}/continuous'
         continuous=execute(cfg,control,'probe-continuous')
         import tensorflow as tf
         import numpy as np
@@ -77,13 +77,16 @@ def main():
         assert sa['train_rng_state']==sb['train_rng_state']
         rows=list(csv.DictReader((split/'eval_history.csv').open()))
         assert [int(r['global_step']) for r in rows]==[5,10]
-        assert int(rows[-1]['fc2_samples'])==640 and int(rows[-1]['evaluated_samples'])==845
+        assert int(rows[-1]['ft3d_samples'])==640 and int(rows[-1]['evaluated_samples'])==845
+        assert 'fc2_raw_epe' not in rows[-1]
         assert all(int(r['schedule_total_steps'])==50000 for r in rows)
         init=json.loads((split/'initialization_check.json').read_text())
         save(acceptance,dict(index=args.index,code_commit=os.environ['MCUFLOW_COMMIT'],
              parent=str(parent),initialization=init,identical_tensors=len(a.get_variable_to_shape_map()),
-             rng_identical=True,fc2_samples=640,sintel_samples=845,schedule_total_steps=50000))
+             rng_identical=True,ft3d_samples=640,sintel_samples=845,schedule_total_steps=50000))
     else:
+        if not acceptance.exists():
+            subprocess.run([sys.executable, __file__, '--index',str(args.index),'--mode','probe'],check=True)
         proof=json.loads(acceptance.read_text())
         assert proof['code_commit']==os.environ['MCUFLOW_COMMIT'] and proof['index']==args.index
         run=execute(cfg,control,'train-config')
@@ -91,7 +94,7 @@ def main():
         assert len(rows)==40 and int(rows[-1]['global_step'])==20000
         assert all(int(r['schedule_total_steps'])==50000 for r in rows)
         assert all(math.isfinite(float(r['loss'])) for r in rows)
-        assert int(rows[-1]['fc2_samples'])==640 and int(rows[-1]['evaluated_samples'])==845
+        assert int(rows[-1]['ft3d_samples'])==640 and int(rows[-1]['evaluated_samples'])==845
         save(control/'completed.json',dict(index=args.index,step=20000,schedule_total_steps=50000,
                                          last=rows[-1],run=str(run)))
 

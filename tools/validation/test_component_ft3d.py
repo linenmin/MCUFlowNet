@@ -16,8 +16,9 @@ class FT3DTests(unittest.TestCase):
             self.assertEqual(c['runtime']['stop_after_epoch']*c['train']['updates_per_epoch'],20000)
             self.assertEqual(c['data']['prefetch_batches'],1)
             self.assertEqual(c['data']['dataset'],'FT3D')
-            self.assertEqual(c['eval']['validation_data']['dataset'],'FC2')
-            self.assertIsNone(c['eval']['validation_data']['fc2_eval_label_clip'])
+            self.assertNotIn('validation_data',c['eval'])
+            self.assertEqual(c['eval']['eval_batches'],20)
+            self.assertIsNone(c['data']['ft3d_eval_label_clip'])
             self.assertEqual(c['checkpoint']['init_ckpt_name'],'last')
             self.assertFalse(c['checkpoint']['load_checkpoint'])
     def test_sample_formats(self):

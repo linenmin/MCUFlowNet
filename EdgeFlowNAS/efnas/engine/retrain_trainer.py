@@ -193,6 +193,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
     validation_config = copy.deepcopy(config)
     if eval_cfg.get('validation_data'):
         validation_config['data'] = eval_cfg['validation_data']
+    validation_name = str(validation_config['data']['dataset']).lower()
     val_provider = _build_provider(config=validation_config, split="val", seed_offset=999, provider_mode="eval")
     if len(train_provider) == 0:
         raise RuntimeError("train split is empty")
@@ -444,7 +445,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                         val_provider,
                         batch_size,
                         eval_batches,
-                        desc=f"{dataset} val {model_name} e{epoch_idx}",
+                        desc=f"{validation_name.upper()} val {model_name} e{epoch_idx}",
                         training_mode=bool(eval_cfg.get("validation_training_mode", False)),
                         dual=bool(config.get("component_variant")),
                     )
@@ -453,7 +454,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                         val_epe = dual_result["gtclip50"]
                         if dual_result["raw"] < best_fc2_raw:
                             best_fc2_raw = dual_result["raw"]
-                            _save_standalone_checkpoint(sess, graph_obj["saver"], ckpt_paths["root"] / "fc2_raw_best.ckpt", epoch_idx, global_step, best_fc2_raw, best_fc2_raw, arch_code)
+                            _save_standalone_checkpoint(sess, graph_obj["saver"], ckpt_paths["root"] / f"{validation_name}_raw_best.ckpt", epoch_idx, global_step, best_fc2_raw, best_fc2_raw, arch_code)
 
                 if do_eval and val_epe < best_epe:
                     best_epe = val_epe
@@ -520,8 +521,10 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                             row[key] = sintel_result[key]
                     row["best_sintel_epe"] = best_sintel_epe
                 if dual_result is not None:
-                    row.update(fc2_raw_epe=dual_result["raw"], fc2_gtclip50_epe=dual_result["gtclip50"],
-                               fc2_samples=dual_result["samples"], best_fc2_raw=best_fc2_raw)
+                    row.update({f'{validation_name}_raw_epe': dual_result['raw'],
+                                f'{validation_name}_gtclip50_epe': dual_result['gtclip50'],
+                                f'{validation_name}_samples': dual_result['samples'],
+                                f'best_{validation_name}_raw': best_fc2_raw})
                 if full_result is not None:
                     row.update({f"full_monitor_{k}": v for k, v in full_result.items() if k in ("sintel_raw_epe", "sintel_legacy_epe", "evaluated_samples")})
                     row["best_full_monitor_epe"] = best_full_monitor_epe
