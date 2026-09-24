@@ -30,6 +30,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--sintel-list', type=Path, help='Optional fixed monitor subset; never adds held-out pairs')
     parser.add_argument('--limit', type=int, default=0, help='0 means all samples; positive values for smoke checks')
     args = parser.parse_args()
     assert args.limit >= 0
@@ -37,8 +38,8 @@ def main():
     args.output.mkdir(parents=True, exist_ok=False)
     started = time.time()
     manifest = dict(command=sys.argv, config=config, limit=args.limit,
-                    commit=subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip(),
-                    git_status=subprocess.check_output(['git','-C',str(ROOT),'status','--porcelain'],text=True),
+                    commit=os.environ.get('MCUFLOW_COMMIT') or subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip(),
+                    git_status=os.environ.get('MCUFLOW_GIT_STATUS') or subprocess.check_output(['git','-C',str(ROOT),'status','--porcelain'],text=True),
                     tensorflow=tf.__version__, python=sys.version, build=tf.sysconfig.get_build_info(),
                     started_unix=started, status='running', random_seed='not applicable: restored inference, no random transforms')
     write_json(args.output/'run_manifest.json',manifest)
@@ -49,6 +50,14 @@ def main():
         dataset = Path(config['sintel_training'])
         flows = sorted((dataset/'flow').glob('*/*.flo'))
         assert len(flows) == config['expected_samples'], (len(flows), config['expected_samples'])
+        if args.sintel_list:
+            from efnas.engine.retrain_sintel_runtime import _prepare_sintel_lists
+            _, _, selected = _prepare_sintel_lists(dataset.parent, str(args.sintel_list))
+            selected = {str(Path(p).resolve()) for p in selected}
+            flows = [p for p in flows if str(p.resolve()) in selected]
+            assert len(flows) == len(selected)
+            manifest['monitor_list_sha256'] = hashlib.sha256(args.sintel_list.read_bytes()).hexdigest()
+        from evaluate_label_diagnostics import grouped_errors, merge, means
         if args.limit:
             flows = flows[:args.limit]
         results = {}
@@ -72,6 +81,7 @@ def main():
             session_config = tf.compat.v1.ConfigProto(allow_soft_placement=True)
             session_config.gpu_options.allow_growth = True
             rows=[]
+            groups_total = {}
             with tf.compat.v1.Session(graph=graph,config=session_config) as sess, (args.output/(entry['name']+'.csv')).open('w',newline='') as handle:
                 saver.restore(sess,str(prefix))
                 writer=csv.DictWriter(handle,fieldnames=['sample','raw_epe','clipped_epe'])
@@ -92,13 +102,14 @@ def main():
                     np.testing.assert_array_equal(pair[:,:,:3],first[10:426])
                     pred=sess.run(prediction,{inputs:(pair[None]/255.0)*2.0-1.0})[0]*config['prediction_flow_scale']
                     assert pred.shape==raw.shape and np.isfinite(pred).all()
+                    merge(groups_total, grouped_errors(pred,raw))
                     raw_epe=float(np.sqrt(np.sum((pred-raw)**2,axis=-1)).mean(dtype=np.float64))
                     clipped_epe=float(np.sqrt(np.sum((pred-np.asarray(historical)[0])**2,axis=-1)).mean(dtype=np.float64))
                     row=dict(sample=str(flow_file.relative_to(dataset)),raw_epe=raw_epe,clipped_epe=clipped_epe)
                     rows.append(row);writer.writerow(row)
                     if (index+1)%50==0:
                         handle.flush();print(entry['name'],index+1,'/',len(flows),flush=True)
-            results[entry['name']]=dict(samples=len(rows),raw_epe=float(np.mean([r['raw_epe'] for r in rows])),
+            results[entry['name']]=dict(groups=means(groups_total),samples=len(rows),raw_epe=float(np.mean([r['raw_epe'] for r in rows])),
                 clipped_epe=float(np.mean([r['clipped_epe'] for r in rows])),historical_metadata_metric=metadata['metric'],
                 restored_variables=len(variables),checkpoint_sha256=fingerprints)
             write_json(args.output/'results.json',results)
