@@ -27,3 +27,12 @@ clean+final、双方向、prefetch1、余弦3e-5→1e-6。训练和评估均为�
 `--action start/resume` 和 `--stop-step`。短跑与正式输出分别在
 `/runs/FT3D-SUPERVISION-01-PROBE` 和 `/runs/FT3D-SUPERVISION-01`，不写入Git。
 运行状态和结论在 Obsidian 原实验总表维护，不在这里复制实时状态。
+
+## 只读监督诊断
+
+`tools/validation/diagnose_supervision.py --model-dir <完整保存点> --expected-step 40000 --mode sintel|renders --output <新的Runs目录>`。
+Sintel模式使用固定845对，比较1/4、1/2、全尺寸的累计预测，统一上采样到原图评分，不改变向量单位。
+边界代理为GT相邻像素位移差模长>3像素，两侧标记后扩展1像素；同时记录阈值1/5的最终预测敏感性，不是遮挡标签。
+renders模式从FT3D TEST的独立场景按路径哈希固定选128个前向左视图对，各取一个；Clean/Final共用GT和352×480中心裁剪，不作增强或裁剪标签。
+输出分组像素数/误差和、逐样本成绩、完整清单及权重指纹。差分组的epe字段表示平均差值，clean_pixel_win_fraction表示胜出比例，不是EPE。
+仅推理，不更新权重或BN；Sintel最后一层必须复现原监控分数，所有模式检查权重前后指纹一致。数值测试见同目录test_supervision_diagnostics.py。
