@@ -121,6 +121,7 @@ def prepare_weight_init(recipe, variant, action, stop_step, runs_root):
     cfg = copy.deepcopy(recipe['config'])
     cfg.update(model_name=choice['model'], arch_code=choice['arch_code'])
     cfg['data']['ft3d_train_augment'] = copy.deepcopy(choice['augment'])
+    cfg['train'].update(copy.deepcopy(choice.get('train_overrides', {})))
     block = int(cfg['train']['updates_per_epoch'])
     target = recipe['stage_steps'] if stop_step is None else stop_step
     if recipe['parent_step'] != 0 or not 0 < target <= recipe['stage_steps']:

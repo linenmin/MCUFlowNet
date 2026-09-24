@@ -39,8 +39,20 @@ def build_multiscale_uncertainty_loss(  # 定义多尺度不确定性损失函�
     label_ph: tf.Tensor,  # 定义标签参数
     num_out: int,  # 定义光流通道数参数
     return_terms: bool = False,  # 定义是否返回分项损失开关
+    supervision_max_magnitude: Optional[float] = None,
+    uncertainty_weight: float = 1.0,
 ) -> tf.Tensor:  # 定义返回类型
     """构建与单模型训练对齐的LinearSoftplus多尺度损失。"""  # 说明函数用途
+    valid = None
+    if supervision_max_magnitude is not None:
+        if float(supervision_max_magnitude) <= 0:
+            raise ValueError("supervision_max_magnitude must be positive")
+        finite = tf.reduce_all(tf.math.is_finite(label_ph), axis=-1, keepdims=True)
+        safe_label = tf.where(tf.broadcast_to(finite, tf.shape(label_ph)), label_ph, tf.zeros_like(label_ph))
+        valid = tf.cast(finite & (tf.reduce_sum(tf.square(safe_label / float(supervision_max_magnitude)), axis=-1, keepdims=True) < 1.0), tf.float32)
+        label_ph = tf.where(tf.broadcast_to(tf.cast(valid, tf.bool), tf.shape(label_ph)), safe_label, tf.zeros_like(label_ph))
+    if uncertainty_weight not in (0.0, 1.0):
+        raise ValueError("Only the paired uncertainty-on/off experiment is supported")
     loss_scales = [0.125, 0.25, 0.5, 1.0]  # 定义与原训练一致的尺度权重
     eps = 1e-3  # 定义稳定项避免除零
     flow_accum = None  # 初始化累计光流预测
@@ -58,19 +70,31 @@ def build_multiscale_uncertainty_loss(  # 定义多尺度不确定性损失函�
             logvar_accum = _resize_like(src=logvar_accum, ref=unc_pred, name=f"logvar_accum_resize_{idx}")  # 上采样累计不确定性到当前尺度
             logvar_accum = tf.add(logvar_accum, unc_pred, name=f"logvar_accum_add_{idx}")  # 累加当前尺度不确定性预测
         label_i = _resize_like(src=label_ph, ref=flow_accum, name=f"unc_label_resize_{idx}")  # 缩放标签到当前尺度
+        mask_i = None
+        if valid is not None:
+            # Discard any coarse target whose interpolation footprint touches an
+            # excluded source pixel; never blend an excluded vector into GT.
+            support = _resize_like(valid, flow_accum, f"valid_resize_{idx}")
+            mask_i = tf.cast(support >= 1.0 - 1e-6, tf.float32)
+        def average(value, name):
+            if mask_i is None:
+                return tf.reduce_mean(value, name=name)
+            return tf.math.divide_no_nan(tf.reduce_sum(value * mask_i),
+                tf.reduce_sum(mask_i) * tf.cast(tf.shape(value)[-1], tf.float32), name=name)
         abs_diff = tf.abs(flow_accum - label_i, name=f"unc_abs_diff_{idx}")  # 计算累计光流绝对误差
-        loss_optical = tf.reduce_mean(abs_diff, name=f"unc_optical_l1_{idx}")  # 计算普通L1损失项
+        loss_optical = average(abs_diff, name=f"unc_optical_l1_{idx}")  # 计算普通L1损失项
         sigma = tf.maximum(tf.math.softplus(logvar_accum + eps), eps, name=f"unc_sigma_{idx}")  # 计算稳定化方差项
-        loss_unc_data = tf.reduce_mean((1.0 / sigma) * abs_diff, name=f"unc_data_{idx}")  # 计算不确定性加权重建项
-        loss_unc_reg = tf.reduce_mean(tf.math.softplus(logvar_accum), name=f"unc_reg_{idx}")  # 计算不确定性正则项
+        loss_unc_data = average((1.0 / sigma) * abs_diff, name=f"unc_data_{idx}")  # 计算不确定性加权重建项
+        loss_unc_reg = average(tf.math.softplus(logvar_accum), name=f"unc_reg_{idx}")  # 计算不确定性正则项
         loss_unc = tf.add(loss_unc_data, loss_unc_reg, name=f"unc_total_{idx}")  # 汇总当前尺度不确定性损失
         optical_terms.append(float(weight) * loss_optical)  # 记录加权光流L1损失项
         uncertainty_terms.append(float(weight) * loss_unc)  # 记录加权不确定性损失项
     optical_total = tf.add_n(optical_terms, name="unc_optical_total")  # 汇总全部光流L1损失项
     uncertainty_total = tf.add_n(uncertainty_terms, name="unc_uncertainty_total")  # 汇总全部不确定性损失项
-    total_loss = tf.add(optical_total, uncertainty_total, name="multiscale_uncertainty_loss")  # 计算最终联合损失
+    total_loss = tf.add(optical_total, float(uncertainty_weight) * uncertainty_total, name="multiscale_uncertainty_loss")  # 计算最终联合损失
     if return_terms:  # 判断是否需要返回分项损失
         return {  # 返回分项损失字典
+            "valid_fraction": tf.reduce_mean(valid) if valid is not None else tf.constant(1.0),
             "total": total_loss,  # 返回总损失
             "optical_total": optical_total,  # 返回光流损失项
             "uncertainty_total": uncertainty_total,  # 返回不确定性损失项

@@ -37,7 +37,7 @@ def tiny_graph(scope_name, label_ph, lr_ph, **kwargs):
         accum=grad.assign(tf.gradients(loss,w)[0])
         train=tf.compat.v1.train.AdamOptimizer(lr_ph).apply_gradients([(grad,w)])
         variables=tf.compat.v1.global_variables(scope=scope_name)
-        return dict(loss=loss,loss_optical=loss,loss_uncertainty=loss*0,
+        return dict(loss=loss,loss_optical=loss,loss_uncertainty=loss*0,valid_fraction=tf.constant(1.),
                     accum_op=accum,zero_grad_op=grad.assign(0.),grad_norm=tf.abs(grad),
                     train_op=train,epe=loss,saver=tf.compat.v1.train.Saver(variables,max_to_keep=0),
                     scope_global_vars=variables)

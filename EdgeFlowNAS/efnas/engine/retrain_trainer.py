@@ -231,6 +231,8 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
         pred_channels=pred_channels,
         weight_decay=weight_decay,
         grad_clip_global_norm=grad_clip,
+        supervision_max_magnitude=train_cfg.get("supervision_max_magnitude"),
+        uncertainty_weight=float(train_cfg.get("uncertainty_weight", 1.0)),
     )
     init_saver = tf.compat.v1.train.Saver(var_list=_model_weight_vars(model_name))
     val_h = int(data_cfg.get('eval_input_height', input_h)) if dataset == 'FT3D' else input_h
@@ -390,6 +392,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                 epoch_loss = 0.0
                 optical_loss = 0.0
                 uncertainty_loss = 0.0
+                valid_fraction_sum = 0.0
                 grad_norms: List[float] = []
                 lr_last = base_lr
                 desc = f"{model_name} {dataset} epoch {epoch_idx}/{num_epochs}"
@@ -422,6 +425,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                         grad_scale = float(micro_input.shape[0]) / float(logical_batch)
                         result = sess.run(
                             {
+                                "valid_fraction": graph_obj["valid_fraction"],
                                 "loss": graph_obj["loss"],
                                 "optical": graph_obj["loss_optical"],
                                 "uncertainty": graph_obj["loss_uncertainty"],
@@ -435,6 +439,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                                 is_training_ph: True,
                             },
                         )
+                        valid_fraction_sum += float(result["valid_fraction"]) * grad_scale
                         step_loss += float(result["loss"]) * grad_scale
                         step_optical += float(result["optical"]) * grad_scale
                         step_uncertainty += float(result["uncertainty"]) * grad_scale
@@ -515,6 +520,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                     "global_step": global_step,
                     "lr": lr_last,
                     "loss": avg_loss,
+                    "supervised_pixel_fraction": valid_fraction_sum / max(1, steps_per_epoch),
                     "first_batch_input_sha256": first_batch_digest,
                     "data_seconds": data_seconds,
                     "update_seconds": update_seconds,

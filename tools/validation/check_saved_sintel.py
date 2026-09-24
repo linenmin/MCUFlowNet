@@ -94,7 +94,12 @@ def main():
             saver = tf.compat.v1.train.Saver(variables)
         session_config = tf.compat.v1.ConfigProto()
         session_config.gpu_options.allow_growth = True
+        from evaluate_label_diagnostics import grouped_errors, merge, means
+        groups_total, scene_groups = {}, {}
         raw_values, legacy_values = [], []
+        prediction_over50 = 0
+        pixels = 0
+        large_truth_sum = large_pred_sum = 0.0
         with tf.compat.v1.Session(graph=graph, config=session_config) as sess, (args.output/'samples.csv').open('w', newline='') as f:
             saver.restore(sess, str(prefix))
             writer = csv.DictWriter(f, fieldnames=['sample', 'raw_epe', 'legacy_epe'])
@@ -111,11 +116,30 @@ def main():
                     raise ValueError('Non-finite prediction')
                 raw = float(np.linalg.norm(pred-truth, axis=-1).mean(dtype=np.float64))
                 legacy = float(np.linalg.norm(pred-np.clip(truth, -50, 50), axis=-1).mean(dtype=np.float64))
+                groups = grouped_errors(pred, truth)
+                h, w = truth.shape[:2]
+                yy, xx = np.mgrid[:h, :w]
+                inside = (xx + truth[...,0] >= 0) & (xx + truth[...,0] < w) & (yy + truth[...,1] >= 0) & (yy + truth[...,1] < h)
+                errors = np.linalg.norm(pred-truth, axis=-1)
+                for name, mask in [('endpoint_inside', inside), ('endpoint_outside', ~inside)]:
+                    groups[name] = dict(pixels=int(mask.sum()), error_sum=float(errors[mask].sum(dtype=np.float64)))
+                merge(groups_total, groups)
+                merge(scene_groups.setdefault(Path(flow).parent.name, {}), groups)
+                prediction_over50 += int(np.any(np.abs(pred)>50, axis=-1).sum())
+                pixels += h*w
+                large = np.any(np.abs(truth)>50, axis=-1)
+                large_truth_sum += float(np.linalg.norm(truth, axis=-1)[large].sum(dtype=np.float64))
+                large_pred_sum += float(np.linalg.norm(pred, axis=-1)[large].sum(dtype=np.float64))
                 raw_values.append(raw); legacy_values.append(legacy)
                 writer.writerow(dict(sample=str(Path(flow).relative_to(monitor['dataset_root'])), raw_epe=raw, legacy_epe=legacy))
                 if len(raw_values) % 100 == 0:
                     print(f'{len(raw_values)}/{len(flows)}', flush=True)
         result = dict(samples=len(raw_values), raw_epe=float(np.mean(raw_values)), legacy_epe=float(np.mean(legacy_values)))
+        result['groups'] = means(groups_total)
+        result['scenes'] = {name: means(value) for name,value in scene_groups.items()}
+        result['prediction_component_over50_fraction'] = prediction_over50 / pixels
+        result['large_motion_predicted_to_true_magnitude_ratio'] = large_pred_sum / large_truth_sum
+        result['endpoint_note'] = 'Endpoint relative to 416x1024 crop; not an occlusion annotation'
         result['deltas'] = validate_scores(rows[0], result, args.expected_samples)
         if fingerprint(prefix) != before:
             raise ValueError('Source checkpoint changed during evaluation')

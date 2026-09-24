@@ -136,6 +136,8 @@ def _build_graph(
     pred_channels: int,
     weight_decay: float,
     grad_clip_global_norm: float,
+    supervision_max_magnitude=None,
+    uncertainty_weight=1.0,
 ) -> Dict[str, Any]:
     with tf.compat.v1.variable_scope(scope_name):
         model = FixedArchModelV3(
@@ -147,7 +149,8 @@ def _build_graph(
             expansion_factor=2.0,
         )
         preds = model.build()
-        loss_terms = build_multiscale_uncertainty_loss(preds=preds, label_ph=label_ph, num_out=flow_channels, return_terms=True)
+        loss_terms = build_multiscale_uncertainty_loss(preds=preds, label_ph=label_ph, num_out=flow_channels, return_terms=True,
+            supervision_max_magnitude=supervision_max_magnitude, uncertainty_weight=uncertainty_weight)
         loss_core = loss_terms["total"]
         trainable_vars = tf.compat.v1.trainable_variables(scope=scope_name)
         if not trainable_vars:
@@ -186,6 +189,7 @@ def _build_graph(
     return {
         "scope_name": scope_name,
         "arch_code": [int(v) for v in arch_code],
+        "valid_fraction": loss_terms["valid_fraction"],
         "loss": loss_tensor,
         "loss_optical": loss_terms["optical_total"],
         "loss_uncertainty": loss_terms["uncertainty_total"],

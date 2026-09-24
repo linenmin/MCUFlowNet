@@ -207,6 +207,23 @@ def _apply_eraser_augment(img0, img1, rng: Any, aug_cfg: Optional[Dict[str, Any]
     return img0, out.astype(np.float32)
 
 
+def _apply_scale_only(img0, img1, flow, crop_h, crop_w, rng, cfg):
+    """A separate RNG leaves the shared sample schedule/crop draws intact."""
+    geometry_rng = np.random.RandomState()
+    geometry_rng.set_state(rng.get_state())
+    if geometry_rng.uniform() < float(cfg.get("scale_probability", 0.5)):
+        scale = geometry_rng.uniform(float(cfg.get("scale_min", 0.70)), float(cfg.get("scale_max", 1.0)))
+        h, w = flow.shape[:2]
+        nh, nw = int(round(h * scale)), int(round(w * scale))
+        if nh < crop_h or nw < crop_w:
+            raise ValueError("Approved scale does not fit the crop; do not silently clamp it")
+        img0 = cv2.resize(img0, (nw, nh), interpolation=cv2.INTER_LINEAR)
+        img1 = cv2.resize(img1, (nw, nh), interpolation=cv2.INTER_LINEAR)
+        flow = cv2.resize(flow, (nw, nh), interpolation=cv2.INTER_LINEAR)
+        flow *= np.asarray([nw / w, nh / h], dtype=np.float32)
+    return _random_crop_triplet(img0, img1, flow, crop_h, crop_w, rng)
+
+
 def _apply_spatial_augment(
     img0,
     img1,
@@ -452,6 +469,8 @@ class FT3DBatchProvider:
                 continue
             try:
                 if self.crop_mode == "random":
+                    if (self.augment_cfg or {}).get("mode") == "scale_only":
+                        return _apply_scale_only(img0, img1, flow, self.crop_h, self.crop_w, rng, self.augment_cfg)
                     if (self.augment_cfg or {}).get("mode") == "photometric_only":
                         # Keep the baseline crop and sampling RNG unchanged. Color
                         # draws use a copy of the per-sample RNG after cropping.
