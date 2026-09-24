@@ -45,3 +45,17 @@ diagnose_grove_accuracy.py直接读取既有导出，默认每场景取首、中
 原始报告放Runs/GROVE-INT8-01/diagnostics，解释放wiki Benchmark总表“缩图与量化精度下降的诊断”，状态只放原实验条目。2026-09-21的基准诊断使用mcuflownet-local:20260917容器（TF2.17）；Windows TF2.19仅作运行环境对照，两者INT8结果存在差异，不能混用。可选去辅助头对照重新使用同一64对FC2校准，原权重与旧导出不覆盖。误差来源与后续微调收益尚未完全确认。
 
 增加--center-crop-control时，必须同时提供--highres-weights。程序从共同416×1024区域中央原样裁取输入大小的图块，直接推理，不缩放图片或flow向量；大图原生推理和整图缩放推理也只在这个ROI计分。此次三个模型统一208×160，覆盖23场景首中末69对。原始结果在diagnostics/<model>-crop-control-69，裁剪主结果使用全部ROI像素；另列GT终点仍在裁剪范围内的像素加权诊断，不能据此删除主评分像素。裁剪INT8未测，既有校准使用整图缩放，不能当作已完成裁剪方案的量化验收。
+
+## 按相同样本复核尺寸比较
+
+全量1041对、每场景首对的23对、首中末69对的中央ROI是三套不同的评分范围，不合并成一排可直接比较的EPE。23对中的down/up结果必须与同23对原图比较；crop结果必须与同69对、同ROI的参照比较。
+
+`audit_grove_resolution.py`在同一TF环境、同一检查点下分别建立大图和小图原生模型，并核对保存的浮点TFLite。检查每个恢复变量和权重/导出指纹；用不等比缩放的常量flow验证单位还原。它独立读取原始GT，使用float64差值重算EPE，保存原图、缩小再放大、原生小图与TFLite小图的逐对结果，以及原始GT位移分组。没有训练，不改旧报告。
+
+    python tools/baselines/audit_grove_resolution.py \
+      --export /runs/GROVE-INT8-01/scan/edge/160x208 \
+      --weights /upstream/EdgeFlowNet/checkpoints/best.ckpt \
+      --upstream /upstream --dataset /datasets/Sintel \
+      --output /runs/GROVE-INT8-01/audit-20260924/edge
+
+默认完整1041对；`--per-scene 1`用于复查原23对诊断。2026-09-24实际输出在`audit-20260924/{edge,MCUFlowNet-S,MCUFlowNet-L}`，Edge全量，S/L各23对；不能因为同在一个audit目录就将其均值混用。运行使用原TF2.17容器、CPU；小图原生与TFLite的每对平均预测差须低于0.005输入像素。核对范围不包括INT8重新推理或板端执行。
