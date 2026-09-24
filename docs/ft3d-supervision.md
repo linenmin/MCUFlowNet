@@ -36,3 +36,5 @@ Sintel模式使用固定845对，比较1/4、1/2、全尺寸的累计预测，�
 renders模式从FT3D TEST的独立场景按路径哈希固定选128个前向左视图对，各取一个；Clean/Final共用GT和352×480中心裁剪，不作增强或裁剪标签。
 输出分组像素数/误差和、逐样本成绩、完整清单及权重指纹。差分组的epe字段表示平均差值，clean_pixel_win_fraction表示胜出比例，不是EPE。
 仅推理，不更新权重或BN；Sintel最后一层必须复现原监控分数，所有模式检查权重前后指纹一致。数值测试见同目录test_supervision_diagnostics.py。
+
+Context diagnostic: add `--wide-context` to renders mode for 512x896 input, scoring only the same central352x480 pixels. No image/flow scaling; selection and units unchanged. Compare with default renders mode using identical checkpoints/manifests. ECA/global gates also see added context, so differences cannot be attributed solely to extra correspondences or receptive field. This is inference context sensitivity, not evidence of retraining benefit.

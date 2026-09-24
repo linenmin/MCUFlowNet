@@ -2,10 +2,19 @@
 import unittest
 from pathlib import Path
 import numpy as np
-from diagnose_supervision import regions, choose_scenes, add_errors, finish
+from diagnose_supervision import regions, choose_scenes, add_errors, finish, center_crop
 
 
 class DiagnosticsTest(unittest.TestCase):
+    def test_nested_crop_keeps_identical_coordinates_and_flow_units(self):
+        yy, xx = np.mgrid[:540, :960]
+        image = np.stack([yy, xx], axis=-1)
+        direct = center_crop(image, 352, 480)
+        nested = center_crop(center_crop(image, 512, 896), 352, 480)
+        np.testing.assert_array_equal(direct, nested)
+        np.testing.assert_array_equal(center_crop(np.full((512,896,2),150.),352,480),150.)
+        with self.assertRaises(ValueError): center_crop(image, 541, 480)
+
     def test_constant_motion_has_no_boundary(self):
         gt = np.full((8, 8, 2), 10., dtype=np.float32)
         masks = regions(gt)

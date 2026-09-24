@@ -14,6 +14,14 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT), str(ROOT/'EdgeFlowNAS')]
 
 
+def center_crop(array, height, width):
+    h, w = array.shape[:2]
+    if h < height or w < width or (h-height) % 2 or (w-width) % 2:
+        raise ValueError('Crop must fit with integer symmetric margins')
+    y, x = (h-height)//2, (w-width)//2
+    return array[y:y+height, x:x+width]
+
+
 def regions(truth, threshold=3.0):
     """Adjacent flow jump > threshold, both endpoints, dilated by one pixel.
 
@@ -70,7 +78,9 @@ def main():
     p.add_argument('--mode', choices=['sintel', 'renders'], required=True)
     p.add_argument('--expected-step', type=int, required=True)
     p.add_argument('--scenes', type=int, default=128)
+    p.add_argument('--wide-context', action='store_true', help='512x896 input, same central352x480 scoring; renders only')
     args = p.parse_args()
+    if args.wide_context and args.mode != 'renders': p.error('--wide-context requires renders')
     args.output.mkdir(parents=True, exist_ok=False)
     record = dict(status='running', mode=args.mode, started=time.time(),
                   code_commit=os.environ.get('MCUFLOW_COMMIT'), job_id=os.environ.get('SLURM_JOB_ID'))
@@ -96,6 +106,8 @@ def main():
         if isinstance(arch, str): arch = list(map(int, arch.split(',')))
         assert json.loads(Path(str(prefix)+'.meta.json').read_text())['arch_code'] == arch
         h, w = (416, 1024) if args.mode == 'sintel' else (352, 480)
+        if args.wide_context: h, w = 512, 896
+        score_h, score_w = (352, 480) if args.mode == 'renders' else (h, w)
         tf.compat.v1.disable_eager_execution()
         tf.config.experimental.enable_tensor_float_32_execution(False)
         assert tf.config.list_physical_devices('GPU'), 'GPU required'
@@ -128,6 +140,7 @@ def main():
         (args.output/'samples.json').write_text(manifest+'\n')
         record.update(checkpoint=str(prefix), checkpoint_sha256=before, global_step=state['global_step'],
                       samples_sha256=hashlib.sha256(manifest.encode()).hexdigest(), shape=[h, w],
+                      scoring_shape=[score_h, score_w], wide_context=args.wide_context,
                       boundary_definition='GT adjacent L2 jump >3 pixels, both endpoints, 3x3 dilation',
                       tensorflow=tf.__version__)
         totals, sensitivities, transitions, pairs = {}, {}, {}, []
@@ -151,8 +164,8 @@ def main():
                         ims = [cv2.imread(str(f), cv2.IMREAD_COLOR) for f in paths]
                         assert all(v is not None and v.shape == (hh, ww, 3) for v in ims), paths
                         images[name] = np.concatenate(ims, axis=-1)[y:y+h, x:x+w].astype(np.float32)
-                    truth = truth[y:y+h, x:x+w]
-                assert truth.shape == (h, w, 2) and np.isfinite(truth).all()
+                    truth = center_crop(truth, score_h, score_w)
+                assert truth.shape == (score_h, score_w, 2) and np.isfinite(truth).all()
                 masks = regions(truth)
                 errors = {}
                 row = {'sample': str(flow)}
@@ -161,7 +174,7 @@ def main():
                     output = sess.run(full, {inputs: preprocess_eval_batch(pair[None])})
                     for layer, pred in enumerate(output):
                         assert np.isfinite(pred).all()
-                        err = np.linalg.norm(pred[0]-truth, axis=-1)
+                        err = np.linalg.norm(center_crop(pred[0], score_h, score_w)-truth, axis=-1)
                         key = f'{render}/layer{layer}'
                         errors[key] = err
                         add_errors(totals.setdefault(key, {}), err, masks)
