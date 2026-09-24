@@ -38,3 +38,5 @@ renders模式从FT3D TEST的独立场景按路径哈希固定选128个前向左�
 仅推理，不更新权重或BN；Sintel最后一层必须复现原监控分数，所有模式检查权重前后指纹一致。数值测试见同目录test_supervision_diagnostics.py。
 
 Context diagnostic: add `--wide-context` to renders mode for 512x896 input, scoring only the same central352x480 pixels. No image/flow scaling; selection and units unchanged. Compare with default renders mode using identical checkpoints/manifests. ECA/global gates also see added context, so differences cannot be attributed solely to extra correspondences or receptive field. This is inference context sensitivity, not evidence of retraining benefit.
+
+FT3D-CONTEXT-01: `ft3d_context.json` retains C S/L FC2 epoch150 initialization and 60k cosine (3e-5 to1e-6), but trains with512x896 crops. FT3D validation stays352x480, Sintel416x1024. Submit with explicit `--stop-step 20000`; review before continuation. Batch32, prefetch1, GT/400-mask/loss/seed unchanged. Separate50+50-step start/resume probes must pass before production starts. Outputs use separate FT3D-CONTEXT-01 and -PROBE directories. Same-step comparisons have2.72x training pixels, not equal compute.
