@@ -11,10 +11,10 @@ from efnas.engine.recovery_bundle import committed_model
 from experiment_io import save
 
 
-def check(recipe, runs):
+def check(recipe, runs, pairing_path=None):
     probe=probe_recipe(recipe);root=runs/probe['experiment_id']
     has_color = any(v['augment'].get('enabled') for v in probe['variants'].values())
-    pairing=(json.loads((root/'pairing.json').read_text()) if has_color else
+    pairing=(json.loads((pairing_path or root/'pairing.json').read_text()) if has_color else
              dict(status='passed',method='identical plain-input hashes across parent choices'))
     if pairing['status']!='passed': raise ValueError('Input pairing did not pass')
     result=dict(status='passed',pairing=pairing,variants={})
@@ -25,6 +25,7 @@ def check(recipe, runs):
         expected=copy.deepcopy(probe['config'])
         expected.update(model_name=choice['model'],arch_code=choice['arch_code'])
         expected['train'].update(num_epochs=2,lr_stage=stage_spec(probe,name))
+        expected['train'].update(choice.get('train_overrides', {}))
         expected['data']['ft3d_train_augment']=choice['augment']
         expected=wrapper_config(expected)
         # The runner's protocol checks and trainer assertions cover all settings;
@@ -49,8 +50,8 @@ def check(recipe, runs):
             source_epoch=choice['source_epoch'],source_step=choice['source_step'])
     groups = {}
     for name, choice in probe['variants'].items():
-        if not choice['augment'].get('enabled'):
-            groups.setdefault(choice['model'], []).append(name)
+        key=(choice['model'],json.dumps(choice['augment'],sort_keys=True))
+        groups.setdefault(key, []).append(name)
     for names in groups.values():
         if any(first_inputs[name] != first_inputs[names[0]] for name in names[1:]):
             raise ValueError('Plain branches received different input batches')
@@ -63,6 +64,7 @@ if __name__=='__main__':
     p.add_argument('--recipe',type=Path,required=True)
     p.add_argument('--runs-root',type=Path,default=Path('/runs'))
     p.add_argument('--output',type=Path,required=True)
-    args=p.parse_args();result=check(json.loads(args.recipe.read_text()),args.runs_root)
+    p.add_argument('--pairing',type=Path)
+    args=p.parse_args();result=check(json.loads(args.recipe.read_text()),args.runs_root,args.pairing)
     args.output.parent.mkdir(parents=True,exist_ok=True)
     save(args.output,result);print(json.dumps(result))
