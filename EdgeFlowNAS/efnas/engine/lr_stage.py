@@ -59,3 +59,23 @@ def check_schedule_fork(saved, current):
             raise ValueError('Only the validated prefetch depths zero/one are allowed')
     if a != b:
         raise ValueError('Schedule continuation changed more than training prefetch')
+
+
+def check_refinement_fork(saved, current):
+    """Only add EMA monitoring and an optional relative crop; keep the actual LR."""
+    a,b=copy.deepcopy(saved),copy.deepcopy(current)
+    if a is None or b is None or a['data'].get('dataset') != 'FT3D':
+        raise ValueError('Refinement requires a recorded FT3D parent')
+    spec=b['train'].pop('parameter_average',None)
+    if a['train'].get('parameter_average') is not None or spec is None:
+        raise ValueError('Expected a new averaging fork from a non-EMA parent')
+    if not 0 < float(spec['decay']) < 1 or int(spec['calibration_samples']) <= 0:
+        raise ValueError('Invalid averaging settings')
+    old_aug=a['data'].get('ft3d_train_augment',{})
+    new_aug=b['data'].get('ft3d_train_augment',{})
+    if new_aug != old_aug:
+        if new_aug != {'mode':'relative_crop','enabled':True,'probability':0.5,'max_offset':16}:
+            raise ValueError('Only the approved relative crop is allowed')
+        b['data']['ft3d_train_augment']=old_aug
+    if a != b:
+        raise ValueError('Refinement changed settings beyond EMA/relative crop')

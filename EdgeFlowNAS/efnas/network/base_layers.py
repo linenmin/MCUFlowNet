@@ -35,10 +35,11 @@ class BaseLayers:  # 定义基础层类
     @count_and_scope  # 添加计数作用域装饰器
     def bn(self, inputs, name=None):  # 定义批归一化函数
         """执行批归一化。"""  # 说明函数用途
+        calibration = tf.compat.v1.get_collection('MCUFLOW_BN_CALIBRATION_MOMENTUM')
         return tf.compat.v1.layers.batch_normalization(  # 返回BN输出
             inputs=inputs,  # 指定输入张量
             training=self.is_training_ph,  # 指定训练阶段开关
-            momentum=0.9,  # 指定动量参数
+            momentum=calibration[0] if calibration else 0.9,
             epsilon=1e-5,  # 指定数值稳定项
             name=name,  # 指定层名称
         )

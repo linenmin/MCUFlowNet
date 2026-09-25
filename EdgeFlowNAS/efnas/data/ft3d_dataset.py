@@ -363,6 +363,9 @@ class FT3DBatchProvider:
         self.num_workers = max(1, int(num_workers))
         self.strict_loading = bool(strict_loading)
         self.label_clip = label_clip
+        if self.augment_cfg.get('mode') == 'relative_crop':
+            if self.flow_divisor != 1.0 or self.label_clip is not None:
+                raise ValueError('Relative crop requires raw pixel-unit labels, without clipping')
         self.skipped_nonfinite_count = 0
         if self.sampling_mode not in ("random", "sequential", "shuffle_no_replacement"):
             raise ValueError(f"unsupported sampling_mode: {sampling_mode}")
@@ -469,6 +472,9 @@ class FT3DBatchProvider:
                 continue
             try:
                 if self.crop_mode == "random":
+                    if self.augment_cfg.get('mode') == 'relative_crop':
+                        from efnas.data.relative_crop import relative_crop
+                        return relative_crop(img0, img1, flow, self.crop_h, self.crop_w, rng, self.augment_cfg)
                     if (self.augment_cfg or {}).get("mode") == "scale_only":
                         return _apply_scale_only(img0, img1, flow, self.crop_h, self.crop_w, rng, self.augment_cfg)
                     if (self.augment_cfg or {}).get("mode") == "photometric_only":
@@ -534,6 +540,9 @@ class FT3DBatchProvider:
         p2 = np.asarray(p2_batch, dtype=np.float32)
         label = np.asarray(flow_batch, dtype=np.float32)
         input_pair = np.concatenate([p1, p2], axis=3).astype(np.float32)
+        if self.augment_cfg.get('mode') == 'relative_crop':
+            from efnas.data.relative_crop import AuditedTuple
+            return AuditedTuple((input_pair, p1, p2, label), [sample.audit for sample in loaded])
         return input_pair, p1, p2, label
 
     def close(self) -> None:

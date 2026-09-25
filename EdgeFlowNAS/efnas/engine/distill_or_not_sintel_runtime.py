@@ -80,6 +80,7 @@ def evaluate_v3_checkpoint_dir_on_sintel(
     progress_desc: Optional[str] = None,
     primary_metric: str = "legacy",
     prediction_flow_scale: Optional[float] = None,
+    collect_groups: bool = False,
 ) -> Dict[str, Any]:
     """Evaluate one fixed V3 checkpoint on the configured Sintel split."""
     from EdgeFlowNet.code.misc.processor import FlowPostProcessor
@@ -100,6 +101,7 @@ def evaluate_v3_checkpoint_dir_on_sintel(
         raise ValueError("Raw dual evaluation currently supports only 416x1024 center crop")
     flow_scale = _resolve_prediction_flow_scale(Path(model_dir), meta_data) if prediction_flow_scale is None else float(prediction_flow_scale)
     raw_values, legacy_values = [], []
+    groups, scenes = {}, {}
     img1_list, img2_list, flo_list = _prepare_sintel_lists(dataset_root=dataset_root_path, sintel_list_text=sintel_list)
     total_samples = len(img1_list)
     if max_samples is not None:
@@ -127,6 +129,17 @@ def evaluate_v3_checkpoint_dir_on_sintel(
                     raise FloatingPointError("Nonfinite Sintel prediction")
                 raw_values.append(float(np.sqrt(np.sum((predicted-raw)**2,axis=-1)).mean(dtype=np.float64)))
                 legacy_values.append(float(np.sqrt(np.sum((predicted-np.asarray(gt_flow)[0])**2,axis=-1)).mean(dtype=np.float64)))
+                if collect_groups:
+                    errors = np.linalg.norm(predicted-raw, axis=-1)
+                    magnitude = np.linalg.norm(raw, axis=-1)
+                    for low, high, name in [(0,10,'0_10'),(10,40,'10_40'),(40,160,'40_160'),(160,np.inf,'160_plus')]:
+                        mask = (magnitude >= low) & (magnitude < high)
+                        entry = groups.setdefault(name, {'pixels':0, 'error_sum':0.0})
+                        entry['pixels'] += int(mask.sum())
+                        entry['error_sum'] += float(errors[mask].sum(dtype=np.float64))
+                    entry = scenes.setdefault(Path(img1_list[idx]).parent.name, {'pairs':0,'epe_sum':0.0})
+                    entry['pairs'] += 1
+                    entry['epe_sum'] += raw_values[-1]
             else:
                 processor.update(label=gt_flow, prediction=flow_prediction, Args=args)
     finally:
@@ -135,6 +148,8 @@ def evaluate_v3_checkpoint_dir_on_sintel(
     if mean_epe is None or not np.isfinite(mean_epe):
         raise RuntimeError("No finite Sintel metric")
     return {
+        **({'motion_groups': {k:{**v,'epe':v['error_sum']/v['pixels'] if v['pixels'] else None} for k,v in groups.items()},
+            'scenes': {k:{**v,'epe':v['epe_sum']/v['pairs']} for k,v in scenes.items()}} if collect_groups else {}),
         **({"sintel_raw_epe": mean_epe, "sintel_legacy_epe": float(np.mean(legacy_values)), "evaluated_samples": len(raw_values), "prediction_flow_scale": flow_scale} if primary_metric == "raw" else {}),
         "model_name": meta_data["scope_name"],
         "arch_code": ",".join(str(v) for v in meta_data["arch_code"]),

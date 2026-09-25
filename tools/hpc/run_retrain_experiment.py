@@ -17,7 +17,7 @@ import time
 import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'EdgeFlowNAS'))
 from efnas.engine.recovery_bundle import committed_model, validate_boundary, fork_source
-from efnas.engine.lr_stage import check_lr_fork, check_crop_fork, check_schedule_fork, stage_lr
+from efnas.engine.lr_stage import check_lr_fork, check_crop_fork, check_schedule_fork, check_refinement_fork, stage_lr
 from efnas.engine.experiment_protocol import label_ab_protocol
 from experiment_io import save
 
@@ -49,6 +49,8 @@ def prepare(recipe, variant, action, stop_step, runs_root):
             raise ValueError('Invalid experiment/run name')
     if recipe.get('kind') == 'weight_init':
         return prepare_weight_init(recipe, variant, action, stop_step, runs_root)
+    if recipe.get('kind') == 'refinement_fork':
+        return prepare_refinement(recipe, variant, action, stop_step, runs_root)
     if recipe.get('kind') == 'schedule_continue':
         return prepare_schedule_continue(recipe, variant, action, stop_step, runs_root)
     choice = recipe['variants'][variant]
@@ -111,6 +113,42 @@ def prepare(recipe, variant, action, stop_step, runs_root):
     stage_lr(cfg['train']['lr_stage'], state['global_step'])
     stage_lr(cfg['train']['lr_stage'], target-1)
     return cfg, model, bundle, state, target
+
+
+def prepare_refinement(recipe, variant, action, stop_step, runs_root):
+    choice=recipe['variants'][variant]
+    root=Path(runs_root)/recipe['experiment_id']/variant
+    model=root/f"model_{choice['model']}"
+    source=Path(choice['parent_run']) if action=='start' else root
+    saved=json.loads((source/model.name/'run_manifest.json').read_text())
+    cfg=copy.deepcopy(saved['config'])
+    bundle=committed_model(source/model.name)
+    state=validate_boundary(bundle)
+    target=recipe['midpoint_step'] if stop_step is None else stop_step
+    block=int(cfg['train']['updates_per_epoch'])
+    if cfg['model_name'] != choice['model'] or list(map(int,arch_text(cfg['arch_code']).split(','))) != choice['arch_code']:
+        raise ValueError('Unexpected parent architecture')
+    if not recipe['parent_step'] <= state['global_step'] < target <= recipe['approved_stop_step']:
+        raise ValueError('Refinement target exceeds the approved stop or no work remains')
+    if target % block or state['epoch']*block != state['global_step']:
+        raise ValueError('Inconsistent reporting boundary')
+    if action=='start':
+        if root.exists(): raise FileExistsError(root)
+        if state['global_step'] != recipe['parent_step']: raise ValueError('Wrong refinement parent step')
+        if target > recipe['midpoint_step']: raise ValueError('Start exceeds the first review')
+    cfg['runtime'].update(output_root=str(root.parent),experiment_name=variant,
+        stop_after_epoch=target//block,milestone_epochs=recipe['milestone_epochs'])
+    cfg['train']['parameter_average']=copy.deepcopy(recipe['parameter_average'])
+    cfg['data']['ft3d_train_augment']=copy.deepcopy(choice['augment'])
+    cfg['checkpoint'].update(load_checkpoint=True,resume_experiment_name=str(source),resume_ckpt_name='last',
+        fork_lr_stage=False,fork_crop_stage=False,fork_schedule_continue=False,
+        fork_refinement=action=='start',fork_parent_step=recipe['parent_step'],verify_restored_tensors=True)
+    cfg=wrapper_config(cfg)
+    if action=='start': check_refinement_fork(saved['protocol'],label_ab_protocol(cfg))
+    elif saved['protocol'] != label_ab_protocol(cfg): raise ValueError('Refinement recovery changed protocol')
+    if cfg['train']['lr_stage'] != wrapper_config({'arch_code':[], 'value':recipe['original_lr_stage']})['value']:
+        raise ValueError('Refinement must retain the full original LR schedule')
+    return cfg,model,bundle,state,target
 
 
 def prepare_weight_init(recipe, variant, action, stop_step, runs_root):
@@ -287,6 +325,24 @@ def verify_result(model, cfg, recipe, target):
             frozen = model.parent/'milestones'/f'epoch-{epoch:04d}'/model.name
             if validate_boundary(frozen)['global_step'] != epoch*block:
                 raise ValueError('Missing or inconsistent frozen checkpoint')
+    if recipe.get('kind') == 'refinement_fork':
+        state = validate_boundary(complete)
+        if state.get('ema_updates') != target-recipe['parent_step']:
+            raise ValueError('Saved trainer state lost its EMA counter')
+        baseline=json.loads((model/'averaging'/f"step-{recipe['parent_step']:06d}"/'results.json').read_text())
+        reference=recipe['reference_raw_epe'][cfg['model_name']]
+        if abs(baseline['raw_native']['sintel_raw_epe']-reference) > 0.001:
+            raise ValueError('Starting checkpoint does not reproduce the independently checked C40k score')
+        for row in rows:
+            expected_lr=stage_lr(cfg['train']['lr_stage'],int(row['global_step'])-1)
+            if not math.isclose(float(row['lr']),expected_lr,rel_tol=1e-10):
+                raise ValueError('Refinement changed the original LR schedule')
+            if int(row['ema_updates']) != int(row['global_step'])-recipe['parent_step']:
+                raise ValueError('EMA update count does not match training updates')
+        for row in full:
+            for name in ('raw_bn','ema_bn'):
+                if int(row[f'{name}_evaluated_samples']) != count or not math.isfinite(float(row[f'{name}_sintel_raw_epe'])):
+                    raise ValueError('Missing averaged/BN-recalibrated full monitor')
     if recipe.get('kind') == 'schedule_continue':
         quick = cfg['eval']['sintel']
         quick_count = len([line for line in Path(quick['sintel_list']).read_text().splitlines() if line.strip()])

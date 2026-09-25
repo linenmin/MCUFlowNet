@@ -2,9 +2,19 @@
 
 ## 开发位置
 
-只在`C:/00Work/Code/MCUFlowNet`修改新代码。`MCUFlowNet-dev`保留作历史查询，不维护第二套实验实现。
+重训在同一Git仓库的工作树`C:/00Work/Code/MCUFlowNet-retrain`修改，使用`training/sofia-h200`分支；`C:/00Work/Code/MCUFlowNet`可供其他方向使用。`MCUFlowNet-dev`保留作历史查询，不维护第二套实验实现。
 
 当前开发分支为`training/sofia-h200`，承接`training/fc2-label-ab`与`training/local-smoke-monitor`；旧权重评测在`validation/published-checkpoints`。一个完整功能使用一个分支；学习率等参数对照使用不同配置和实验编号，不复制训练程序。
+
+### 原C续训、参数平均与相对裁剪
+
+`ft3d_ema_aug.json`定义四条运行：S/L各有原C续训、原C加相对裁剪两组，均附带EMA。起点为原C40000步完整状态；原0–60000步学习率日程保持不变。首段只授权到50000步，配置校验拒绝直接跑到60000。
+
+EMA只平均可训练参数，系数0.9995；每次Adam更新后执行，副本不写回训练图。完整`last`同时保存Adam、BN、EMA和更新计数。`averaging/step-XXXXXX/`保存普通/平均权重在相同BN重估后的845对Sintel评分、运动分组和逐场景结果；原BN评分照常保留。BN仅使用固定2048个FT3D TRAIN图像对（Clean/Final各半），每批32，中心裁剪352×480；不使用Sintel或FT3D TEST，也不更新可训练参数。
+
+相对裁剪以50%概率移动第二帧裁剪窗口，水平/垂直各最多16像素，GT减去对应偏移；越出原图则本次偏移为零。第一帧、样本顺序和基础裁剪随机数不变。CSV记录实际启用/回退比例，并在每500步的首批记录运动大小与出界比例，避免逐批统计拖慢训练。
+
+使用现有runner的`start --stop-step 40500`，完成检查后再`resume --stop-step 50000`即可验证真实恢复；两段仍属于同一条训练。不要对同一运行重复使用start。新增工程测试为`tools/validation/test_ema_refinement.py`，覆盖真实S/L图的EMA隔离、保存恢复、BN重估、裁剪标签和并行预取。运行时固定Git提交；大文件与完整结果只写Runs，wiki维护结论和进度。
 
 ## 文件放在哪里
 

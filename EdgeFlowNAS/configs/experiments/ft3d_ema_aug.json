@@ -1,0 +1,119 @@
+{
+  "kind": "refinement_fork",
+  "experiment_id": "FT3D-EMA-AUG-01",
+  "parent_step": 40000,
+  "stage_steps": 20000,
+  "midpoint_step": 50000,
+  "approved_stop_step": 50000,
+  "original_lr_stage": {
+    "start_step": 0,
+    "steps": 60000,
+    "peak_lr": 3e-05,
+    "min_lr": 1e-06,
+    "warmup_steps": 0
+  },
+  "parameter_average": {
+    "decay": 0.9995,
+    "calibration_samples": 2048,
+    "calibration_batch_size": 32
+  },
+  "milestone_epochs": [
+    80,
+    90,
+    100,
+    110,
+    120
+  ],
+  "reference_raw_epe": {
+    "v3_light": 6.8137974,
+    "v3_efn_fps": 5.94910584
+  },
+  "variants": {
+    "s_ema": {
+      "model": "v3_light",
+      "arch_code": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "parent_run": "/runs/FT3D-SUPERVISION-01/s_raw_mask400/milestones/epoch-0080",
+      "augment": {
+        "enabled": false
+      }
+    },
+    "s_ema_relative": {
+      "model": "v3_light",
+      "arch_code": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "parent_run": "/runs/FT3D-SUPERVISION-01/s_raw_mask400/milestones/epoch-0080",
+      "augment": {
+        "mode": "relative_crop",
+        "enabled": true,
+        "probability": 0.5,
+        "max_offset": 16
+      }
+    },
+    "l_ema": {
+      "model": "v3_efn_fps",
+      "arch_code": [
+        2,
+        0,
+        0,
+        2,
+        2,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "parent_run": "/runs/FT3D-SUPERVISION-01/l_raw_mask400/milestones/epoch-0080",
+      "augment": {
+        "enabled": false
+      }
+    },
+    "l_ema_relative": {
+      "model": "v3_efn_fps",
+      "arch_code": [
+        2,
+        0,
+        0,
+        2,
+        2,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "parent_run": "/runs/FT3D-SUPERVISION-01/l_raw_mask400/milestones/epoch-0080",
+      "augment": {
+        "mode": "relative_crop",
+        "enabled": true,
+        "probability": 0.5,
+        "max_offset": 16
+      }
+    }
+  }
+}

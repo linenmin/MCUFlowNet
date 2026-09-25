@@ -40,7 +40,7 @@ from efnas.utils.logger import build_logger
 from efnas.utils.seed import set_global_seed
 from efnas.engine.experiment_protocol import label_ab_protocol, check_resume_protocol
 from efnas.engine.stage_state import stage_steps, save_rng, restore_rng, rng_matches
-from efnas.engine.lr_stage import stage_lr, check_lr_fork, check_crop_fork, check_schedule_fork
+from efnas.engine.lr_stage import stage_lr, check_lr_fork, check_crop_fork, check_schedule_fork, check_refinement_fork
 from efnas.engine.validation_graph import build_validation_graph
 from efnas.engine.recovery_bundle import (
     check_output_target, committed_model, commit_boundary, restore_aliases, keep_milestone, fork_source,
@@ -157,7 +157,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
     data_cfg = config.get("data", {})
     eval_cfg = config.get("eval", {})
     checkpoint_cfg = config.get("checkpoint", {})
-    is_fork = bool(checkpoint_cfg.get('fork_lr_stage') or checkpoint_cfg.get('fork_schedule_continue'))
+    is_fork = bool(checkpoint_cfg.get('fork_lr_stage') or checkpoint_cfg.get('fork_schedule_continue') or checkpoint_cfg.get('fork_refinement'))
     dataset = str(data_cfg.get("dataset", "FC2")).strip().upper()
 
     seed = int(runtime_cfg.get("seed", 42))
@@ -235,6 +235,14 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
         uncertainty_weight=float(train_cfg.get("uncertainty_weight", 1.0)),
     )
     init_saver = tf.compat.v1.train.Saver(var_list=_model_weight_vars(model_name))
+    base_saver=graph_obj['saver']
+    base_variables=list(graph_obj['scope_global_vars'])
+    average=None
+    if train_cfg.get('parameter_average'):
+        from efnas.engine.parameter_average import ParameterAverage
+        average=ParameterAverage(graph_obj['trainable_vars'],base_variables,train_cfg['parameter_average']['decay'])
+        graph_obj['scope_global_vars']=base_variables+average.variables
+        graph_obj['saver']=tf.compat.v1.train.Saver(graph_obj['scope_global_vars'],max_to_keep=0)
     val_h = int(data_cfg.get('eval_input_height', input_h)) if dataset == 'FT3D' else input_h
     val_w = int(data_cfg.get('eval_input_width', input_w)) if dataset == 'FT3D' else input_w
     val_graph, val_input, val_label = graph_obj, input_ph, label_ph
@@ -257,6 +265,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                 raise ValueError("LR fork must use a separate output directory")
             checker = check_crop_fork if checkpoint_cfg.get('fork_crop_stage', False) else check_lr_fork
             if checkpoint_cfg.get('fork_schedule_continue'): checker = check_schedule_fork
+            if checkpoint_cfg.get('fork_refinement'): checker = check_refinement_fork
             checker(read_json(str(original)).get("protocol"), protocol)
         else:
             check_resume_protocol(read_json(str(original)).get("protocol"), protocol)
@@ -294,6 +303,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
             'best_full_monitor_epe': best_full_monitor_epe,
             'model_name': model_name, 'arch_code': [int(v) for v in arch_code],
             'dataset': dataset,
+            **({'ema_updates': global_step-int(checkpoint_cfg.get('fork_parent_step', 0))} if average is not None else {}),
             **({'train_rng_state': save_rng(train_provider.rng)} if hasattr(train_provider, 'rng') else {}),
         }
 
@@ -308,11 +318,12 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                 resume_ckpt = resume_bundle / "checkpoints" / f"{resume_ckpt_name}.ckpt"
                 if not _checkpoint_exists(resume_ckpt):
                     raise FileNotFoundError(f"resume checkpoint not found: {resume_ckpt}")
-                graph_obj["saver"].restore(sess, str(resume_ckpt))
+                restoring_base=bool(checkpoint_cfg.get('fork_refinement'))
+                (base_saver if restoring_base else graph_obj['saver']).restore(sess,str(resume_ckpt))
                 if checkpoint_cfg.get("verify_restored_tensors", False):
                     reader = tf.train.load_checkpoint(str(resume_ckpt))
                     checked = 0
-                    for variable in graph_obj["scope_global_vars"]:
+                    for variable in (base_variables if restoring_base else graph_obj['scope_global_vars']):
                         np.testing.assert_array_equal(sess.run(variable), reader.get_tensor(variable.op.name))
                         checked += 1
                     restore_result = {"checkpoint": str(resume_ckpt), "identical_tensors": checked, "includes_optimizer_and_bn": True}
@@ -343,7 +354,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                                 'state_sha256': hashlib.sha256(str(state['train_rng_state']).encode()).hexdigest()})
                 logger.info("resume checkpoint=%s start_epoch=%d global_step=%d", resume_ckpt, start_epoch, global_step)
                 if is_fork:
-                    expected_start = (checkpoint_cfg['fork_parent_step'] if checkpoint_cfg.get('fork_schedule_continue')
+                    expected_start = (checkpoint_cfg['fork_parent_step'] if checkpoint_cfg.get('fork_schedule_continue') or checkpoint_cfg.get('fork_refinement')
                                       else train_cfg['lr_stage']['start_step'])
                     if global_step != int(expected_start):
                         raise ValueError('Fork parent does not match the expected step')
@@ -366,6 +377,15 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                             "includes_bn": True, "optimizer": "fresh Adam", "stage_step": 0})
                     logger.info("initialized model weights from %s", init_ckpt)
 
+            if average is not None:
+                if checkpoint_cfg.get('fork_refinement') or not checkpoint_cfg.get('load_checkpoint'):
+                    sess.run(average.initialize)
+                expected_updates=global_step-int(checkpoint_cfg.get('fork_parent_step',0))
+                if int(sess.run(average.count)) != expected_updates:
+                    raise ValueError('EMA state does not match restored training step')
+                write_json(str(model_dir/'average_restore_check.json'),{'updates':expected_updates,'global_step':global_step,
+                    'initialized_from_parent':bool(checkpoint_cfg.get('fork_refinement'))})
+
             if runtime_cfg.get("audit_initial_state", False) and not checkpoint_cfg.get("load_checkpoint", False):
                 digest = hashlib.sha256()
                 for variable in sorted(_model_weight_vars(model_name), key=lambda v: v.op.name):
@@ -385,6 +405,13 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
             milestones = runtime_cfg.get('milestone_epochs', [])
             if milestones: keep_milestone(model_dir, milestones)
 
+            if average is not None and global_step == int(checkpoint_cfg.get('fork_parent_step', 0)):
+                from efnas.engine.average_monitor import monitor_average
+                baseline_config=copy.deepcopy(config)
+                baseline_config['eval']['sintel']=eval_cfg['sintel_full_monitor']
+                baseline=_run_sintel_if_configured(model_dir,baseline_config,start_epoch-1,'last')
+                monitor_average(sess,average,model_dir,config,train_provider.samples,start_epoch-1,global_step,baseline)
+
             for epoch_idx in range(start_epoch, min(num_epochs, stop_after_epoch) + 1):
                 epoch_start = time.time()
                 if hasattr(train_provider, "start_epoch"):
@@ -400,13 +427,27 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                 data_seconds = 0.0
                 update_seconds = 0.0
                 first_batch_digest = None
+                first_frame_digest = None
+                motion_audit = {}
+                augmentation_counts = dict(samples=0,requested=0,applied=0,fallback=0)
                 for _ in iterator:
                     tick = time.perf_counter()
-                    input_batch, _, _, label_batch = train_provider.next_batch(batch_size=batch_size)
+                    batch=train_provider.next_batch(batch_size=batch_size)
+                    input_batch, _, _, label_batch = batch
+                    sample_audits=getattr(batch,'audit',None)
+                    if sample_audits:
+                        augmentation_counts['samples']+=len(sample_audits)
+                        for key in ('requested','applied','fallback'):
+                            augmentation_counts[key]+=sum(a[key] for a in sample_audits)
                     data_seconds += time.perf_counter() - tick
                     tick = time.perf_counter()
                     if first_batch_digest is None:
                         first_batch_digest = hashlib.sha256(input_batch.tobytes()).hexdigest()
+                        if average is not None:
+                            first_frame_digest=hashlib.sha256(input_batch[...,:3].tobytes()).hexdigest()
+                            from efnas.data.relative_crop import first_batch_motion_audit
+                            motion_audit=first_batch_motion_audit(label_batch,sample_audits or
+                                [dict(dx=0,dy=0) for _ in range(len(label_batch))])
                     input_batch = standardize_image_tensor(input_batch)
                     logical_batch = int(input_batch.shape[0])
                     micro_slices = _iter_micro_slices(logical_batch, micro_batch_size)
@@ -444,6 +485,8 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                         step_optical += float(result["optical"]) * grad_scale
                         step_uncertainty += float(result["uncertainty"]) * grad_scale
                     apply_result = sess.run({"grad_norm": graph_obj["grad_norm"], "train": graph_obj["train_op"]}, feed_dict={lr_ph: lr_now})
+                    if average is not None:
+                        sess.run(average.update)
                     grad_norms.append(float(apply_result["grad_norm"]))
                     if not np.isfinite(step_loss) or not np.isfinite(apply_result["grad_norm"]):
                         raise FloatingPointError(f"Nonfinite training value at step {global_step}")
@@ -504,6 +547,7 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                             logger.info("sintel_best updated sintel_epe=%.4f", sintel_epe)
 
                 full_result = None
+                average_result = {}
                 full_cfg = eval_cfg.get("sintel_full_monitor", {})
                 full_every = int(full_cfg.get("eval_every_epoch", 0))
                 if full_every > 0 and (epoch_idx % full_every == 0 or epoch_idx == num_epochs):
@@ -514,6 +558,9 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                         best_full_monitor_epe = float(full_result["sintel_epe"])
                         _save_standalone_checkpoint(sess, graph_obj["saver"], ckpt_paths["root"] / "sintel_monitor_best.ckpt",
                                                     epoch_idx, global_step, best_full_monitor_epe, best_full_monitor_epe, arch_code)
+                    if average is not None:
+                        from efnas.engine.average_monitor import monitor_average
+                        average_result=monitor_average(sess,average,model_dir,config,train_provider.samples,epoch_idx,global_step,full_result)
 
                 row: Dict[str, Any] = {
                     "epoch": epoch_idx,
@@ -540,6 +587,10 @@ def train_retrain_v3(config: Dict[str, Any]) -> int:
                 if full_result is not None:
                     row.update({f"full_monitor_{k}": v for k, v in full_result.items() if k in ("sintel_raw_epe", "sintel_legacy_epe", "evaluated_samples")})
                     row["best_full_monitor_epe"] = best_full_monitor_epe
+                if average is not None:
+                    row.update(ema_updates=int(sess.run(average.count)),first_frame_sha256=first_frame_digest,
+                        **{f'first_batch_{k}':v for k,v in motion_audit.items()},
+                        **{f'augmentation_{k}':v for k,v in augmentation_counts.items()},**average_result)
                 eval_history.append(row)
                 _write_csv(eval_history_path, eval_history)
                 _save_json_atomic(state_path, state_record(epoch_idx))
