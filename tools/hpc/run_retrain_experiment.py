@@ -333,6 +333,9 @@ def verify_result(model, cfg, recipe, target):
         reference=recipe['reference_raw_epe'][cfg['model_name']]
         if abs(baseline['raw_native']['sintel_raw_epe']-reference) > 0.001:
             raise ValueError('Starting checkpoint does not reproduce the independently checked C40k score')
+        if not cfg['data']['ft3d_train_augment'].get('enabled'):
+            if rows[0]['first_batch_input_sha256'] != recipe['reference_first_batch_sha256']:
+                raise ValueError('Original-C continuation changed the first training batch')
         for row in rows:
             expected_lr=stage_lr(cfg['train']['lr_stage'],int(row['global_step'])-1)
             if not math.isclose(float(row['lr']),expected_lr,rel_tol=1e-10):
@@ -343,6 +346,11 @@ def verify_result(model, cfg, recipe, target):
             for name in ('raw_bn','ema_bn'):
                 if int(row[f'{name}_evaluated_samples']) != count or not math.isfinite(float(row[f'{name}_sintel_raw_epe'])):
                     raise ValueError('Missing averaged/BN-recalibrated full monitor')
+        for epoch in cfg['runtime']['milestone_epochs']:
+            if recipe['parent_step'] <= epoch*block <= target:
+                frozen=model.parent/'milestones'/f'epoch-{epoch:04d}'/model.name
+                if validate_boundary(frozen)['global_step'] != epoch*block:
+                    raise ValueError('Missing refinement milestone')
     if recipe.get('kind') == 'schedule_continue':
         quick = cfg['eval']['sintel']
         quick_count = len([line for line in Path(quick['sintel_list']).read_text().splitlines() if line.strip()])

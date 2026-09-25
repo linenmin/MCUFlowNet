@@ -5,6 +5,7 @@
   "stage_steps": 20000,
   "midpoint_step": 50000,
   "approved_stop_step": 50000,
+  "reference_first_batch_sha256": "13c7a01052d399a0d4861be47038d8c6ce66b42787b9100a23e5085b1ecc440f",
   "original_lr_stage": {
     "start_step": 0,
     "steps": 60000,
