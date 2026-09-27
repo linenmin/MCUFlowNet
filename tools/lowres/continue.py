@@ -24,7 +24,7 @@ def prepare(runs, model, predecessor, state):
                 raise RuntimeError('Completion checkpoint missing')
             return False
     if not allowed(state):
-        raise RuntimeError('No automatic retry for predecessor state: ' + state)
+        raise RuntimeError('No automatic retry for predecessor state: ' + str(state))
     # Only called after Slurm confirms that the predecessor has ended.
     # An interrupted first epoch may have a directory but no published boundary.
     for phase in ('fc2', 'ft3d'):
