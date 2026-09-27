@@ -14,6 +14,11 @@ export OMP_NUM_THREADS=8 OPENBLAS_NUM_THREADS=1 TF_CPP_MIN_LOG_LEVEL=2
 if [[ "$mode" == prepare ]]; then
     python tools/lowres/test_data.py
     python tools/lowres/data.py --root "$data" --out "$runs/manifests"
+    python tools/lowres/audit_exclusions.py --root "$data" --manifests "$runs/manifests"
+    exit
+fi
+if [[ "$mode" == audit-exclusions ]]; then
+    python tools/lowres/audit_exclusions.py --root "$data" --manifests "$runs/manifests"
     exit
 fi
 nvidia-smi
