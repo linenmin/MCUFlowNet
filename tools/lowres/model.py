@@ -15,6 +15,9 @@ ARCH={'S':[0]*11, 'L':[2,0,0,2,2,1,0,0,0,0,0]}
 def graph(name, seed=42):
     tf.compat.v1.disable_eager_execution()
     tf.compat.v1.reset_default_graph()
+    # Keras initializers also draw seeds from Python; TF's graph seed alone
+    # does not reproduce the same scratch weights across fresh processes.
+    tf.keras.utils.set_random_seed(seed)
     tf.compat.v1.set_random_seed(seed)
     tf.config.experimental.enable_tensor_float_32_execution(False)
     x=tf.compat.v1.placeholder(tf.float32,[None,160,208,6],name='images_bgr_normalized')

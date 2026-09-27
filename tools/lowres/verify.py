@@ -21,6 +21,7 @@ def main():
     full=a.out/'continuous'; resumed=a.out/'resumed'
     run('continuous',['--phase','fc2','--out',str(full)])
     run('interrupted',['--phase','fc2','--out',str(resumed),'--stop-after','1'])
+    assert json.loads((full/'scratch-initialization.json').read_text())==json.loads((resumed/'scratch-initialization.json').read_text()), 'Scratch initialization differs across processes'
     run('resumed',['--phase','fc2','--out',str(resumed),'--resume'])
     s1=json.loads((full/'current.json').read_text()); s2=json.loads((resumed/'current.json').read_text())
     c1=tf.train.load_checkpoint(str(full/s1['checkpoint'])); c2=tf.train.load_checkpoint(str(resumed/s2['checkpoint']))

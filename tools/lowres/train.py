@@ -76,6 +76,12 @@ def main():
     start=time.monotonic()
     with tf.compat.v1.Session(config=sc) as sess:
         sess.run(tf.compat.v1.global_variables_initializer())
+        if not a.resume and not a.init:
+            initial_hash=__import__('hashlib').sha256()
+            for v in g['weights']:
+                initial_hash.update(v.op.name.encode())
+                initial_hash.update(sess.run(v).tobytes())
+            atomic(a.out/'scratch-initialization.json',dict(sha256=initial_hash.hexdigest(),seed=a.seed))
         if a.resume:
             g['saver'].restore(sess,str(a.out/state['checkpoint']))
             reader=tf.train.load_checkpoint(str(a.out/state['checkpoint']))
