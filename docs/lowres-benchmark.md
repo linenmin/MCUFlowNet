@@ -41,7 +41,7 @@
 
 每个完整epoch保存所有TensorFlow变量和确定性样本序列对应的epoch/step；检查点写完后原子替换current.json。保留当前与前一轮检查点、共同监控最优及阶段末尾，不累积400份权重。中途被终止则从上一完整epoch重跑。恢复时核对配方、数据清单SHA和全部变量，禁止悄悄改变日程。
 
-正式启动：tier2.sh train按FC2→FT3D自动衔接；已有current.json则恢复。每任务1张GPU、8CPU、32GB内存。提交时明确集群/账户/分区/时限；运行中不更新服务器checkout。TensorFlow使用Tier2已有2.15.1-foss-2023a-CUDA-12.1.1模块和~/tf_work，不安装新环境。
+正式启动：tier2.sh train按FC2→FT3D自动衔接；已有current.json则恢复。每任务1张GPU、8CPU、32GB内存。提交时明确集群/账户/分区/时限；运行中不更新服务器checkout。TensorFlow使用Tier2已有2.15.1-foss-2023a-CUDA-12.1.1模块和~/tf_work，不安装新环境。模块配套NumPy/SciPy优先，tf_work仅补充依赖，避免旧虚拟环境覆盖模块的兼容组合。Python、NumPy、Keras和TensorFlow共同设种子，短跑还核对跨进程初始权重SHA。
 
 ## 板端预检结论
 
