@@ -43,9 +43,9 @@
 
 正式启动：tier2.sh train按FC2→FT3D自动衔接；已有current.json则恢复。每任务1张GPU、8CPU、32GB内存。提交时明确集群/账户/分区/时限；运行中不更新服务器checkout。TensorFlow使用Tier2已有2.15.1-foss-2023a-CUDA-12.1.1模块和~/tf_work，不安装新环境。模块配套NumPy/SciPy优先，tf_work仅补充依赖，避免旧虚拟环境覆盖模块的兼容组合。Python、NumPy、Keras和TensorFlow共同设种子，短跑还核对跨进程初始权重SHA。
 
-## 板端预检结论
-
 夜间续跑使用`continue.sh`＋`continue.py`，通过Slurm的afterany依赖预排两段、每段最多12小时。仅前段TIMEOUT/NODE_FAIL/PREEMPTED才恢复；FAILED/OOM/CANCELLED停止。全部阶段完成则直接退出，不重复训练。若首轮中断而尚无完整检查点，将该阶段半成品改名保留，再从该阶段起点恢复。控制器可从已提交版本复制到独立运行控制目录，实际训练始终调用原来锁定的checkout，不在线更新训练代码。具体作业编号与状态只记实验记录及运行回执。
+
+## 板端预检结论
 
 2026-09-27旧权重实测：Edge208×160为6.097 FPS，S/L224×160为10.390/5.918 FPS，均通过模型CRC及连续预览；下一档Edge224×160缺131064 B，S/L240×176分别缺123128 B。限当前带相机/预览固件，不代表板卡绝对上限。
 
