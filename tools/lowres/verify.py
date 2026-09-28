@@ -30,11 +30,11 @@ def main():
         x,y=c1.get_tensor(name),c2.get_tensor(name)
         np.testing.assert_allclose(x,y,rtol=1e-5,atol=1e-6,err_msg=name)
         errors[name]=float(np.max(np.abs(x-y)))
-    assert s1['step']==s2['step']==6
+    assert s1['step']==s2['step']==9
     assert [r['order_sha'] for r in s1['history']]==[r['order_sha'] for r in s2['history']]
     run('ft3d',['--phase','ft3d','--out',str(a.out/'ft3d'),'--init',str(full)])
     result=dict(passed=True,model=a.model,compared_variables=len(errors),max_abs_difference=max(errors.values()),
-                fc2_samples_per_epoch=65,last_batch=1,restored_step=6,phase_transition=json.loads((a.out/'ft3d/initialization-audit.json').read_text()),
+                fc2_samples_per_epoch=65,last_batch=1,restored_step=9,phase_transition=json.loads((a.out/'ft3d/initialization-audit.json').read_text()),
                 fc2_first_epoch_seconds=s1['history'][0]['train_seconds'],fc2_second_epoch_seconds=s1['history'][1]['train_seconds'])
     (a.out/'acceptance.json').write_text(json.dumps(result,indent=2)+'\n'); print(json.dumps(result),flush=True)
 

@@ -4,7 +4,6 @@ import csv
 import json
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import time
 import cv2
@@ -12,6 +11,7 @@ import numpy as np
 import tensorflow as tf
 from data import ROOT, batches, digest, read_sample
 from model import graph
+from checkpoint_cleanup import prune
 
 
 def atomic(path, value):
@@ -51,7 +51,7 @@ def main():
     val_file=a.manifests/'fc2_val.json'
     mon_file=a.manifests/'sintel_monitor.json'
     rows=json.loads(train_file.read_text()); val=json.loads(val_file.read_text()); monitor=json.loads(mon_file.read_text())
-    epochs=2 if a.probe else (400 if a.phase=='fc2' else 50)
+    epochs=3 if a.probe else (400 if a.phase=='fc2' else 50)
     every=1 if a.probe or a.phase=='ft3d' else 10
     lr=1e-4 if a.phase=='fc2' else 1e-5
     if a.probe: rows, val, monitor=rows[:65],val[:2],monitor[:2]
@@ -86,6 +86,7 @@ def main():
             g['saver'].restore(sess,str(a.out/state['checkpoint']))
             reader=tf.train.load_checkpoint(str(a.out/state['checkpoint']))
             assert all(np.array_equal(sess.run(v),reader.get_tensor(v.op.name)) for v in tf.compat.v1.global_variables())
+            del reader  # Release the NFS file handle before retention removes this boundary.
             assert int(sess.run(g['step']))==state['step']
             atomic(a.out/'restore-audit.json',dict(all_variables_exact=True,step=state['step'],epoch=state['epoch']))
         elif a.init:
@@ -95,6 +96,7 @@ def main():
             g['weight_saver'].restore(sess,str(a.init/parent['checkpoint']))
             reader=tf.train.load_checkpoint(str(a.init/parent['checkpoint']))
             assert all(np.array_equal(sess.run(v),reader.get_tensor(v.op.name)) for v in g['weights'])
+            del reader
             assert sess.run(g['step'])==0
             slots=[v for v in tf.compat.v1.global_variables() if '/Adam' in v.name]
             assert slots and all(np.all(sess.run(v)==0) for v in slots)
@@ -136,10 +138,7 @@ def main():
             atomic(current,state)  # Publish only after all checkpoint files are closed.
             atomic(a.out/'metrics.json',history)
             # Keep the current and previous boundary; never touch other runs.
-            obsolete=a.out/f'epoch-{epoch-2:04d}'
-            if obsolete.is_dir():
-                assert obsolete.resolve().parent==a.out.resolve() and epoch>2
-                shutil.rmtree(obsolete)
+            prune(a.out, epoch)
             print(json.dumps(metric),flush=True)
         atomic(a.out/'status.json',dict(completed=state['epoch']==epochs,epoch=state['epoch'],step=state['step'],elapsed_seconds=time.monotonic()-start))
 
