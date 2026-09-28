@@ -48,7 +48,7 @@ def graph(name, seed=42):
         train=optimizer.apply_gradients(grads,global_step=step)
     epe=tf.reduce_mean(tf.norm(prediction-y,axis=-1))
     return dict(x=x,y=y,training=training,lr=lr,loss=terms['total'],prediction=prediction,
-                epe=epe,train=train,step=step,weights=weights,
+                epe=epe,train=train,step=step,weights=weights,gradients=[g for g,v in grads],
                 saver=tf.compat.v1.train.Saver(max_to_keep=0),
                 weight_saver=tf.compat.v1.train.Saver(weights,max_to_keep=0),
                 bn=[v for v in weights if 'moving_mean' in v.name])
