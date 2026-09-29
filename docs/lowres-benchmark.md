@@ -88,3 +88,11 @@ Python3.12下仅对tf-keras初始化时传入randint的整数浮点上界作兼�
 `verify_comparison.py`以65对真实训练图像运行完整20轮日程，比较连续与第7轮中断后恢复的所有变量逐值一致，检查两配方起点/样本顺序相同、最佳权重含Adam及保留策略。短跑只用2对FC2与2对Sintel验证，不报告为模型成绩；实际66对→32/34及全量清单的分批覆盖另由数值测试核对。`ft3d_compare.sh probe`运行此验收；正式数组0/1/2为固定Edge/S/L，3/4/5为衰减Edge/S/L，验收失败不启动正式训练。
 
 每任务1张H100、8CPU、32GB RAM；正式阶段一次请求12小时，并预排一段同配方续跑，仅TIMEOUT/NODE_FAIL/PREEMPTED允许恢复。FAILED/OOM/CANCELLED停止，已完成20轮则退出而不重复训练。任务号、实测状态和输出目录统一留在实验记录与Runs回执。此20轮对照可判断该预算下的两种安排，不声称已经充分优化或证明架构最终排名。
+
+## 已有权重的误差定位
+
+`tools/lowres/audit_gap.py`只读取20轮余弦组的三份最佳权重，逐对评测固定845对Sintel；记录原图/部署尺寸EPE、水平/垂直误差、逐场景结果和按真实运动大小划分的像素误差。检查所有模型张量与checkpoint逐值相同、推理前后未变，并要求总分复现训练记录至1e-5以内。不执行优化器或BN更新，不生成新候选权重。
+
+在已有本机GPU容器执行：`python tools/lowres/audit_gap.py --data /datasets --experiment /runs/LOWRES-BENCH-01/ft3d-lr20-20260929 --out /runs/LOWRES-BENCH-01/gap-audit-20260929/inference`。输出目录须不存在，避免覆盖历史诊断。随后`python tools/lowres/summarize_gap.py --runs /runs`将逐图结果、FC2/FT3D曲线与旧公开权重的同845对评分汇总，保留来源SHA256。
+
+原图与小图的像素单位不同，不跨列比较绝对误差。运动分组采用原图GT模长，边界为10和40像素；分组对总差距的贡献按像素数加权。旧S/L缩图参照为224×160、Edge为208×160，不能冒充同尺寸对照。场景统计使用已参与开发的监控集，不解释为独立测试显著性。
