@@ -23,6 +23,10 @@ class ResizeTests(unittest.TestCase):
             sizes=[]; ids=[]
             for x,y,idx in batches([row]*65,p,42,1,workers=2): sizes.append(len(x)); ids.extend(idx.tolist())
             self.assertEqual(sizes,[32,32,1]); self.assertEqual(sorted(ids),list(range(65)))
+            merged=list(batches([row]*66,p,42,1,workers=2,merge_tail=True))
+            self.assertEqual([len(x) for x,y,idx in merged],[32,34])
+            original_ids=np.concatenate([idx for x,y,idx in batches([row]*66,p,42,1,workers=2)])
+            np.testing.assert_array_equal(np.concatenate([idx for x,y,idx in merged]),original_ids)
 
 
 if __name__=='__main__': unittest.main()

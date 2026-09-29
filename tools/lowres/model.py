@@ -1,6 +1,7 @@
 """Original model topology, explicit training BN, common pixel-unit loss."""
 from pathlib import Path
 import sys
+import random
 import tensorflow as tf
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -13,6 +14,22 @@ ARCH={'S':[0]*11, 'L':[2,0,0,2,2,1,0,0,0,0,0]}
 
 
 def graph(name, seed=42):
+    # Legacy tf-keras uses randint(1, 1e9); Python 3.12 rejects that float.
+    # Scope the compatibility adjustment to graph construction only.
+    original = random.Random.randint
+    def integral_randint(self, lo, hi):
+        if int(lo) != lo or int(hi) != hi:
+            raise ValueError('Non-integral initializer bounds')
+        return original(self, int(lo), int(hi))
+    if sys.version_info >= (3, 12):
+        random.Random.randint = integral_randint
+    try:
+        return _graph(name, seed)
+    finally:
+        random.Random.randint = original
+
+
+def _graph(name, seed=42):
     tf.compat.v1.disable_eager_execution()
     tf.compat.v1.reset_default_graph()
     # Keras initializers also draw seeds from Python; TF's graph seed alone
@@ -51,4 +68,4 @@ def graph(name, seed=42):
                 epe=epe,train=train,step=step,weights=weights,gradients=[g for g,v in grads],
                 saver=tf.compat.v1.train.Saver(max_to_keep=0),
                 weight_saver=tf.compat.v1.train.Saver(weights,max_to_keep=0),
-                bn=[v for v in weights if 'moving_mean' in v.name])
+                bn=[v for v in weights if 'moving_mean' in v.name or 'moving_variance' in v.name])

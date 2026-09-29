@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import cv2
 import numpy as np
+from protocol import batch_ranges
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'EdgeFlowNAS'))
@@ -45,17 +46,19 @@ def read_sample(root, row, sintel=False):
     return pair.astype(np.float32)/255*2-1, small, flow
 
 
-def batches(rows, root, seed, epoch, batch=32, workers=8, shuffle=True):
+def batches(rows, root, seed, epoch, batch=32, workers=8, shuffle=True, merge_tail=False):
     order = np.random.default_rng(np.random.SeedSequence([seed, epoch])).permutation(len(rows)) if shuffle else np.arange(len(rows))
     # Exactly one next batch in flight; the last batch is not wrapped/padded.
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        def submit(start):
-            return [pool.submit(read_sample, root, rows[int(i)]) for i in order[start:start+batch]]
+        ranges = batch_ranges(len(order), batch, merge_tail)
+        def submit(index):
+            start, end = ranges[index]
+            return [pool.submit(read_sample, root, rows[int(i)]) for i in order[start:end]]
         pending = submit(0)
-        for start in range(0, len(order), batch):
+        for index, (start, end) in enumerate(ranges):
             values = [f.result() for f in pending]
-            pending = submit(start+batch) if start+batch < len(order) else []
-            yield np.stack([v[0] for v in values]), np.stack([v[1] for v in values]), order[start:start+batch]
+            pending = submit(index+1) if index+1 < len(ranges) else []
+            yield np.stack([v[0] for v in values]), np.stack([v[1] for v in values]), order[start:end]
 
 
 def prepare(root, out):

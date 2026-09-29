@@ -4,11 +4,13 @@ import re
 import shutil
 
 
-def prune(out, epoch):
+def prune(out, epoch, keep_every=0):
     deferred = []
     for folder in sorted(out.glob('epoch-*')):
         match = re.fullmatch(r'epoch-(\d{4,})', folder.name)
         if not match or int(match[1]) > epoch - 2:
+            continue
+        if keep_every and int(match[1]) % keep_every == 0:
             continue
         if folder.is_symlink() or folder.resolve().parent != out.resolve():
             raise ValueError('Unexpected checkpoint path: ' + str(folder))

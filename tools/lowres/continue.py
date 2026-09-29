@@ -40,11 +40,37 @@ def prepare(runs, model, predecessor, state):
     return True
 
 
+def prepare_phase(runs, phase_out, model, predecessor, state, epochs):
+    root=Path(runs).resolve(); folder=Path(phase_out).resolve()
+    if folder not in [root/s/'seed42'/model/'ft3d' for s in ('constant','cosine')]:
+        raise ValueError('Unexpected comparison phase path')
+    if state=='CANCELLED': raise RuntimeError('Predecessor was cancelled')
+    current=folder/'current.json'
+    if current.exists():
+        value=json.loads(current.read_text())
+        cfg=value['config']
+        if cfg['epochs']!=epochs or cfg['model']!=model or cfg['phase']!='ft3d':
+            raise ValueError('Mismatched phase protocol')
+        if value['epoch']==epochs:
+            if not (folder/(value['checkpoint']+'.index')).is_file():
+                raise RuntimeError('Completion checkpoint missing')
+            return False
+    if not allowed(state): raise RuntimeError('No automatic retry for state: '+str(state))
+    if folder.exists() and not current.exists():
+        if Path(phase_out).is_symlink(): raise ValueError('Unexpected phase symlink')
+        saved=folder.with_name(folder.name+'.incomplete-after-'+predecessor)
+        if saved.exists(): raise RuntimeError('Recovery destination exists')
+        folder.rename(saved)
+    return True
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--runs', type=Path, required=True)
     p.add_argument('--model', choices=['edge', 'S', 'L'], required=True)
     p.add_argument('--predecessor', required=True)
+    p.add_argument('--phase-out',type=Path)
+    p.add_argument('--epochs',type=int,default=50)
     a = p.parse_args()
     if not all(c in '0123456789_' for c in a.predecessor):
         raise ValueError('Invalid predecessor ID')
@@ -60,7 +86,8 @@ def main():
             break
         time.sleep(2)
     print('Predecessor:', a.predecessor, 'state:', state, flush=True)
-    resume = prepare(a.runs, a.model, a.predecessor, state)
+    resume = (prepare_phase(a.runs,a.phase_out,a.model,a.predecessor,state,a.epochs)
+              if a.phase_out else prepare(a.runs, a.model, a.predecessor, state))
     print('Resume from the last complete epoch' if resume else 'All phases complete; no training needed', flush=True)
     return 10 if resume else 0
 
