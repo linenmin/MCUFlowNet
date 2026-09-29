@@ -31,4 +31,12 @@ with tempfile.TemporaryDirectory() as tmp:
     (final / 'current.json').write_text(json.dumps(dict(epoch=50,config=dict(epochs=50,model='S',phase='ft3d'),checkpoint='model')))
     (final / 'model.index').touch()
     assert not gate.prepare(root, 'S', '125_1', 'COMPLETED')
+    (final / 'current.json').write_text(json.dumps(dict(epoch=20,config=dict(epochs=20,model='S',phase='ft3d'),checkpoint='model')))
+    assert not gate.prepare(root, 'S', '126_1', 'COMPLETED', epochs=20)
+    try:
+        gate.prepare(root, 'S', '126_1', 'CANCELLED', epochs=20)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError('A cancelled predecessor must not be ignored')
 print('Continuation gate checks passed')

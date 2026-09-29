@@ -20,6 +20,13 @@ class ResizeTests(unittest.TestCase):
             np.testing.assert_allclose(y,np.broadcast_to([20,-20],y.shape))
             np.testing.assert_allclose(original,flow)
             np.testing.assert_allclose(x,128/255*2-1,atol=1e-7)
+            x2,y2,_=read_sample(p,row,hw=(320,416))
+            self.assertEqual(x2.shape,(320,416,6))
+            np.testing.assert_allclose(y2,np.broadcast_to([40,-40],y2.shape))
+            # Both deployment grids recover the same source-pixel displacement.
+            for target,shape in ((y,(160,208)),(y2,(320,416))):
+                recovered=cv2.resize(target,(w,h))*np.array([w/shape[1],h/shape[0]])
+                np.testing.assert_allclose(recovered,flow)
             sizes=[]; ids=[]
             for x,y,idx in batches([row]*65,p,42,1,workers=2): sizes.append(len(x)); ids.extend(idx.tolist())
             self.assertEqual(sizes,[32,32,1]); self.assertEqual(sorted(ids),list(range(65)))

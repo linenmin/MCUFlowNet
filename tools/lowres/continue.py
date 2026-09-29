@@ -10,14 +10,14 @@ def allowed(state):
     return state in {'TIMEOUT', 'NODE_FAIL', 'PREEMPTED'}
 
 
-def prepare(runs, model, predecessor, state):
+def prepare(runs, model, predecessor, state, epochs=50):
     if state == 'CANCELLED':
         raise RuntimeError('Predecessor was cancelled; do not undo a user stop')
     root = (Path(runs) / 'seed42' / model).resolve()
     final = root / 'ft3d' / 'current.json'
     if final.exists():
         value = json.loads(final.read_text())
-        if value['epoch'] == value['config']['epochs'] == 50:
+        if value['epoch'] == value['config']['epochs'] == epochs:
             if value['config']['model'] != model or value['config']['phase'] != 'ft3d':
                 raise RuntimeError('Mismatched completion record')
             if not (final.parent / (value['checkpoint'] + '.index')).is_file():
@@ -87,7 +87,7 @@ def main():
         time.sleep(2)
     print('Predecessor:', a.predecessor, 'state:', state, flush=True)
     resume = (prepare_phase(a.runs,a.phase_out,a.model,a.predecessor,state,a.epochs)
-              if a.phase_out else prepare(a.runs, a.model, a.predecessor, state))
+              if a.phase_out else prepare(a.runs, a.model, a.predecessor, state, a.epochs))
     print('Resume from the last complete epoch' if resume else 'All phases complete; no training needed', flush=True)
     return 10 if resume else 0
 

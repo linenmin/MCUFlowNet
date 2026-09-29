@@ -25,11 +25,11 @@ def evaluate(sess,g,rows,root,sintel=False):
     # Every sample once; validation never updates BN or optimizer.
     errors=[]
     for row in rows:
-        x,small,original=read_sample(root,row,sintel)
+        x,small,original=read_sample(root,row,sintel,hw=g['hw'])
         flow=sess.run(g['prediction'],{g['x']:x[None]})[0]
         if sintel:
             h,w=original.shape[:2]
-            flow=cv2.resize(flow,(w,h),interpolation=cv2.INTER_LINEAR)*np.array([w/208,h/160],np.float32)
+            flow=cv2.resize(flow,(w,h),interpolation=cv2.INTER_LINEAR)*np.array([w/g['hw'][1],h/g['hw'][0]],np.float32)
             label=original
         else: label=small
         errors.append(float(np.linalg.norm(flow-label,axis=-1).mean(dtype=np.float64)))
@@ -50,6 +50,9 @@ def main():
     p.add_argument('--min-lr',type=float,default=1e-6)
     p.add_argument('--merge-tail',action='store_true')
     p.add_argument('--keep-every',type=int,default=0)
+    p.add_argument('--height',type=int,default=160)
+    p.add_argument('--width',type=int,default=208)
+    p.add_argument('--bn-mode',choices=['train','frozen'],default='train')
     p.add_argument('--code-commit',help='Verified host commit for containers without accessible worktree metadata')
     a=p.parse_args()
     if a.phase=='fc2' and a.init: raise ValueError('FC2 must start from scratch')
@@ -64,11 +67,16 @@ def main():
     lr=1e-4 if a.phase=='fc2' else 1e-5
     learning_rate(1,epochs,lr,a.lr_schedule,a.min_lr)
     if a.probe: rows, val, monitor=rows[:65],val[:2],monitor[:2]
-    config=dict(model=a.model,phase=a.phase,seed=a.seed,epochs=epochs,batch=32,hw=[160,208],
+    hw=(a.height,a.width)
+    if any(n<=0 or n%16 for n in hw) or (a.bn_mode=='frozen' and a.model!='edge'):
+        raise ValueError('Invalid geometry or frozen-BN model')
+    bn_description=('training_on_eval_off_momentum0.9_epsilon1e-5' if a.bn_mode=='train'
+                    else 'training_off_eval_off_initial_mean0_variance1_gamma_beta_trainable_epsilon1e-5')
+    config=dict(model=a.model,phase=a.phase,seed=a.seed,epochs=epochs,batch=32,hw=list(hw),
                 lr=lr,probe=a.probe,manifest_sha={f.name:digest(f) for f in (train_file,val_file,mon_file)},
                 samples=len(rows),steps_per_epoch=len(batch_ranges(len(rows),32,a.merge_tail)),flow_units='resized_pixels_no_clip',
                 images='BGR_-1_1_area',loss='shared_multiscale_L1_LinearSoftplus_0.125_0.25_0.5',
-                bn='training_on_eval_off_momentum0.9_epsilon1e-5',optimizer='Adam_0.9_0.999_1e-8',
+                bn=bn_description,optimizer='Adam_0.9_0.999_1e-8',
                 init=str(a.init.resolve()) if a.init else None,
                 lr_schedule=a.lr_schedule,min_lr=a.min_lr,merge_tail=a.merge_tail,keep_every=a.keep_every)
     current=a.out/'current.json'
@@ -78,7 +86,7 @@ def main():
     else:
         a.out.mkdir(parents=True,exist_ok=False)
         state=dict(epoch=0,step=0,history=[],best=None,config=config)
-    g=graph(a.model,a.seed)
+    g=graph(a.model,a.seed,hw,a.bn_mode)
     devices=tf.config.list_physical_devices('GPU')
     if not devices: raise RuntimeError('GPU required')
     sc=tf.compat.v1.ConfigProto(intra_op_parallelism_threads=a.workers,inter_op_parallelism_threads=2,allow_soft_placement=False)
@@ -103,6 +111,8 @@ def main():
             parent=json.loads((a.init/'current.json').read_text())
             if parent['epoch']!=parent['config']['epochs'] or parent['config']['phase']!='fc2' or parent['config']['model']!=a.model:
                 raise ValueError('Not a completed matching FC2 endpoint')
+            if parent['config']['hw']!=list(hw) or parent['config']['bn']!=bn_description:
+                raise ValueError('FC2 source uses a different resolution or BN protocol')
             g['weight_saver'].restore(sess,str(a.init/parent['checkpoint']))
             reader=tf.train.load_checkpoint(str(a.init/parent['checkpoint']))
             assert all(np.array_equal(sess.run(v),reader.get_tensor(v.op.name)) for v in g['weights'])
@@ -130,7 +140,7 @@ def main():
             print(json.dumps(dict(event='epoch_start',epoch=epoch,lr=epoch_lr,steps=config['steps_per_epoch'])),flush=True)
             before=sess.run(g['bn']); loss_sum=epe_sum=0.; count=0
             tick=time.monotonic(); order_seen=[]; batch_times=[]
-            for x,y,ids in batches(rows,a.data,a.seed,epoch,workers=a.workers,merge_tail=a.merge_tail):
+            for x,y,ids in batches(rows,a.data,a.seed,epoch,workers=a.workers,merge_tail=a.merge_tail,hw=hw):
                 bt=time.monotonic()
                 _,loss,epe=sess.run([g['train'],g['loss'],g['epe']],{g['x']:x,g['y']:y,g['training']:True,g['lr']:epoch_lr})
                 if not np.isfinite([loss,epe]).all(): raise FloatingPointError((epoch,loss,epe))
@@ -140,7 +150,8 @@ def main():
             assert count==len(rows) and sorted(order_seen)==list(range(len(rows)))
             assert int(sess.run(g['step']))==epoch*config['steps_per_epoch']
             after=sess.run(g['bn']); bn_change=max(float(np.max(np.abs(x-y))) for x,y in zip(before,after))
-            if epoch==1 and bn_change==0: raise ValueError('BN did not update')
+            if a.bn_mode=='train' and epoch==1 and bn_change==0: raise ValueError('BN did not update')
+            if a.bn_mode=='frozen' and bn_change!=0: raise ValueError('Frozen BN statistics changed')
             metric=dict(epoch=epoch,step=int(sess.run(g['step'])),lr=epoch_lr,samples=count,loss=loss_sum/count,
                         last_batch=len(x),
                         train_epe_pixels=epe_sum/count,train_seconds=time.monotonic()-tick,

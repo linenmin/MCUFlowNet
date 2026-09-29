@@ -21,7 +21,7 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def read_sample(root, row, sintel=False):
+def read_sample(root, row, sintel=False, hw=HW):
     paths = [Path(root) / p for p in row]
     images = [cv2.imread(str(p)) for p in paths[:2]]
     if any(x is None for x in images):
@@ -40,20 +40,20 @@ def read_sample(root, row, sintel=False):
         images = [im[y:y+416, x:x+1024] for im in images]
         flow = flow[y:y+416, x:x+1024]
     h, w = flow.shape[:2]
-    pair = np.concatenate([cv2.resize(im, HW[::-1], interpolation=cv2.INTER_AREA) for im in images], -1)
-    small = cv2.resize(flow, HW[::-1], interpolation=cv2.INTER_LINEAR)
-    small *= np.array([HW[1]/w, HW[0]/h], np.float32)
+    pair = np.concatenate([cv2.resize(im, hw[::-1], interpolation=cv2.INTER_AREA) for im in images], -1)
+    small = cv2.resize(flow, hw[::-1], interpolation=cv2.INTER_LINEAR)
+    small *= np.array([hw[1]/w, hw[0]/h], np.float32)
     return pair.astype(np.float32)/255*2-1, small, flow
 
 
-def batches(rows, root, seed, epoch, batch=32, workers=8, shuffle=True, merge_tail=False):
+def batches(rows, root, seed, epoch, batch=32, workers=8, shuffle=True, merge_tail=False, hw=HW):
     order = np.random.default_rng(np.random.SeedSequence([seed, epoch])).permutation(len(rows)) if shuffle else np.arange(len(rows))
     # Exactly one next batch in flight; the last batch is not wrapped/padded.
     with ThreadPoolExecutor(max_workers=workers) as pool:
         ranges = batch_ranges(len(order), batch, merge_tail)
         def submit(index):
             start, end = ranges[index]
-            return [pool.submit(read_sample, root, rows[int(i)]) for i in order[start:end]]
+            return [pool.submit(read_sample, root, rows[int(i)], hw=hw) for i in order[start:end]]
         pending = submit(0)
         for index, (start, end) in enumerate(ranges):
             values = [f.result() for f in pending]
