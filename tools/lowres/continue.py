@@ -10,15 +10,17 @@ def allowed(state):
     return state in {'TIMEOUT', 'NODE_FAIL', 'PREEMPTED'}
 
 
-def prepare(runs, model, predecessor, state, epochs=50):
+def prepare(runs, model, predecessor, state, epochs=50, final_phase='ft3d'):
+    if final_phase not in ('fc2', 'ft3d'):
+        raise ValueError('Invalid final phase')
     if state == 'CANCELLED':
         raise RuntimeError('Predecessor was cancelled; do not undo a user stop')
     root = (Path(runs) / 'seed42' / model).resolve()
-    final = root / 'ft3d' / 'current.json'
+    final = root / final_phase / 'current.json'
     if final.exists():
         value = json.loads(final.read_text())
         if value['epoch'] == value['config']['epochs'] == epochs:
-            if value['config']['model'] != model or value['config']['phase'] != 'ft3d':
+            if value['config']['model'] != model or value['config']['phase'] != final_phase:
                 raise RuntimeError('Mismatched completion record')
             if not (final.parent / (value['checkpoint'] + '.index')).is_file():
                 raise RuntimeError('Completion checkpoint missing')
@@ -27,7 +29,7 @@ def prepare(runs, model, predecessor, state, epochs=50):
         raise RuntimeError('No automatic retry for predecessor state: ' + str(state))
     # Only called after Slurm confirms that the predecessor has ended.
     # An interrupted first epoch may have a directory but no published boundary.
-    for phase in ('fc2', 'ft3d'):
+    for phase in (('fc2',) if final_phase == 'fc2' else ('fc2', 'ft3d')):
         folder = root / phase
         if folder.is_dir() and not (folder / 'current.json').exists():
             if folder.is_symlink() or folder.resolve().parent != root:
@@ -71,6 +73,7 @@ def main():
     p.add_argument('--predecessor', required=True)
     p.add_argument('--phase-out',type=Path)
     p.add_argument('--epochs',type=int,default=50)
+    p.add_argument('--final-phase',choices=['fc2','ft3d'],default='ft3d')
     a = p.parse_args()
     if not all(c in '0123456789_' for c in a.predecessor):
         raise ValueError('Invalid predecessor ID')
@@ -87,7 +90,7 @@ def main():
         time.sleep(2)
     print('Predecessor:', a.predecessor, 'state:', state, flush=True)
     resume = (prepare_phase(a.runs,a.phase_out,a.model,a.predecessor,state,a.epochs)
-              if a.phase_out else prepare(a.runs, a.model, a.predecessor, state, a.epochs))
+              if a.phase_out else prepare(a.runs, a.model, a.predecessor, state, a.epochs, a.final_phase))
     print('Resume from the last complete epoch' if resume else 'All phases complete; no training needed', flush=True)
     return 10 if resume else 0
 

@@ -16,6 +16,7 @@ def main():
     p.add_argument('--bn-mode',choices=['train','frozen'],default='train')
     p.add_argument('--data',required=True); p.add_argument('--manifests',required=True)
     p.add_argument('--out',type=Path,required=True); p.add_argument('--code-commit')
+    p.add_argument('--fc2-only',action='store_true')
     a=p.parse_args(); a.out.mkdir(parents=True,exist_ok=False)
     base=[sys.executable,str(Path(__file__).with_name('train.py')),'--model',a.model,
           '--height',str(a.height),'--width',str(a.width),'--bn-mode',a.bn_mode,
@@ -26,7 +27,7 @@ def main():
         with (a.out/(name+'.log')).open('w') as stream:
             subprocess.run(base+args,env=env,stdout=stream,stderr=subprocess.STDOUT,check=True)
     outcomes={}
-    for phase in ('fc2','ft3d'):
+    for phase in (('fc2',) if a.fc2_only else ('fc2','ft3d')):
         full=a.out/(phase+'-continuous'); resumed=a.out/(phase+'-resumed')
         opts=['--phase',phase]
         if phase=='ft3d': opts+=['--init',str(a.out/'fc2-continuous'),'--merge-tail','--lr-schedule','cosine']

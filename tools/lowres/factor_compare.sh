@@ -19,28 +19,23 @@ if [[ "$mode" == probe ]]; then
     python tools/lowres/test_data.py
     python tools/lowres/test_protocol.py
     python tools/lowres/verify_factors.py --model "$model" --height "$height" --width "$width" \
-        --bn-mode "$bn" --data "$data" --manifests "$root/manifests" --out "$probe"
+        --bn-mode "$bn" --data "$data" --manifests "$root/manifests" --out "$probe" --fc2-only
 elif [[ "$mode" == train ]]; then
     python -c 'import json,sys; assert json.load(open(sys.argv[1]))["passed"]' "$probe/acceptance.json"
     if [[ -n "${5:-}" ]]; then
         set +e
         python tools/lowres/continue.py --runs "$root/$variant" --model "$model" \
-            --epochs 20 --predecessor "${5}_${index}"
+            --epochs 50 --final-phase fc2 --predecessor "${5}_${index}"
         decision=$?
         set -e
         [[ "$decision" != 0 ]] || exit 0
         [[ "$decision" == 10 ]] || exit "$decision"
     fi
-    for phase in fc2 ft3d; do
+    for phase in fc2; do
         out="$root/$variant/seed42/$model/$phase"
         args=(--model "$model" --phase "$phase" --data "$data" --manifests "$root/manifests"
               --out "$out" --seed 42 --height "$height" --width "$width" --bn-mode "$bn")
-        if [[ "$phase" == fc2 ]]; then
-            args+=(--epochs 400 --lr-schedule constant --keep-every 100)
-        else
-            args+=(--epochs 20 --lr-schedule cosine --min-lr 1e-6 --merge-tail --keep-every 5
-                   --init "$root/$variant/seed42/$model/fc2")
-        fi
+        args+=(--epochs 50 --lr-schedule constant --keep-every 10)
         [[ ! -f "$out/current.json" ]] || args+=(--resume)
         python tools/lowres/train.py "${args[@]}"
     done

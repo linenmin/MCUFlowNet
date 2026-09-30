@@ -39,4 +39,20 @@ with tempfile.TemporaryDirectory() as tmp:
         pass
     else:
         raise AssertionError('A cancelled predecessor must not be ignored')
+with tempfile.TemporaryDirectory() as tmp:
+    root=Path(tmp); phase=root/'seed42/edge/fc2'; phase.mkdir(parents=True)
+    (phase/'model.index').touch()
+    value=dict(epoch=20,config=dict(epochs=50,model='edge',phase='fc2'),checkpoint='model')
+    (phase/'current.json').write_text(json.dumps(value))
+    assert gate.prepare(root,'edge','127_0','TIMEOUT',50,'fc2')
+    value['epoch']=50
+    (phase/'current.json').write_text(json.dumps(value))
+    assert not gate.prepare(root,'edge','128_0','COMPLETED',50,'fc2')
+    assert not (phase.parent/'ft3d').exists()
+    try:
+        gate.prepare(root,'edge','128_0','CANCELLED',50,'fc2')
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError('FC2 completion must not override cancellation')
 print('Continuation gate checks passed')
