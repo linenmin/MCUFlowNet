@@ -35,6 +35,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--data', type=Path, required=True)
     parser.add_argument('--experiment', type=Path, required=True)
+    parser.add_argument('--manifests', type=Path)
+    parser.add_argument('--kind', choices=('large-fc2', 'small-fc2', 'small-ft3d'), default='large-fc2')
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--smoke', action='store_true')
     args = parser.parse_args()
@@ -43,28 +45,28 @@ def main():
     if not tf.config.list_physical_devices('GPU'):
         raise RuntimeError('The existing local GPU runtime is required')
     args.out.mkdir(parents=True)
-    hw = (320, 416)
-    paths = {k: args.experiment / 'manifests' / (k + '.json')
-             for k in ('fc2_train', 'sintel_monitor')}
-    train_rows = json.loads(paths['fc2_train'].read_text())
+    hw = (320, 416) if args.kind == 'large-fc2' else (160, 208)
+    calibration_name = 'ft3d_train' if args.kind == 'small-ft3d' else 'fc2_train'
+    manifest_root = args.manifests or args.experiment / 'manifests'
+    paths = {k: manifest_root / (k + '.json') for k in (calibration_name, 'sintel_monitor')}
+    train_rows = json.loads(paths[calibration_name].read_text())
     monitor = json.loads(paths['sintel_monitor'].read_text())
-    if len(train_rows) != 22232 or len(monitor) != 845:
+    if len(train_rows) != (80578 if calibration_name == 'ft3d_train' else 22232) or len(monitor) != 845:
         raise ValueError('Unexpected training/monitor manifest')
     ids = np.random.default_rng(20260930).permutation(len(train_rows))[:64 if args.smoke else 1024]
     rows = monitor[:2] if args.smoke else monitor
-    epochs = (30,) if args.smoke else (30, 50)
-    print('Caching shared FC2 calibration and Sintel evaluation inputs', flush=True)
+    print('Caching shared training calibration and Sintel evaluation inputs', flush=True)
     def validation(row):
         x, _, truth = read_sample(args.data, row, sintel=True, hw=hw)
         return x, truth
     with ThreadPoolExecutor(8) as pool:
         values = list(pool.map(validation, rows))
         calibration = list(pool.map(lambda i: read_sample(args.data, train_rows[int(i)], hw=hw)[0], ids))
-    output = dict(probe_only=args.smoke, tensorflow=tf.__version__, input_hw=list(hw),
+    output = dict(probe_only=args.smoke, tensorflow=tf.__version__, input_hw=list(hw), kind=args.kind,
                   protocol='Sintel Final fixed 845 pairs; original 416x1024 pixels; no clipping',
-                  calibration_dataset='FC2 TRAIN', calibration_seed=20260930,
+                  calibration_dataset='FT3D TRAIN' if calibration_name == 'ft3d_train' else 'FC2 TRAIN', calibration_seed=20260930,
                   calibration_pairs=len(ids), calibration_indices=ids.tolist(),
-                  method='Equal average of batch32 training BN moments, including per-batch corrected variance; '
+                  method='Equal average of batch32 training BN moving statistics; '
                          'no between-batch correction; only moving means/variances change in memory',
                   manifest_sha256={k: hashlib.sha256(p.read_bytes()).hexdigest() for k, p in paths.items()},
                   script_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), results=[])
@@ -91,16 +93,32 @@ def main():
                                         inter_op_parallelism_threads=2,
                                         allow_soft_placement=False)
         config.gpu_options.allow_growth = True
-        stage = args.experiment / 'large' / 'seed42' / name / 'fc2'
+        if args.kind == 'large-fc2':
+            stage = args.experiment / 'large' / 'seed42' / name / 'fc2'
+        elif args.kind == 'small-fc2':
+            stage = args.experiment / 'seed42' / name / 'fc2'
+        else:
+            stage = args.experiment / 'cosine' / 'seed42' / name / 'ft3d'
         current = json.loads((stage / 'current.json').read_text())
+        if current['config']['hw'] != list(hw):
+            raise ValueError('Checkpoint input resolution differs')
+        for key, p in paths.items():
+            if hashlib.sha256(p.read_bytes()).hexdigest() != current['config']['manifest_sha'][p.name]:
+                raise ValueError('Checkpoint data manifest differs')
         expected = {x['epoch']: x['sintel_epe_original_pixels']
                     for x in current['history'] if 'sintel_epe_original_pixels' in x}
+        if args.kind == 'large-fc2':
+            checkpoints = [(ep, stage / f'epoch-{ep:04d}' / 'model') for ep in (30, 50)]
+        elif args.kind == 'small-fc2':
+            checkpoints = [(current['epoch'], stage / current['checkpoint'])]
+        else:
+            checkpoints = [(current['best']['epoch'], stage / 'best_monitor' / 'model')]
+        initializer = tf.compat.v1.global_variables_initializer()
         with tf.compat.v1.Session(config=config) as sess:
-            for epoch in epochs:
-                cp = stage / f'epoch-{epoch:04d}' / 'model'
+            for epoch, cp in checkpoints:
                 source_hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
                                  for p in sorted(cp.parent.glob('model.*'))}
-                sess.run(tf.compat.v1.global_variables_initializer())
+                sess.run(initializer)
                 g['weight_saver'].restore(sess, str(cp))
                 reader = tf.train.load_checkpoint(str(cp))
                 assert all(np.array_equal(sess.run(v), reader.get_tensor(v.op.name)) for v in g['weights'])
@@ -129,7 +147,7 @@ def main():
                 for b in range(len(ids) // 32):
                     sess.run(updates, {g['x']: np.stack(calibration[b*32:(b+1)*32]),
                                      g['training']: True, handle['momentum']: float(b/(b+1))})
-                calibrated = record('fc2_statistics_reestimated')
+                calibrated = record('training_statistics_reestimated')
                 assert source_hashes == {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
                                          for p in sorted(cp.parent.glob('model.*'))}, 'Source files changed'
                 entry.update(delta=calibrated-baseline, non_bn_state_unchanged=True,
