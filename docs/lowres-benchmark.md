@@ -108,3 +108,10 @@ Python3.12下仅对tf-keras初始化时传入randint的整数浮点上界作兼�
 大图像素数为四倍、位移标签数值也加倍，因此不能单独区分图像信息和标签尺度的作用。参照FC2在A100，新组在H100，记录硬件差别。冻结组始终用均值0/方差1，gamma/beta继续训练，epsilon保持1e-5；采用fused=False支持确定性反向传播，正常组保持原算子。这是BN行为对照，不是作者历史环境逐项复现。
 
 `factor_compare.sh`数组0/1/2为大图Edge/S/L，3为小图冻结Edge。服务器先用`verify_factors.py --fc2-only`验证真实65对的连续训练与恢复全部状态一致、冻结统计不变且gamma/beta更新，再允许正式50轮。已完成50轮的续跑任务直接退出；只有TIMEOUT/NODE_FAIL/PREEMPTED允许从完整轮恢复，训练错误/OOM/人工取消停止。采用独立checkout与运行目录，任务号、有限续跑段数及进度只写Runs回执与wiki实验记录。
+
+### Mindwell B200运行方式
+
+B200使用与本机/Sofia相同摘要的NVIDIA TensorFlow 25.02容器和固定补充依赖，环境在Mindwell的GPFS scratch中独立重建；旧TensorFlow 2.15模块不能在该节点加载。数据仅按FC2与Sintel清单迁移，经Globus checksum校验后写DATA_READY.json，再做四条FC2恢复验收。factor_b200.sh调用共同factor_compare.sh，训练预算仍为50轮，不改模型和损失。续跑在宿主机按SLURM_CLUSTER_NAME查询正确集群。
+
+B200环境与旧A100参照的软件/硬件均不同，结果用于筛查，不能宣称严格单因素因果证据。先比较短跑初始化指纹与本机既有验收，记录版本与恢复一致性；若出现差别应先定位。输出留持久data目录，容器及数据在GPFS，完成后归档本机。
+

@@ -1,6 +1,7 @@
 """Gate a finite Slurm continuation chain; never retry training errors."""
 import argparse
 import json
+import os
 from pathlib import Path
 import subprocess
 import time
@@ -74,12 +75,13 @@ def main():
     p.add_argument('--phase-out',type=Path)
     p.add_argument('--epochs',type=int,default=50)
     p.add_argument('--final-phase',choices=['fc2','ft3d'],default='ft3d')
+    p.add_argument('--cluster',default=os.environ.get('SLURM_CLUSTER_NAME','wice'))
     a = p.parse_args()
     if not all(c in '0123456789_' for c in a.predecessor):
         raise ValueError('Invalid predecessor ID')
     state = None
     for attempt in range(15):
-        output = subprocess.check_output(['sacct', '--clusters=wice', '-X', '-n', '-P',
+        output = subprocess.check_output(['sacct', '--clusters='+a.cluster, '-X', '-n', '-P',
             '-j', a.predecessor, '--format=JobID,State'], text=True)
         for line in output.splitlines():
             fields = line.strip().split('|')
