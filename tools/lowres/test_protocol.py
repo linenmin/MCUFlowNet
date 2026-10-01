@@ -22,12 +22,15 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(batch_ranges(22232,merge_tail=True),batch_ranges(22232))
 
     def test_schedule(self):
-        rates=[learning_rate(e,20,1e-5,'cosine',1e-6) for e in range(1,21)]
-        self.assertAlmostEqual(rates[0],1e-5)
-        self.assertAlmostEqual(rates[-1],1e-6)
-        self.assertTrue(all(a>b for a,b in zip(rates,rates[1:])))
-        self.assertTrue(all(math.isclose(a+b,1.1e-5) for a,b in zip(rates,reversed(rates))))
-        self.assertEqual([learning_rate(e,20,1e-5) for e in range(1,21)],[1e-5]*20)
+        for epochs in (20,50):
+            rates=[learning_rate(e,epochs,1e-5,'cosine',1e-6) for e in range(1,epochs+1)]
+            self.assertAlmostEqual(rates[0],1e-5)
+            self.assertAlmostEqual(rates[-1],1e-6)
+            self.assertTrue(all(a>b for a,b in zip(rates,rates[1:])))
+            self.assertTrue(all(math.isclose(a+b,1.1e-5) for a,b in zip(rates,reversed(rates))))
+            self.assertEqual([learning_rate(e,epochs,1e-5) for e in range(1,epochs+1)],[1e-5]*epochs)
+        self.assertGreater(learning_rate(20,50,1e-5,'cosine',1e-6),
+                           learning_rate(20,20,1e-5,'cosine',1e-6))
 
     def test_retention(self):
         with tempfile.TemporaryDirectory() as tmp:

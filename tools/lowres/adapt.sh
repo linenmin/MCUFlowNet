@@ -2,6 +2,8 @@
 # Three inherited models; finite FC2 adaptation only, with an on-server gate.
 set -euo pipefail
 mode=$1 repo=$2 data=$3 root=$4
+epochs=${6:-20}
+[[ "$epochs" =~ ^[0-9]+$ && "$epochs" -ge 2 ]]
 [[ "${SLURM_CLUSTER_NAME:-}" == mindwell ]]
 software="$VSC_SCRATCH/MCUFlowNet/software"
 [[ -f "$software/READY" && -f "$root/control/SOURCES_READY.json" ]]
@@ -33,7 +35,7 @@ elif [[ "$mode" == train ]]; then
     if [[ -n "${5:-}" ]]; then
         set +e
         python3 tools/lowres/continue.py --runs "$root" --model "$model" \
-            --epochs 20 --final-phase fc2 --predecessor "${5}_${index}"
+            --epochs "$epochs" --final-phase fc2 --predecessor "${5}_${index}"
         decision=$?
         set -e
         [[ "$decision" != 0 ]] || exit 0
@@ -41,7 +43,7 @@ elif [[ "$mode" == train ]]; then
     fi
     out="$root/seed42/$model/fc2"
     args=(--model "$model" --phase fc2 --data "$data" --manifests "$root/manifests" \
-          --out "$out" --init-checkpoint "$source" --epochs 20 --seed 42 \
+          --out "$out" --init-checkpoint "$source" --epochs "$epochs" --seed 42 \
           --initial-lr 1e-5 --lr-schedule cosine --min-lr 1e-6 --eval-every 1 --keep-every 5)
     [[ "$model" != edge ]] || args+=(--edge-public --bn-mode frozen)
     [[ ! -f "$out/current.json" ]] || args+=(--resume)
