@@ -21,7 +21,7 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def read_sample(root, row, sintel=False, hw=HW, images='normalized'):
+def read_sample(root, row, sintel=False, hw=HW, images='normalized', geometry_seed=None):
     if images not in ('normalized', 'raw'):
         raise ValueError('Unknown image numeric convention')
     paths = [Path(root) / p for p in row]
@@ -33,6 +33,8 @@ def read_sample(root, row, sintel=False, hw=HW, images='normalized'):
         raise ValueError(f'Mismatched shapes: {row}')
     if not np.isfinite(flow).all():
         raise ValueError(f'Nonfinite flow: {row}')
+    if sintel and geometry_seed is not None:
+        raise ValueError('Training geometry is forbidden in evaluation')
     if sintel:
         # Retain the existing benchmark's 416x1024 center scoring region.
         h, w = flow.shape[:2]
@@ -41,6 +43,11 @@ def read_sample(root, row, sintel=False, hw=HW, images='normalized'):
         y, x = (h-416)//2, (w-1024)//2
         frames = [im[y:y+416, x:x+1024] for im in frames]
         flow = flow[y:y+416, x:x+1024]
+    if geometry_seed is not None:
+        from geometry import sample_box
+        y, x, h, w = sample_box(*flow.shape[:2], geometry_seed)
+        frames = [im[y:y+h, x:x+w] for im in frames]
+        flow = flow[y:y+h, x:x+w].copy()
     h, w = flow.shape[:2]
     pair = np.concatenate([cv2.resize(im, hw[::-1], interpolation=cv2.INTER_AREA) for im in frames], -1)
     small = cv2.resize(flow, hw[::-1], interpolation=cv2.INTER_LINEAR)
@@ -51,16 +58,23 @@ def read_sample(root, row, sintel=False, hw=HW, images='normalized'):
     return pair, small, flow
 
 
-def batches(rows, root, seed, epoch, batch=32, workers=8, shuffle=True, merge_tail=False, hw=HW, images='normalized'):
+def batches(rows, root, seed, epoch, batch=32, workers=8, shuffle=True, merge_tail=False, hw=HW, images='normalized', geometry='whole', start_batch=0):
+    if geometry not in ('whole', 'random'):
+        raise ValueError('Unknown training geometry')
     order = np.random.default_rng(np.random.SeedSequence([seed, epoch])).permutation(len(rows)) if shuffle else np.arange(len(rows))
     # Exactly one next batch in flight; the last batch is not wrapped/padded.
     with ThreadPoolExecutor(max_workers=workers) as pool:
         ranges = batch_ranges(len(order), batch, merge_tail)
+        if not 0 <= start_batch < len(ranges):
+            raise ValueError('Invalid starting batch')
         def submit(index):
             start, end = ranges[index]
-            return [pool.submit(read_sample, root, rows[int(i)], hw=hw, images=images) for i in order[start:end]]
-        pending = submit(0)
-        for index, (start, end) in enumerate(ranges):
+            return [pool.submit(read_sample, root, rows[int(i)], hw=hw, images=images,
+                                geometry_seed=[seed, epoch, int(i), 20261004] if geometry=='random' else None)
+                    for i in order[start:end]]
+        pending = submit(start_batch)
+        for index in range(start_batch, len(ranges)):
+            start, end = ranges[index]
             values = [f.result() for f in pending]
             pending = submit(index+1) if index+1 < len(ranges) else []
             yield np.stack([v[0] for v in values]), np.stack([v[1] for v in values]), order[start:end]
