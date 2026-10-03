@@ -13,7 +13,7 @@ from data import ROOT, batches, digest, read_sample
 from model import graph
 from checkpoint_cleanup import prune
 from protocol import batch_ranges, learning_rate
-from initialization import checkpoint_sha, restore_model
+from initialization import checkpoint_sha, restore_model, select_fc2_best
 
 
 def atomic(path, value):
@@ -45,6 +45,7 @@ def main():
     p.add_argument('--out',type=Path,required=True); p.add_argument('--seed',type=int,default=42)
     p.add_argument('--init',type=Path); p.add_argument('--resume',action='store_true')
     p.add_argument('--init-checkpoint',type=Path,help='Verified standalone model/BN prefix for inherited FC2 adaptation')
+    p.add_argument('--init-fc2-best',type=Path,help='Completed FC2 directory; select its validation-best model for FT3D')
     p.add_argument('--edge-public',action='store_true',help='Preserve author Edge raw input and frozen-statistics BN')
     p.add_argument('--probe',action='store_true'); p.add_argument('--stop-after',type=int)
     p.add_argument('--workers',type=int,default=8)
@@ -61,10 +62,13 @@ def main():
     p.add_argument('--code-commit',help='Verified host commit for containers without accessible worktree metadata')
     a=p.parse_args()
     if a.phase=='fc2' and a.init: raise ValueError('FC2 must start from scratch')
-    if a.phase=='ft3d' and not a.init: raise ValueError('FT3D needs the completed FC2 endpoint')
+    if a.phase=='ft3d' and not (a.init or a.init_fc2_best):
+        raise ValueError('FT3D needs a completed FC2 endpoint or validation-best source')
     if a.init_checkpoint and (a.phase!='fc2' or a.init):
         raise ValueError('Standalone initialization is for FC2 adaptation only')
-    if a.edge_public and (a.model!='edge' or a.bn_mode!='frozen' or not a.init_checkpoint):
+    if a.init_fc2_best and (a.phase!='ft3d' or a.init or a.init_checkpoint):
+        raise ValueError('FC2-best initialization is only for standalone FT3D')
+    if a.edge_public and (a.model!='edge' or a.bn_mode!='frozen' or not (a.init_checkpoint or a.init_fc2_best)):
         raise ValueError('Public Edge requires its source checkpoint and frozen BN')
     if a.stop_after is not None and a.stop_after<0: raise ValueError('Invalid stopping epoch')
     train_file=a.manifests/f'{a.phase}_train.json'
@@ -96,6 +100,11 @@ def main():
         config.update(init_checkpoint=str(a.init_checkpoint.resolve()),source_sha=checkpoint_sha(a.init_checkpoint),
                       edge_public=a.edge_public,score_initial=True)
     if a.edge_public: config['images']='BGR_0_255_area'
+    standalone_prefix=a.init_checkpoint
+    if a.init_fc2_best:
+        standalone_prefix, selection=select_fc2_best(a.init_fc2_best,a.model,hw,config['images'],bn_description)
+        config.update(init_fc2_best=str(a.init_fc2_best.resolve()),source_sha=checkpoint_sha(standalone_prefix),
+                      fc2_selection=selection,edge_public=a.edge_public,score_initial=True)
     if a.eval_every is not None: config['eval_every']=every
     current=a.out/'current.json'
     if a.resume:
@@ -112,7 +121,7 @@ def main():
     start=time.monotonic()
     with tf.compat.v1.Session(config=sc) as sess:
         sess.run(tf.compat.v1.global_variables_initializer())
-        if not a.resume and not a.init and not a.init_checkpoint:
+        if not a.resume and not a.init and not standalone_prefix:
             initial_hash=__import__('hashlib').sha256()
             for v in g['weights']:
                 initial_hash.update(v.op.name.encode())
@@ -125,8 +134,9 @@ def main():
             del reader  # Release the NFS file handle before retention removes this boundary.
             assert int(sess.run(g['step']))==state['step']
             atomic(a.out/'restore-audit.json',dict(all_variables_exact=True,step=state['step'],epoch=state['epoch']))
-        elif a.init_checkpoint:
-            audit=restore_model(sess,g,a.init_checkpoint,public_edge=a.edge_public)
+        elif standalone_prefix:
+            # Public author files lack our edge/ scope; adapted FC2 files already have it.
+            audit=restore_model(sess,g,standalone_prefix,public_edge=a.edge_public and not a.init_fc2_best)
             atomic(a.out/'initialization-audit.json',audit)
         elif a.init:
             parent=json.loads((a.init/'current.json').read_text())
@@ -151,16 +161,20 @@ def main():
         atomic(a.out/f'launch-{os.environ.get("SLURM_JOB_ID",str(os.getpid()))}.json',dict(config=config,commit=commit,
                tensorflow=tf.__version__,gpu=[str(d) for d in devices],hostname=os.uname().nodename,
                parameters=sum(int(np.prod(v.shape)) for v in tf.compat.v1.trainable_variables())))
-        if not a.resume and (a.keep_every or a.init_checkpoint):
+        if not a.resume and (a.keep_every or standalone_prefix):
             boundary=a.out/'epoch-0000'; boundary.mkdir()
             g['saver'].save(sess,str(boundary/'model'),write_meta_graph=False)
             state['checkpoint']='epoch-0000/model'
-            if a.init_checkpoint:
+            if standalone_prefix:
                 before=sess.run(g['weights'])
                 metric=dict(epoch=0,step=0,fc2_val_epe_pixels=evaluate(sess,g,val,a.data),
                             sintel_epe_original_pixels=evaluate(sess,g,monitor,a.data,True))
                 if not all(np.array_equal(v,w) for v,w in zip(before,sess.run(g['weights']))):
                     raise AssertionError('Initial evaluation changed model state')
+                if a.init_fc2_best and not a.probe:
+                    np.testing.assert_allclose(
+                        [metric['fc2_val_epe_pixels'],metric['sintel_epe_original_pixels']],
+                        [selection['fc2_epe'],selection['sintel_epe']],rtol=0,atol=1e-5)
                 state['history']=[metric]
                 for folder,key,score in [('best_monitor','best',metric['sintel_epe_original_pixels']),
                                          ('best_fc2','best_fc2',metric['fc2_val_epe_pixels'])]:
@@ -204,7 +218,7 @@ def main():
                     state['best']=dict(epoch=epoch,epe=metric['sintel_epe_original_pixels'])
                     (a.out/'best_monitor').mkdir(exist_ok=True)
                     (g['saver'] if a.keep_every else g['weight_saver']).save(sess,str(a.out/'best_monitor/model'),write_meta_graph=False)
-                if a.init_checkpoint and (state.get('best_fc2') is None or metric['fc2_val_epe_pixels']<state['best_fc2']['epe']):
+                if standalone_prefix and (state.get('best_fc2') is None or metric['fc2_val_epe_pixels']<state['best_fc2']['epe']):
                     improved_fc2=True
                     state['best_fc2']=dict(epoch=epoch,epe=metric['fc2_val_epe_pixels'])
                     (a.out/'best_fc2').mkdir(exist_ok=True)

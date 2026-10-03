@@ -1,9 +1,11 @@
 #!/bin/bash -l
-# Three inherited models; finite FC2 adaptation only, with an on-server gate.
+# Three inherited models; finite FC2 or FT3D adaptation with an on-server gate.
 set -euo pipefail
 mode=$1 repo=$2 data=$3 root=$4
 epochs=${6:-20}
+phase=${7:-fc2}
 [[ "$epochs" =~ ^[0-9]+$ && "$epochs" -ge 2 ]]
+[[ "$phase" == fc2 || "$phase" == ft3d ]]
 [[ "${SLURM_CLUSTER_NAME:-}" == mindwell ]]
 software="$VSC_SCRATCH/MCUFlowNet/software"
 [[ -f "$software/READY" && -f "$root/control/SOURCES_READY.json" ]]
@@ -24,28 +26,35 @@ index=${SLURM_ARRAY_TASK_ID:?}
 [[ "$index" =~ ^[0-2]$ ]]
 model=${models[$index]}
 source="$root/source/$model/model"
+initialization=(--init-checkpoint "$source")
+verification=(--checkpoint "$source")
+if [[ "$phase" == ft3d ]]; then
+    initialization=(--init-fc2-best "$root/source/$model/fc2")
+    verification=(--fc2-best "$root/source/$model/fc2" --full-reference)
+fi
 probe="$root/probe/$model"
 if [[ "$mode" == probe ]]; then
     run_python tools/lowres/test_data.py
     run_python tools/lowres/test_protocol.py
-    run_python tools/lowres/verify_adaptation.py --model "$model" --checkpoint "$source" \
+    run_python tools/lowres/verify_adaptation.py --model "$model" "${verification[@]}" \
         --data "$data" --manifests "$root/manifests" --out "$probe" --code-commit "$commit"
 elif [[ "$mode" == train ]]; then
     run_python -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["passed"] and v["source_unchanged"]' "$probe/acceptance.json"
     if [[ -n "${5:-}" ]]; then
         set +e
         python3 tools/lowres/continue.py --runs "$root" --model "$model" \
-            --epochs "$epochs" --final-phase fc2 --predecessor "${5}_${index}"
+            --epochs "$epochs" --final-phase "$phase" --predecessor "${5}_${index}"
         decision=$?
         set -e
         [[ "$decision" != 0 ]] || exit 0
         [[ "$decision" == 10 ]] || exit "$decision"
     fi
-    out="$root/seed42/$model/fc2"
-    args=(--model "$model" --phase fc2 --data "$data" --manifests "$root/manifests" \
-          --out "$out" --init-checkpoint "$source" --epochs "$epochs" --seed 42 \
+    out="$root/seed42/$model/$phase"
+    args=(--model "$model" --phase "$phase" --data "$data" --manifests "$root/manifests" \
+          --out "$out" "${initialization[@]}" --epochs "$epochs" --seed 42 \
           --initial-lr 1e-5 --lr-schedule cosine --min-lr 1e-6 --eval-every 1 --keep-every 5)
     [[ "$model" != edge ]] || args+=(--edge-public --bn-mode frozen)
+    [[ "$phase" != ft3d ]] || args+=(--merge-tail)
     [[ ! -f "$out/current.json" ]] || args+=(--resume)
     run_python tools/lowres/train.py "${args[@]}" --code-commit "$commit"
 else

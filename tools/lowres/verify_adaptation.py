@@ -1,4 +1,4 @@
-"""Real-data gates for inherited FC2: author predictions, initialization and resume."""
+"""Real-data gates for inherited FC2 and validation-best FC2 to FT3D."""
 import argparse
 import json
 import os
@@ -9,7 +9,7 @@ import sys
 import numpy as np
 import tensorflow as tf
 from data import read_sample, digest
-from initialization import checkpoint_sha, restore_model
+from initialization import checkpoint_sha, restore_model, select_fc2_best
 from model import graph, ROOT
 # model imports the vendored Edge package, which also has a train.py.
 sys.path.insert(0,str(Path(__file__).resolve().parent))
@@ -63,15 +63,37 @@ def author_reference(prefix, data, manifests, full=False):
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--model',choices=['edge','S','L'],required=True)
-    p.add_argument('--checkpoint',type=Path,required=True)
+    sources=p.add_mutually_exclusive_group(required=True)
+    sources.add_argument('--checkpoint',type=Path)
+    sources.add_argument('--fc2-best',type=Path)
     p.add_argument('--data',type=Path,required=True); p.add_argument('--manifests',type=Path,required=True)
     p.add_argument('--out',type=Path,required=True); p.add_argument('--code-commit')
     p.add_argument('--full-reference',action='store_true')
     a=p.parse_args(); a.out.mkdir(parents=True,exist_ok=False)
     if not tf.config.list_physical_devices('GPU'): raise RuntimeError('GPU required')
+    phase='ft3d' if a.fc2_best else 'fc2'
+    fc2_reference=None
+    if a.fc2_best:
+        parent=json.loads((a.fc2_best/'current.json').read_text())
+        cfg=parent['config']
+        a.checkpoint,selection=select_fc2_best(a.fc2_best,a.model,(160,208),cfg['images'],cfg['bn'])
+        g=graph(a.model,bn_mode='frozen' if a.model=='edge' else 'train',edge_public=a.model=='edge')
+        with tf.compat.v1.Session(config=session_config()) as sess:
+            sess.run(tf.compat.v1.global_variables_initializer())
+            restore=restore_model(sess,g,a.checkpoint)
+            before=sess.run(g['weights'])
+            if a.full_reference:
+                values=[]
+                for filename,sintel in [('fc2_val.json',False),('sintel_monitor.json',True)]:
+                    rows=json.loads((a.manifests/filename).read_text())
+                    values.append(evaluate(sess,g,rows,a.data,sintel))
+                np.testing.assert_allclose(values,[selection['fc2_epe'],selection['sintel_epe']],rtol=0,atol=1e-5)
+                fc2_reference=dict(passed=True,selection=selection,fc2_epe=values[0],sintel_epe=values[1],
+                                   full_pairs=[640,845],source_model_bn_exact=restore['model_bn_exact'])
+            assert all(np.array_equal(v,w) for v,w in zip(before,sess.run(g['weights'])))
     source_sha=checkpoint_sha(a.checkpoint)
     reference=None
-    if a.model=='edge':
+    if a.model=='edge' and not a.fc2_best:
         cases,outputs,score=author_reference(a.checkpoint,a.data,a.manifests,a.full_reference)
         g=graph('edge',bn_mode='frozen',edge_public=True)
         differences=[]
@@ -100,10 +122,12 @@ def main():
                            ROOT/'EdgeFlowNet/code/network/MultiScaleResNet.py',
                            ROOT/'EdgeFlowNet/code/misc/utils.py']})
         (a.out/'author-parity.json').write_text(json.dumps(reference,indent=2)+'\n')
-    base=[sys.executable,str(Path(__file__).with_name('train.py')),'--model',a.model,'--phase','fc2',
-          '--data',str(a.data),'--manifests',str(a.manifests),'--init-checkpoint',str(a.checkpoint),
+    base=[sys.executable,str(Path(__file__).with_name('train.py')),'--model',a.model,'--phase',phase,
+          '--data',str(a.data),'--manifests',str(a.manifests),
           '--probe','--epochs','3','--initial-lr','1e-5','--lr-schedule','cosine',
           '--min-lr','1e-6','--eval-every','1','--keep-every','1']
+    if a.fc2_best: base+=['--init-fc2-best',str(a.fc2_best),'--merge-tail']
+    else: base+=['--init-checkpoint',str(a.checkpoint)]
     if a.model=='edge': base+=['--edge-public','--bn-mode','frozen']
     if a.code_commit: base+=['--code-commit',a.code_commit]
     env=dict(os.environ,TF_DETERMINISTIC_OPS='1',CUBLAS_WORKSPACE_CONFIG=':4096:8')
@@ -119,7 +143,11 @@ def main():
     names=c1.get_variable_to_shape_map()
     assert set(names)==set(c2.get_variable_to_shape_map())
     assert all(np.array_equal(c1.get_tensor(n),c2.get_tensor(n)) for n in names)
-    assert s1['epoch']==s2['epoch']==3 and s1['step']==s2['step']==9
+    steps=6 if a.fc2_best else 9
+    assert s1['epoch']==s2['epoch']==3 and s1['step']==s2['step']==steps
+    if a.fc2_best:
+        assert s1['config']['phase']=='ft3d' and s1['config']['fc2_selection']==selection
+        assert all(r['samples']==65 and r['last_batch']==33 for r in s1['history'][1:])
     assert [r.get('order_sha') for r in s1['history']]==[r.get('order_sha') for r in s2['history']]
     assert [r['epoch'] for r in s1['history']]==[0,1,2,3]
     np.testing.assert_allclose([r['lr'] for r in s1['history'][1:]],[1e-5,5.5e-6,1e-6],rtol=1e-12,atol=0)
@@ -148,9 +176,10 @@ def main():
     audit=json.loads((full/'initialization-audit.json').read_text())
     assert audit['model_bn_exact'] and audit['adam_slots_zero'] and audit['adam_beta_powers_reset']
     assert checkpoint_sha(a.checkpoint)==source_sha
-    result=dict(passed=True,probe_only=True,model=a.model,author_reference=reference,
+    result=dict(passed=True,probe_only=True,model=a.model,phase=phase,author_reference=reference,
+                fc2_source_reference=fc2_reference,
                 initialization=audit,source_unchanged=True,all_resumed_variables_exact=True,
-                optimizer_steps=9,initial_scoring_preserved=True,model_parameters_updated=True,
+                optimizer_steps=steps,initial_scoring_preserved=True,model_parameters_updated=True,
                 best_fc2_includes_epoch_zero=True,best_checkpoints_have_optimizer=True,
                 manifests_sha={f.name:digest(f) for f in a.manifests.glob('*.json')},
                 code_files_sha={f.name:digest(f) for f in [Path(__file__),

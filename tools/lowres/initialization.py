@@ -1,9 +1,37 @@
 """Strict checkpoint initialization; model/BN only, with an explicit scope map."""
 import hashlib
+import json
 from pathlib import Path
 import numpy as np
 import tensorflow as tf
 from data import digest
+
+
+def select_fc2_best(folder, model, hw, images, bn):
+    """Select a verified validation-best model from a completed FC2 run."""
+    folder = Path(folder)
+    parent = json.loads((folder/'current.json').read_text())
+    status = json.loads((folder/'status.json').read_text())
+    selected = json.loads((folder/'best_fc2/current.json').read_text())
+    config = parent['config']
+    if not status['completed'] or parent['epoch'] != config['epochs']:
+        raise ValueError('FC2 source is not complete')
+    if config['phase'] != 'fc2' or config['model'] != model:
+        raise ValueError('FC2 source model/phase differs')
+    if config['hw'] != list(hw) or config['images'] != images or config['bn'] != bn:
+        raise ValueError('FC2 input or BN semantics differ')
+    if selected['config'] != config or selected.get('selected_as') != 'best_fc2':
+        raise ValueError('Missing matching FC2-best selection record')
+    best = parent['best_fc2']
+    metric = next(r for r in parent['history'] if r['epoch'] == best['epoch'])
+    if (selected['epoch'] != best['epoch'] or selected['step'] != metric['step']
+            or metric['fc2_val_epe_pixels'] != best['epe']
+            or selected['checkpoint'] != 'model'):
+        raise ValueError('FC2-best checkpoint metadata differs')
+    prefix = folder/'best_fc2/model'
+    checkpoint_sha(prefix)
+    return prefix, dict(epoch=best['epoch'], step=metric['step'],
+                        fc2_epe=best['epe'], sintel_epe=metric['sintel_epe_original_pixels'])
 
 
 def checkpoint_sha(prefix):
