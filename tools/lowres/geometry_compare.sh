@@ -40,11 +40,31 @@ elif [[ "$mode" == train ]]; then
             printf 'All 10000 steps complete; no training needed.\n'; exit 0
         fi
         previous="${5}_${index}"
-        predecessor_state=$(sacct --clusters=mindwell -X -nP -j "$previous" -o JobIDRaw,State | awk -F'|' -v id="$previous" '$1==id {print $2}')
+        # JobIDRaw is the internal child ID, not ARRAY_ID_TASK_ID.
+        predecessor_state=''
+        for attempt in {1..15}; do
+            predecessor_state=$(sacct --clusters=mindwell -X -nP -j "$previous" -o JobID,State | awk -F'|' -v id="$previous" '$1==id {print $2}')
+            case "$predecessor_state" in
+                ''|RUNNING*|PENDING*|COMPLETING*) sleep 2 ;;
+                *) break ;;
+            esac
+        done
         case "$predecessor_state" in
             TIMEOUT*|NODE_FAIL*|PREEMPTED*) ;;
             *) printf 'No retry for %s state=%s\n' "$previous" "$predecessor_state"; exit 2 ;;
         esac
+        # Preserve a first-boundary interruption instead of overwriting it.
+        python3 - "$root" "$out" "$previous" <<'PY'
+from pathlib import Path
+import sys
+r=Path(sys.argv[1]).resolve(); p=Path(sys.argv[2]); predecessor=sys.argv[3]
+assert not p.is_symlink() and p.resolve().is_relative_to(r/'seed42') and p.name=='fc2'
+if p.exists() and not (p/'current.json').exists():
+    saved=p.with_name('fc2.incomplete-after-'+predecessor)
+    assert not saved.exists() and saved.resolve().is_relative_to(r/'seed42')
+    print('Preserved interrupted first boundary:',p.resolve(),'->',saved.resolve(),flush=True)
+    p.rename(saved)
+PY
     fi
     args=(--model "$model" --geometry "$arm" --data "$data" --manifests "$root/manifests" \
           --source "$root/source/$model/fc2" --out "$out" --steps 10000 --eval-every 1000 --seed 42)
