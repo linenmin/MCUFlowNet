@@ -171,3 +171,13 @@ HPC包装`adapt.sh`复用Mindwell已验收的TensorFlow25.02容器，先在服�
 宽208×高160整图AREA缩放、真实未截断位移、seed42、batch32、末尾32＋2合34；沿用80,578对FT3D TRAIN左相机Clean+Final、future+past的清单，每轮2,518步，共50,360步。Adam参数与损失不变，学习率1e-5余弦降到1e-6；不新增增强或蒸馏。Edge统计冻结，S/L正常更新，FP32且TF32关闭。第0轮和每轮测FC2 val640对及Sintel Final845对；正式第0轮必须复现所选FC2检查点的评分（容差1e-5），第0轮也参与最佳保存。保留每5轮、两个最佳及最近两轮完整状态。
 
 `verify_adaptation.py --fc2-best <directory> --full-reference`在三模型上核验全部FC2/Sintel起点评分、精确模型/BN加载及Adam重置，再用65对真实FT3D做三轮训练（每轮32+33两批）。连续与中断恢复的所有变量逐值一致，源权重只读，BN行为正确且参数实际更新。`adapt.sh`第七参数设为`ft3d`，第六参数为`20`；服务器三条验收全部通过后才运行正式训练。每任务一张B200、8CPU、32GB，首段8小时、最多一次8小时的超时/节点故障/抢占续跑；训练错误或取消不自动重试，完成20轮则跳过。输出独立于FC2，使用`LOWRES-BENCH-01/inherit-ft3d20-20261003`，完整产物按原规则归档本机。
+
+### 继承FT3D权重的BN诊断
+
+`audit_inherited_bn.py`检查已完成的继承实验，比较起点／末轮参数与起点／末轮BN均值、方差的四种组合。gamma/beta随参数组保留。可再用固定1024对FC2 TRAIN及FT3D TRAIN分别重估末轮统计；样本由预先固定的seed选择，不使用Sintel图像校准。只在内存中改变统计，不运行优化器、不保存检查点，源文件SHA及非BN参数保持不变。原始两个端点必须复现日志EPE；冻结Edge是统计交换应无效果的对照。混合参数和旧统计可能不匹配，不能把其分数直接称作“冻结BN训练”的结果，不能相减计算BN贡献百分比。
+
+```powershell
+./tools/setup/run-local.ps1 python tools/lowres/audit_inherited_bn.py --data /datasets --experiment /runs/LOWRES-BENCH-01/inherit-ft3d20-20261003 --out /runs/LOWRES-BENCH-01/causes-audit-20261003/bn-verified --calibrate 1024 --fc2-manifest /runs/LOWRES-BENCH-01/inherit-adapt50-20261001/manifests/fc2_train.json
+```
+
+输出目录必须是新目录。先加`--smoke --models S --calibrate 64`并改输出目录做小样本验收；smoke分数只验代码。诊断不改变正式评测协议，完整结果仍留Runs，wiki只收关键判断。
