@@ -56,3 +56,19 @@ with tempfile.TemporaryDirectory() as tmp:
     else:
         raise AssertionError('FC2 completion must not override cancellation')
 print('Continuation gate checks passed')
+
+# The geometry dispatcher only schedules unfinished infrastructure failures.
+from geometry_recovery import classify
+with tempfile.TemporaryDirectory() as directory:
+    root=Path(directory)
+    states=dict(enumerate(['TIMEOUT','NODE_FAIL','PREEMPTED','FAILED','CANCELLED','OUT_OF_MEMORY']))
+    eligible,attention=classify(root,states)
+    assert eligible==[0,1,2] and [v['index'] for v in attention]==[3,4,5]
+    finished=root/'seed42/whole/edge/fc2';finished.mkdir(parents=True)
+    (finished/'current.json').write_text(json.dumps(dict(step=10000,checkpoint='model')))
+    (finished/'status.json').write_text(json.dumps(dict(completed=True,step=10000)))
+    (finished/'model.index').touch()
+    eligible,attention=classify(root,states)
+    assert eligible==[1,2]
+    assert (finished/'current.json').is_file()
+print('Geometry dispatcher completion and failure whitelist checks passed')
