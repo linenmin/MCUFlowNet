@@ -195,3 +195,19 @@ HPC包装`adapt.sh`复用Mindwell已验收的TensorFlow25.02容器，先在服�
 报告每条相对第0步的改善、固定步数的两组差值、后五次监控中位数和末步，不只挑一次最佳。若随机组使S/L相对Edge的差距稳定缩小，支持取图方式与架构的交互；若三者均改善但Edge仍领先，保留这一结果。正向结论需要另补独立种子，不把六条seed42分支当作六次独立重复。完整配置、代码提交、验收与权重留`Runs/LOWRES-BENCH-01/geometry10k-20261004`，wiki只维护同一实验记录。
 
 资源收尾修订：首段4小时的六任务预留过大（SAM在10-04核对约648,250 credits），不等于实际已花费。当前实验首段改为每任务1小时，训练目标仍为10,000步。用低成本CPU任务在首段全部结束后检查完成状态；全部完成就不申请GPU，仅对TIMEOUT/NODE_FAIL/PREEMPTED且未完成的分支申请一次续跑。`geometry_recovery.py`在额度释放后尝试60／40／30／20分钟的预算，保存每个拒绝和成功回执；只针对明确的额度拒绝尝试更小预算，其他提交异常停住，不重复创建不确定的任务。额度释放最多等8分钟，仍不足则记录待处理；取消和训练错误不重试，第二段结束后不再自动提交。改变的是Slurm预留和提交时机，Python训练参数、步数与中断恢复规则保持原样。
+
+### 新权重的全量评分与PTQ验收（2026-10-04）
+
+`audit_deployment.py prepare`从本机完整Sintel构建1041对清单，核对原845对包含其中；六份取图对照末步权重各测208×160，随机组S/L另测224×160。评分继续使用中心416×1024全部像素，图片AREA缩放、BGR归一化，预测LINEAR还原并分别换算u/v；不乘旧12.5、不截断GT或预测、不更新BN或优化器。每图保存原图EPE，按场景及原始GT运动大小（<10、10–40、≥40）归约；845与额外196分别报告，均是开发评测，不称盲测。
+
+`export_deployment.py`使用同一份当前模型图、推理BN和batch1，保留原四通道输出头及最终u/v切片。三模型共享64对固定等距FC2 TRAIN整图校准；224×160重新校准，不仅修改旧TFLite形状。原生GPU卷积、精确加载、源文件及BN不变、冻结图一致性、全部64对FP32转换差异和全整数INT8张量均验收，具体差异及SHA留export.json。原生FP32使用5060 Ti，TFLite浮点与INT8使用CPU；此阶段没有板端执行或Vela部署通过声明。旧公开权重的输入范围、BN和12.5规则不能套用。
+
+运行示例（容器路径；通过`tools/setup/run-local.ps1`启动）：
+
+```text
+python tools/lowres/audit_deployment.py prepare --data /datasets --experiment /runs/LOWRES-BENCH-01/geometry10k-20261004 --out /runs/LOWRES-BENCH-01/geometry10k-20261004/deployment-audit
+python tools/lowres/run_deployment_audit.py --data /datasets --audit /runs/LOWRES-BENCH-01/geometry10k-20261004/deployment-audit --phase native
+python tools/lowres/run_deployment_audit.py --data /datasets --audit /runs/LOWRES-BENCH-01/geometry10k-20261004/deployment-audit --phase quantized
+```
+
+两阶段串行，任何子进程失败停止并保留日志，不自动覆盖失败产物；已有完成证据可跳过。运行配置、完整逐图结果、转换模型和日志放同一Runs目录，不进入Git；状态及结果仅更新已有wiki实验记录和Benchmark总表。不自动启动FT3D训练。
