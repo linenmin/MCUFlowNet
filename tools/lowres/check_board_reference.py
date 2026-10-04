@@ -66,10 +66,13 @@ def compare_board_output(actual, expected, scale):
         return dict(max_abs_q=int(np.abs(delta).max()),
                     mean_abs_q=float(np.abs(delta).mean()),
                     changed=int(np.count_nonzero(delta)))
-    delta = (actual.astype(np.float64) - expected.astype(np.float64)) * scale
-    flat_actual = actual.reshape(-1, 2); flat_expected = expected.reshape(-1, 2)
+    channels = actual.shape[-1]
+    if channels not in (2, 4):
+        raise ValueError('Only u/v or an explicit four-channel diagnostic supported')
+    delta = (actual[..., :2].astype(np.float64) - expected[..., :2].astype(np.float64)) * scale
+    flat_actual = actual.reshape(-1, channels); flat_expected = expected.reshape(-1, channels)
     correlations = []
-    for channel in range(2):
+    for channel in range(channels):
         a, e = flat_actual[:, channel], flat_expected[:, channel]
         correlations.append(float(np.corrcoef(a, e)[0, 1])
                             if np.std(a) and np.std(e) else None)
@@ -81,8 +84,8 @@ def compare_board_output(actual, expected, scale):
                 mean_abs_q_per_channel=np.abs(flat_actual.astype(np.int16)-flat_expected).mean(axis=0).tolist(),
                 channel_correlations=correlations,
                 layout_hypotheses=dict(
-                    swapped_uv=errors(actual[..., ::-1]),
-                    channels_first=errors(actual.reshape(1, 2, *actual.shape[1:3]).transpose(0, 2, 3, 1))),
+                    swapped_uv=errors(actual[..., [1, 0]+list(range(2, channels))]),
+                    channels_first=errors(actual.reshape(1, channels, *actual.shape[1:3]).transpose(0, 2, 3, 1))),
                 limits='Layout variants diagnose possible ordering errors; they are not accepted model outputs or EPE scores.')
 
 
