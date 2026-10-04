@@ -139,8 +139,9 @@ def main():
             del reader
             metadata = tf.compat.v1.RunMetadata()
             first = session.run(g['prediction'], {g['x']:pairs[0], g['training']:False},
-                options=tf.compat.v1.RunOptions(trace_level=tf.compat.v1.RunOptions.FULL_TRACE,
-                                               output_partition_graphs=True),
+                # CUPTI full tracing crashes this Blackwell/container pairing.
+                # Executed partition graphs identify GPU convolutions directly.
+                options=tf.compat.v1.RunOptions(output_partition_graphs=True),
                 run_metadata=metadata)
             native.append(first)
             report['runtime_devices'] = [dict(name=d.name, type=d.device_type) for d in session.list_devices()]
