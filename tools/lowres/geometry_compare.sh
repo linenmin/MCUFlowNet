@@ -3,9 +3,21 @@
 set -euo pipefail
 mode=$1 repo=$2 data=$3 root=$4 phase=${6:-fc2}
 [[ "$phase" == fc2 || "$phase" == ft3d ]]
-[[ "${SLURM_CLUSTER_NAME:-}" == mindwell ]]
-software="$VSC_SCRATCH/MCUFlowNet/software"
-[[ -f "$software/READY" && -f "$root/control/SOURCES_READY.json" ]]
+cluster=${SLURM_CLUSTER_NAME:?}
+case "$cluster" in
+    mindwell)
+        software="$VSC_SCRATCH/MCUFlowNet/software"
+        environment="$software/tf2502"
+        ready="$software/READY"
+        ;;
+    sofia)
+        software="$HOME/Software/MCUFlowNet"
+        environment="$software/environments/tf2502-v2"
+        ready="$environment/READY"
+        ;;
+    *) printf 'Unverified runtime cluster: %s\n' "$cluster" >&2; exit 2 ;;
+esac
+[[ -f "$ready" && -f "$root/control/SOURCES_READY.json" ]]
 cd "$repo"
 commit=$(git rev-parse HEAD)
 [[ "$commit" == "$(cat "$root/control/code-commit.txt")" ]]
@@ -17,7 +29,7 @@ run_python() {
         --env PYTHONUNBUFFERED=1 --env TF_DETERMINISTIC_OPS=1 --env TF_CPP_MIN_LOG_LEVEL=2 \
         --env CUBLAS_WORKSPACE_CONFIG=:4096:8 --env OMP_NUM_THREADS=8 --env OPENBLAS_NUM_THREADS=1 \
         --env "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:?}" \
-        "$software/containers/tensorflow-25.02.sif" "$software/tf2502/bin/python" "$@"
+        "$software/containers/tensorflow-25.02.sif" "$environment/bin/python" "$@"
 }
 index=${SLURM_ARRAY_TASK_ID:?}
 if [[ "$mode" == probe ]]; then
@@ -44,7 +56,7 @@ elif [[ "$mode" == train ]]; then
         # JobIDRaw is the internal child ID, not ARRAY_ID_TASK_ID.
         predecessor_state=''
         for attempt in {1..15}; do
-            predecessor_state=$(sacct --clusters=mindwell -X -nP -j "$previous" -o JobID,State | awk -F'|' -v id="$previous" '$1==id {print $2}')
+            predecessor_state=$(sacct --clusters="$cluster" -X -nP -j "$previous" -o JobID,State | awk -F'|' -v id="$previous" '$1==id {print $2}')
             case "$predecessor_state" in
                 ''|RUNNING*|PENDING*|COMPLETING*) sleep 2 ;;
                 *) break ;;
