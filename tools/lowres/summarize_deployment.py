@@ -163,7 +163,7 @@ def markdown(summary):
         if row['kind'] == 'native':
             text.append(f"| {row['case']['id']} | {row['full']['epe']:.4f} | {row['monitor']['epe']:.4f} | {row['other196']['epe']:.4f} |")
     text.extend(['', '## 转换与量化', '',
-                 '先逐图比较原生 FP32 与 TFLite FP32，全部 1041 对的 EPE 差都必须小于 0.001，防止均值相互抵消。', '',
+                 '先逐图比较原生 FP32 与 TFLite FP32：全部 1041 对的 EPE 差均须小于 0.001，逐图绝对差的均值须小于 0.0001，防止均值相互抵消。', '',
                  '| 权重与输入 | TFLite FP32 EPE | INT8 EPE | 量化增量 | 最大逐图转换差 | 输出边界值占比 |',
                  '|---|---:|---:|---:|---:|---:|'])
     for case, check in summary['conversion_acceptance'].items():
@@ -199,12 +199,21 @@ def markdown(summary):
     for model in MODELS:
         for name, item in scores[f'random-{model}-208-native']['full']['motion_bins'].items():
             text.append(f"| {model} | {labels[name]} | {item['pixel_fraction']:.2%} | {item['epe']:.4f} | {item['contribution_to_total_epe']:.4f} |")
+    if summary.get('vela'):
+        text.extend(['', '## 同一量化文件的 Vela 编译', '',
+                     'Ethos-U55-64、400 MHz、Size，沿用已核验的 Grove 配置。FPS 是编译器估计，不是实机测速。', '',
+                     '| 配置 | SRAM 峰值 KiB | CPU 算子 | Vela 估计 FPS |',
+                     '|---|---:|---:|---:|'])
+        for item in summary['vela']['results']:
+            text.append(f"| {item['case']['id']} | {item['sram_peak_kib']:.0f} | {item['cpu_operators']} | {item['estimated_fps']:.3f} |")
+        text.extend(['', '五份编译输入的 SHA 与本轮 INT8 评分文件相同，编译产物和日志已核对。',
+                     '峰值符合编译配置预算；预算不等于芯片总 SRAM 或固件可用 arena，仍须用新模型上板验收。'])
     text.extend(['', '## 怎样使用这些结果', '',
                  '- 原生、转换与量化评分均已逐样本验收；源 checkpoint 在汇总时重新计算 SHA，与各评分及导出记录一致。',
                  '- 场景明细、运动分组、PTQ 增量、尺寸增量和来源 SHA 均保存在 `summary.json`。',
                  '- 场景 bootstrap 只描述这几份固定权重在场景组成上的不确定性，不代替独立初始化种子实验。',
                  '- 本轮只有一个训练初始化种子，不据此声称架构具有统计显著优势，也不配用旧权重的板端 FPS。',
-                 '- 这里的 INT8 是 Vela 编译前的 TFLite 评分；是否能上板、板端精度与速度仍需单独验收。', '',
+                 '- INT8 EPE 来自 Vela 编译前的 TFLite CPU 推理；编译通过也不代替板端数值、内存和实测速度。', '',
                  '核验时间：' + summary['verified_at_utc'], ''])
     return '\n'.join(text)
 
@@ -226,7 +235,7 @@ def main():
     script_dir = Path(__file__).resolve().parent
     scripts = {name: sha(script_dir / name) for name in (
         'audit_deployment.py', 'export_deployment.py', 'run_deployment_audit.py',
-        'summarize_deployment.py', 'model.py', 'data.py')}
+        'summarize_deployment.py', 'compile_deployment.py', 'model.py', 'data.py')}
     cases, protocol = read(audit / 'cases.json'), read(audit / 'protocol.json')
     full, monitor, calibration = (read(audit / filename) for filename in
                                   ('sintel_full.json', 'sintel_monitor.json', 'calibration.json'))
@@ -236,7 +245,14 @@ def main():
     require(protocol['cases'] == cases, 'Protocol and cases differ')
     require(protocol['samples'] == 1041 and protocol['monitor_samples'] == 845
             and protocol['independent_initialization_seeds'] == 1, 'Unexpected protocol counts')
-    require(protocol['script_sha256'] == scripts['audit_deployment.py'], 'Preparation script changed')
+    # Preparation preceded additions to the scoring reducer. Preserve its
+    # original SHA and verify that the current script produces identical data.
+    if protocol['script_sha256'] != scripts['audit_deployment.py']:
+        recheck = audit / 'control/preparation-recheck'
+        for name in ('cases.json', 'sintel_full.json', 'sintel_monitor.json', 'calibration.json'):
+            require(sha(audit / name) == sha(recheck / name), 'Preparation regeneration differs: ' + name)
+        require(read(recheck / 'protocol.json')['script_sha256'] == scripts['audit_deployment.py'],
+                'Preparation recheck code SHA differs')
     require(protocol['full_manifest_sha256'] == sha(audit / 'sintel_full.json')
             and protocol['calibration_sha256'] == sha(audit / 'calibration.json'), 'Manifest SHA differs')
     require(len(full) == len({tuple(row) for row in full}) == 1041
@@ -370,7 +386,8 @@ def main():
                         mean_per_pair_epe_abs_difference=math.fsum(differences) / 1041,
                         aggregate_epe_abs_difference=abs(scores[case_id + '-native']['full']['epe'] -
                                                          scores[case_id + '-float']['full']['epe']),
-                        passed=max(differences) < 1e-3,
+                        mean_pair_epe_tolerance_original_pixels=1e-4,
+                        passed=(max(differences) < 1e-3 and math.fsum(differences) / 1041 < 1e-4),
                         scope='All Sintel per-image scalar EPE paired, plus all 64 calibration predictions '
                               'checked by exporter; Sintel per-pixel prediction arrays were not saved')
             acceptance[case_id] = item
@@ -432,6 +449,42 @@ def main():
                                   subset(records[case + '-int8'], group), args.bootstrap) for group in GROUPS},
             output_saturated_fraction=scores[case + '-int8']['output_saturated_fraction'],
             boundary=exports[case]['exports']['int8']['output']))
+    vela_path = audit / 'vela/summary.json'
+    if vela_path.is_file():
+        vela = read(vela_path)
+        require(vela['status'] == 'completed_not_board_validated' and vela['failed'] == 0
+                and vela['accelerator'] == 'ethos-u55-64' and vela['optimization'] == 'Size',
+                'Vela compilation is incomplete or uses another target')
+        require(vela['script_sha256'] == scripts['compile_deployment.py'], 'Vela wrapper script changed')
+        require(vela['configuration_sha256'] ==
+                'a07260cb487d49de1f93c93295ec9959ede034d6e847bb5aa92fe6650131e2da'
+                and int(vela['memory']['arena_cache_size']) == 1468006
+                and float(vela['system']['core_clock']) == 400e6,
+                'Vela Grove configuration differs')
+        require(len(vela['results']) == 5 and
+                {item['case']['id'] for item in vela['results']} == set(acceptance),
+                'Vela compilation case coverage differs')
+        for item in vela['results']:
+            case_id = item['case']['id']
+            require(item['case'] == scores[case_id + '-int8']['case']
+                    and item['input_sha256'] == exports[case_id]['exports']['int8']['sha256']
+                    and item['checkpoint_sha256'] == exports[case_id]['checkpoint_sha256'],
+                    'Vela input identity or checkpoint SHA differs: ' + case_id)
+            require(item['status'] == 'compiled_not_board_validated' and item['returncode'] == 0
+                    and item['input_unchanged'] is True and item['cpu_operators'] == 0
+                    and item['within_configured_cache_budget'] is True
+                    and item['sram_peak_bytes'] <= 1468006, 'Vela acceptance missing: ' + case_id)
+            require(item['export_report_sha256'] == sha(audit / 'exports' / case_id / 'export.json'),
+                    'Vela export report SHA differs: ' + case_id)
+            # Vela runs on Windows while this reducer may run in the Linux
+            # container. Resolve its recorded basenames under this audit root.
+            for field, hash_field in (('log', 'log_sha256'), ('summary_csv', 'summary_csv_sha256'),
+                                      ('compiled_model', 'compiled_sha256')):
+                name = Path(item[field].replace('\\', '/')).name
+                path = audit / 'vela' / case_id / 'Size' / name
+                sources[str(path)] = sha(path)
+                require(sources[str(path)] == item[hash_field], 'Vela artifact SHA differs: ' + str(path))
+        summary['vela'] = vela
     summary['source_sha256'] = sources
     summary['script_sha256_current_snapshot'] = scripts
     save(audit / 'summary.json', summary)

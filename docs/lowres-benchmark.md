@@ -200,7 +200,7 @@ HPC包装`adapt.sh`复用Mindwell已验收的TensorFlow25.02容器，先在服�
 
 `audit_deployment.py prepare`从本机完整Sintel构建1041对清单，核对原845对包含其中；六份取图对照末步权重各测208×160，随机组S/L另测224×160。评分继续使用中心416×1024全部像素，图片AREA缩放、BGR归一化，预测LINEAR还原并分别换算u/v；不乘旧12.5、不截断GT或预测、不更新BN或优化器。每图保存原图EPE，按场景及原始GT运动大小（<10、10–40、≥40）归约；845与额外196分别报告，均是开发评测，不称盲测。
 
-`export_deployment.py`使用同一份当前模型图、推理BN和batch1，保留原四通道输出头及最终u/v切片。三模型共享64对固定等距FC2 TRAIN整图校准；224×160重新校准，不仅修改旧TFLite形状。原生GPU卷积、精确加载、源文件及BN不变、冻结图一致性、全部64对FP32转换差异和全整数INT8张量均验收，具体差异及SHA留export.json。原生FP32使用5060 Ti，TFLite浮点与INT8使用CPU；此阶段没有板端执行或Vela部署通过声明。旧公开权重的输入范围、BN和12.5规则不能套用。
+`export_deployment.py`使用同一份当前模型图、推理BN和batch1，保留原四通道输出头及最终u/v切片。三模型共享64对固定等距FC2 TRAIN整图校准；224×160重新校准，不仅修改旧TFLite形状。原生GPU卷积、精确加载、源文件及BN不变、冻结图一致性、全部64对FP32转换差异和全整数INT8张量均验收，具体差异及SHA留export.json。原生FP32使用5060 Ti，TFLite浮点与INT8使用CPU；INT8 EPE来自编译前的TFLite，不能冒充板端评分。旧公开权重的输入范围、BN和12.5规则不能套用。
 
 运行示例（容器路径；通过`tools/setup/run-local.ps1`启动）：
 
@@ -210,4 +210,16 @@ python tools/lowres/run_deployment_audit.py --data /datasets --audit /runs/LOWRE
 python tools/lowres/run_deployment_audit.py --data /datasets --audit /runs/LOWRES-BENCH-01/geometry10k-20261004/deployment-audit --phase quantized
 ```
 
-两阶段串行，任何子进程失败停止并保留日志，不自动覆盖失败产物；已有完成证据可跳过。运行配置、完整逐图结果、转换模型和日志放同一Runs目录，不进入Git；状态及结果仅更新已有wiki实验记录和Benchmark总表。不自动启动FT3D训练。
+同一个控制器内顺序执行，任何子进程失败停止并保留日志，不自动覆盖失败产物；已有完成证据可跳过。`--phase exports`仅导出，`--only-case random-L-224`限定一个独立配置；可将独立GPU导出与CPU评分重叠，但不得同时操作同一配置或并发争用GPU。运行配置、完整逐图结果、转换模型和日志放同一Runs目录，不进入Git；状态及结果仅更新已有wiki实验记录和Benchmark总表。不自动启动FT3D训练。
+
+转换验收统一要求：64对校准图每对最大u/v差不超过1e-3输入像素，平均向量差不超过1e-4输入像素；全1041对原生／TFLite FP32逐图EPE最大绝对差小于1e-3原图像素、绝对差均值小于1e-4。最初1e-4的最大分量门限被CPU后端差异触发，冻结TF CPU与TFLite CPU复查确认同样微小差异后，采用上述双重界限；原失败报告保留，INT8误差另计。GPU核验使用实际执行分区记录，不启用本机不兼容的CUPTI FULL_TRACE；最初崩溃日志也保留。
+
+`compile_deployment.py`在已有独立Vela环境运行，五份量化文件均保持原四通道累加图，最后才切出u/v，不替换旧板端的双通道累加图。配置固定为已核验的`Runs/MCUFlowNet/GROVE-INT8-01/scan/grove-1p4mib.ini`（SHA256：`a07260cb487d49de1f93c93295ec9959ede034d6e847bb5aa92fe6650131e2da`），Ethos-U55-64、400MHz、Size、arena_cache_size=1,468,006 B。该预算不等于板卡2MiB总SRAM或固件可用arena。Windows复跑示例：
+
+```powershell
+& C:/00Work/Envs/stdc1-seg-vela/Scripts/python.exe tools/lowres/compile_deployment.py --audit C:/00Work/Runs/MCUFlowNet/LOWRES-BENCH-01/geometry10k-20261004/deployment-audit --config C:/00Work/Runs/MCUFlowNet/GROVE-INT8-01/scan/grove-1p4mib.ini --config-sha256 a07260cb487d49de1f93c93295ec9959ede034d6e847bb5aa92fe6650131e2da
+```
+
+编译输出目录已存在时拒绝覆盖；各项失败独立保留。五配置的输入SHA必须与INT8评分一致，报告CPU算子、SRAM峰值及**估计**FPS，新模型的上板数值、内存与实测FPS另验。
+
+`summarize_deployment.py --audit <audit>`只做CPU归约，不导入TensorFlow或重新推理：重算全部18份逐图报告的1041／845／196对均值、场景与运动分组，核对样本、源权重、导出、转换验收；若已有Vela报告，也核对五份编译的身份及产物SHA。报告保存在同目录`summary.json`与`summary.md`，不以场景bootstrap代替独立训练种子。
