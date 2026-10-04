@@ -15,6 +15,8 @@ class GeometryTests(unittest.TestCase):
         self.assertTrue(all(step_lr(i,10000)>step_lr(i+1,10000) for i in (1,2000,7000,9999)))
         with self.assertRaises(ValueError):
             step_lr(10001,10000)
+        self.assertEqual(step_lr(1,10000,3e-6,1e-6),3e-6)
+        self.assertEqual(step_lr(10000,10000,3e-6,1e-6),1e-6)
 
     def test_box_distribution(self):
         boxes = [sample_box(384,512,[42,1,i,RECIPE['seed_namespace']]) for i in range(10000)]
@@ -60,6 +62,9 @@ class GeometryTests(unittest.TestCase):
                 for v,w in zip(left,right): np.testing.assert_array_equal(v,w)
             for v,w in zip(before[1],resumed[0]): np.testing.assert_array_equal(v,w)
             legacy = read_sample(root,row)
+            np.testing.assert_array_equal(legacy[1],read_sample(root,row,expected_source_hw=(384,512))[1])
+            with self.assertRaises(ValueError):
+                read_sample(root,row,expected_source_hw=(540,960))
             whole = next(batches([row],root,42,1,geometry='whole'))
             np.testing.assert_array_equal(legacy[0],whole[0][0])
             np.testing.assert_array_equal(legacy[1],whole[1][0])

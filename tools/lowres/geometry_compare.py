@@ -1,4 +1,4 @@
-"""Equal-step FC2 geometry comparison from verified common scratch endpoints."""
+"""Equal-step FC2/FT3D geometry comparisons from verified shared endpoints."""
 import argparse
 import hashlib
 import json
@@ -22,19 +22,22 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--model', choices=['edge','S','L'], required=True)
     p.add_argument('--geometry', choices=['whole','random'], required=True)
+    p.add_argument('--phase', choices=['fc2','ft3d'], default='fc2')
     for name in ('data','manifests','source','out'):
         p.add_argument('--'+name, type=Path, required=True)
     p.add_argument('--steps', type=int, default=10000)
     p.add_argument('--eval-every', type=int, default=1000)
     p.add_argument('--seed', type=int, default=42)
     p.add_argument('--workers', type=int, default=8)
-    p.add_argument('--initial-lr', type=float, default=1e-5)
+    p.add_argument('--initial-lr', type=float)
     p.add_argument('--min-lr', type=float, default=1e-6)
     p.add_argument('--resume', action='store_true')
     p.add_argument('--probe', action='store_true')
     p.add_argument('--stop-after-steps', type=int)
     p.add_argument('--code-commit')
     a = p.parse_args()
+    if a.initial_lr is None:
+        a.initial_lr = 3e-6 if a.phase == 'ft3d' else 1e-5
     step_lr(1,a.steps,a.initial_lr,a.min_lr)
     if a.eval_every < 1 or a.workers < 1:
         raise ValueError('Positive evaluation interval and workers required')
@@ -44,21 +47,43 @@ def main():
     parent = json.loads((a.source/'current.json').read_text())
     status = json.loads((a.source/'status.json').read_text())
     cfg = parent['config']
-    if (not status['completed'] or parent['epoch'] != 400 or cfg['epochs'] != 400
-            or cfg['phase'] != 'fc2' or cfg['model'] != a.model or cfg['seed'] != 42
-            or cfg['hw'] != [160,208] or cfg['images'] != 'BGR_-1_1_area'
-            or cfg['bn'] != 'training_on_eval_off_momentum0.9_epsilon1e-5'
-            or cfg.get('init') is not None):
-        raise ValueError('Not a matching common-scratch FC2 epoch-400 endpoint')
+    common = (status['completed'] and cfg['model'] == a.model and cfg['seed'] == 42
+              and cfg['hw'] == [160,208] and cfg['images'] == 'BGR_-1_1_area'
+              and cfg['bn'] == 'training_on_eval_off_momentum0.9_epsilon1e-5')
+    if a.phase == 'fc2':
+        valid = (common and parent['epoch'] == 400 and cfg['epochs'] == 400
+                 and cfg['phase'] == 'fc2' and cfg.get('init') is None)
+    else:
+        valid = (common and parent['step'] == 10000 and status['step'] == 10000
+                 and cfg['steps'] == 10000 and cfg['geometry'] == 'random'
+                 and cfg.get('phase', 'fc2') == 'fc2'
+                 and parent['checkpoint'] == 'step-010000/model'
+                 and parent['best_fc2']['step'] == 10000)
+    if not valid:
+        raise ValueError('Not a matching verified parent for phase ' + a.phase)
     prefix = a.source/parent['checkpoint']
     source_sha = checkpoint_sha(prefix)
     files = [a.manifests/f'{n}.json' for n in ('fc2_train','fc2_val','sintel_monitor')]
     hashes = {f.name:digest(f) for f in files}
     if hashes != cfg['manifest_sha']:
         raise ValueError('Common data manifests differ from pretraining')
-    rows, val, monitor = [json.loads(f.read_text()) for f in files]
-    if (len(rows),len(val),len(monitor)) != (22232,640,845):
+    fc2_rows, val, monitor = [json.loads(f.read_text()) for f in files]
+    if (len(fc2_rows),len(val),len(monitor)) != (22232,640,845):
         raise ValueError('Unexpected dataset split sizes')
+    rows = fc2_rows
+    source_hw = (384,512)
+    if a.phase == 'ft3d':
+        ft3d = a.manifests/'ft3d_train.json'
+        rows = json.loads(ft3d.read_text())
+        if len(rows) != 80578 or len(set(map(tuple,rows))) != 80578:
+            raise ValueError('Expected the verified 80,578 distinct FT3D TRAIN pairs')
+        if any(not Path(p).parts[:3] in (
+                ('FlyingThings3D','frames_cleanpass','TRAIN'),
+                ('FlyingThings3D','frames_finalpass','TRAIN'))
+                for row in rows for p in row[:2]):
+            raise ValueError('FT3D image paths are not the approved TRAIN renders')
+        hashes[ft3d.name] = digest(ft3d)
+        source_hw = (540,960)
     if a.probe:
         rows, val, monitor = rows[:65], val[:2], monitor[:2]
     ranges = batch_ranges(len(rows),32,True)
@@ -66,10 +91,16 @@ def main():
                   steps=a.steps,eval_every=a.eval_every,seed=a.seed,workers=a.workers,
                   hw=[160,208],batch=32,merge_tail=True,samples=len(rows),steps_per_sweep=len(ranges),
                   initial_lr=a.initial_lr,min_lr=a.min_lr,lr_schedule='per_step_cosine',
-                  source=str(a.source.resolve()),source_sha=source_sha,source_epoch=400,
+                  source=str(a.source.resolve()),source_sha=source_sha,
                   source_state_sha=digest(a.source/'current.json'),manifest_sha=hashes,
                   images=cfg['images'],bn=cfg['bn'],flow_units='resized_pixels_no_clip',
                   loss=cfg['loss'],optimizer=cfg['optimizer'],probe=a.probe)
+    if a.phase == 'fc2':
+        config['source_epoch'] = 400
+    else:
+        config.update(phase='ft3d',source_step=10000,source_hw=list(source_hw),
+                      selection='fixed FC2 random step 10000; also FC2 validation minimum',
+                      renders='Clean+Final, future+past, left camera')
     if a.resume:
         state = json.loads((a.out/'current.json').read_text())
         if state['config'] != config:
@@ -130,7 +161,7 @@ def main():
             next_step = int(sess.run(g['step']))
             sweep, offset = divmod(next_step,len(ranges))
             for x,y,ids in batches(rows,a.data,a.seed,sweep+1,workers=a.workers,merge_tail=True,
-                                  geometry=a.geometry,start_batch=offset):
+                                  geometry=a.geometry,start_batch=offset,expected_source_hw=source_hw):
                 step = int(sess.run(g['step']))+1
                 lr = step_lr(step,a.steps,a.initial_lr,a.min_lr)
                 _, loss, epe = sess.run([g['train'],g['loss'],g['epe']],
@@ -140,8 +171,8 @@ def main():
                 assert int(sess.run(g['step'])) == step
                 seen += len(x); loss_sum += float(loss)*len(x); epe_sum += float(epe)*len(x)
                 ids_hash.update(np.asarray([sweep+1,*ids],np.int64).tobytes())
-                boxes = [sample_box(384,512,[a.seed,sweep+1,int(i),RECIPE['seed_namespace']])
-                         if a.geometry=='random' else (0,0,384,512) for i in ids]
+                boxes = [sample_box(*source_hw,[a.seed,sweep+1,int(i),RECIPE['seed_namespace']])
+                         if a.geometry=='random' else (0,0,*source_hw) for i in ids]
                 box_hash.update(np.asarray(boxes,np.int64).tobytes())
                 if step % 100 == 0:
                     print(json.dumps(dict(event='batch',step=step,lr=lr,loss=float(loss))),flush=True)

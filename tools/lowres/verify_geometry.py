@@ -16,12 +16,14 @@ def main():
     for name in ('data','manifests','source','out'):
         p.add_argument('--'+name,type=Path,required=True)
     p.add_argument('--code-commit')
+    p.add_argument('--phase',choices=['fc2','ft3d'],default='fc2')
     a=p.parse_args(); a.out.mkdir(parents=True,exist_ok=False)
     parent=json.loads((a.source/'current.json').read_text())
     source=a.source/parent['checkpoint']; before=checkpoint_sha(source)
     base=[sys.executable,str(Path(__file__).with_name('geometry_compare.py')),'--model',a.model,
           '--data',str(a.data),'--manifests',str(a.manifests),'--source',str(a.source),
           '--steps','5','--eval-every','1','--probe']
+    base+=['--phase',a.phase]
     if a.code_commit: base+=['--code-commit',a.code_commit]
     env=dict(os.environ,TF_DETERMINISTIC_OPS='1',CUBLAS_WORKSPACE_CONFIG=':4096:8')
     results={}; states={}
@@ -64,7 +66,7 @@ def main():
     assert [r['order_sha'] for r in states['whole']['history'][1:]]==[r['order_sha'] for r in states['random']['history'][1:]]
     assert [r['geometry_sha'] for r in states['whole']['history'][1:]]!=[r['geometry_sha'] for r in states['random']['history'][1:]]
     assert checkpoint_sha(source)==before
-    result=dict(passed=True,probe_only=True,model=a.model,arms=results,source_unchanged=True,
+    result=dict(passed=True,probe_only=True,model=a.model,phase=a.phase,arms=results,source_unchanged=True,
                 initial_prediction_equal=True,paired_sample_order_equal=True,tensorflow=tf.__version__,
                 code_commit=a.code_commit,code_files_sha={n:__import__('hashlib').sha256(Path(__file__).with_name(n).read_bytes()).hexdigest()
                     for n in ('geometry_compare.py','geometry.py','data.py','model.py','initialization.py','verify_geometry.py')})

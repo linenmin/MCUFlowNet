@@ -7,10 +7,12 @@ import subprocess
 import time
 
 
-def classify(root, states):
+def classify(root, states, phase='fc2'):
+    if phase not in ('fc2','ft3d'):
+        raise ValueError('Unknown recovery phase')
     pending=[]; attention=[]
     for index,(arm,model) in enumerate([(a,m) for a in ('whole','random') for m in ('edge','S','L')]):
-        out=root/'seed42'/arm/model/'fc2'
+        out=root/'seed42'/arm/model/phase
         state=out/'current.json'; status=out/'status.json'
         if state.exists() and status.exists():
             v=json.loads(state.read_text()); s=json.loads(status.read_text())
@@ -29,6 +31,7 @@ def main():
     p.add_argument('--root',type=Path,required=True)
     p.add_argument('--data',type=Path,required=True)
     p.add_argument('--parent',required=True)
+    p.add_argument('--phase',choices=['fc2','ft3d'],default='fc2')
     a=p.parse_args(); assert a.parent.isdigit()
     c=a.root/'control'; result=dict(parent=a.parent,checked_at=datetime.datetime.now(datetime.timezone.utc).isoformat())
     states={}
@@ -40,7 +43,7 @@ def main():
                 states[int(name[len(a.parent)+1:])]=fields[1].split()[0].rstrip('+')
         if len(states)==6: break
         time.sleep(2)
-    indices,attention=classify(a.root,states)
+    indices,attention=classify(a.root,states,a.phase)
     result.update(states=states,recovery_indices=indices,needs_attention=attention)
     proof=c/'recovery-dispatch.json'
     def save(): proof.write_text(json.dumps(result,indent=2)+'\n')
@@ -48,6 +51,7 @@ def main():
         result.update(action='no_gpu_recovery_required');save();print(json.dumps(result),flush=True)
         return 1 if attention else 0
     recipe=json.loads((c/'submission.json').read_text());repo=recipe['checkout']
+    assert recipe.get('phase','fc2') == a.phase
     controller=c/'geometry_compare.controller-v2.sh'
     assert controller.is_file() and subprocess.check_output(['git','-C',repo,'rev-parse','HEAD'],text=True).strip()==recipe['code_commit']
     name='flow-geometry-recovery-'+a.parent
@@ -63,7 +67,7 @@ def main():
                  '--array='+','.join(map(str,indices)),'--time='+str(minutes),
                  '--kill-on-invalid-dep=yes','--export=ALL','--chdir='+repo,'--dependency=afterany:'+a.parent,
                  '--job-name='+name,'--output='+str(a.root/'logs/train-%A_%a.out'),
-                 str(controller),'train',repo,str(a.data),str(a.root),a.parent]
+                 str(controller),'train',repo,str(a.data),str(a.root),a.parent,a.phase]
             reply=subprocess.run(cmd,text=True,capture_output=True)
             attempts.append(dict(minutes=minutes,exit_code=reply.returncode,stdout=reply.stdout,stderr=reply.stderr))
             result['attempts']=attempts;save()

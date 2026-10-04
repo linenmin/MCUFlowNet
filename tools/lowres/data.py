@@ -21,7 +21,7 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def read_sample(root, row, sintel=False, hw=HW, images='normalized', geometry_seed=None):
+def read_sample(root, row, sintel=False, hw=HW, images='normalized', geometry_seed=None, expected_source_hw=None):
     if images not in ('normalized', 'raw'):
         raise ValueError('Unknown image numeric convention')
     paths = [Path(root) / p for p in row]
@@ -33,6 +33,8 @@ def read_sample(root, row, sintel=False, hw=HW, images='normalized', geometry_se
         raise ValueError(f'Mismatched shapes: {row}')
     if not np.isfinite(flow).all():
         raise ValueError(f'Nonfinite flow: {row}')
+    if expected_source_hw is not None and tuple(flow.shape[:2]) != tuple(expected_source_hw):
+        raise ValueError(f'Unexpected source dimensions: {row}, {flow.shape[:2]}')
     if sintel and geometry_seed is not None:
         raise ValueError('Training geometry is forbidden in evaluation')
     if sintel:
@@ -58,7 +60,7 @@ def read_sample(root, row, sintel=False, hw=HW, images='normalized', geometry_se
     return pair, small, flow
 
 
-def batches(rows, root, seed, epoch, batch=32, workers=8, shuffle=True, merge_tail=False, hw=HW, images='normalized', geometry='whole', start_batch=0):
+def batches(rows, root, seed, epoch, batch=32, workers=8, shuffle=True, merge_tail=False, hw=HW, images='normalized', geometry='whole', start_batch=0, expected_source_hw=None):
     if geometry not in ('whole', 'random'):
         raise ValueError('Unknown training geometry')
     order = np.random.default_rng(np.random.SeedSequence([seed, epoch])).permutation(len(rows)) if shuffle else np.arange(len(rows))
@@ -70,6 +72,7 @@ def batches(rows, root, seed, epoch, batch=32, workers=8, shuffle=True, merge_ta
         def submit(index):
             start, end = ranges[index]
             return [pool.submit(read_sample, root, rows[int(i)], hw=hw, images=images,
+                                expected_source_hw=expected_source_hw,
                                 geometry_seed=[seed, epoch, int(i), 20261004] if geometry=='random' else None)
                     for i in order[start:end]]
         pending = submit(start_batch)

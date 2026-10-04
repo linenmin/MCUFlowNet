@@ -71,4 +71,12 @@ with tempfile.TemporaryDirectory() as directory:
     eligible,attention=classify(root,states)
     assert eligible==[1,2]
     assert (finished/'current.json').is_file()
+    eligible,_=classify(root,states,'ft3d')
+    assert eligible==[0,1,2], 'A finished FC2 run cannot hide unfinished FT3D'
+    final=root/'seed42/whole/S/ft3d'; final.mkdir(parents=True)
+    (final/'current.json').write_text(json.dumps(dict(step=10000,checkpoint='model')))
+    (final/'status.json').write_text(json.dumps(dict(completed=True,step=10000)))
+    (final/'model.index').touch()
+    eligible,_=classify(root,states,'ft3d')
+    assert eligible==[0,2]
 print('Geometry dispatcher completion and failure whitelist checks passed')
