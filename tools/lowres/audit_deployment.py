@@ -115,6 +115,10 @@ def evaluate(a):
     rows = json.loads((a.audit / 'sintel_full.json').read_text())
     monitor = set(map(tuple, json.loads((a.audit / 'sintel_monitor.json').read_text())))
     hw = tuple(case['hw'])
+    edge_public = bool(case.get('edge_public', False))
+    if edge_public and case['model'] != 'edge':
+        raise ValueError('Public input/BN semantics are defined only for Edge')
+    images = 'raw' if edge_public else 'normalized'
     checkpoint = Path(case['checkpoint'])
     source_sha = {p.name: sha(p) for p in sorted(checkpoint.parent.glob('model.*'))}
     start = time.perf_counter()
@@ -123,7 +127,8 @@ def evaluate(a):
     if a.kind == 'native':
         if not tf.config.list_physical_devices('GPU'):
             raise RuntimeError('GPU required for native model inference')
-        g = graph(case['model'], hw=hw)
+        g = graph(case['model'], hw=hw, edge_public=edge_public,
+                  bn_mode='frozen' if edge_public else 'train')
         cfg = tf.compat.v1.ConfigProto(intra_op_parallelism_threads=4, inter_op_parallelism_threads=2,
             allow_soft_placement=False)
         cfg.gpu_options.allow_growth = True
@@ -150,6 +155,7 @@ def evaluate(a):
         exported = json.loads((tflite.parent / 'export.json').read_text())
         assert exported['status'] == 'passed'
         assert exported['checkpoint_sha256'] == source_sha
+        assert bool(exported.get('edge_public', False)) == edge_public
         interpreter = tf.lite.Interpreter(model_path=str(tflite), num_threads=4)
         interpreter.allocate_tensors()
         ii, oo = interpreter.get_input_details()[0], interpreter.get_output_details()[0]
@@ -176,7 +182,7 @@ def evaluate(a):
         with ThreadPoolExecutor(max_workers=4) as pool, (out / 'per_pair.jsonl').open('w') as file:
             for begin in range(0, len(rows), batch):
                 part = rows[begin:begin + batch]
-                values = list(pool.map(lambda r: read_sample(a.data, r, True, hw=hw), part))
+                values = list(pool.map(lambda r: read_sample(a.data, r, True, hw=hw, images=images), part))
                 x = np.stack([v[0] for v in values])
                 prediction = predict(x, first=begin == 0)
                 saturation = 0.
@@ -216,6 +222,7 @@ def evaluate(a):
             full=reduce_records(records), monitor=reduce_records(selected),
             other196=reduce_records([r for r in records if not r['monitor']]),
             weights_unchanged=True, restore_exact=a.kind == 'native',
+            input_convention=images, edge_public=edge_public,
             checkpoint_sha256=source_sha, tflite_sha256=tflite_sha,
             gpu_convolutions=gpu_ops, inference_device='GPU' if a.kind == 'native' else 'TFLite CPU',
             output_saturated_fraction=float(np.mean([r['output_saturated_fraction'] for r in records])),

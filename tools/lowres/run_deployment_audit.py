@@ -26,12 +26,13 @@ def main():
             tasks.append((f"{c['id']}-native", a.audit / 'scores' / f"{c['id']}-native/result.json",
                 [str(scripts / 'audit_deployment.py'), 'evaluate', '--data', str(a.data),
                  '--audit', str(a.audit), '--case', c['id'], '--kind', 'native']))
-        elif c['geometry'] == 'random':
+        elif c.get('quantize', c['geometry'] == 'random'):
             dest = a.audit / 'exports' / c['id']
             tasks.append((f"{c['id']}-export", dest / 'export.json',
                 [str(scripts / 'export_deployment.py'), '--model', c['model'], '--checkpoint', c['checkpoint'],
                  '--height', str(c['hw'][0]), '--width', str(c['hw'][1]), '--data', str(a.data),
-                 '--calibration-manifest', str(a.audit / 'calibration.json'), '--out', str(dest)]))
+                 '--calibration-manifest', str(a.audit / 'calibration.json'), '--out', str(dest)]
+                 + (['--edge-public'] if c.get('edge_public', False) else [])))
             for kind in (() if a.phase == 'exports' else ('float', 'int8')):
                 tasks.append((f"{c['id']}-{kind}", a.audit / 'scores' / f"{c['id']}-{kind}/result.json",
                     [str(scripts / 'audit_deployment.py'), 'evaluate', '--data', str(a.data),

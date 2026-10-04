@@ -1,7 +1,7 @@
 """Export current low-resolution weights without changing their flow convention.
 
-Calibration uses one shared list of 64 FC2 TRAIN pairs. Native inference,
-FP32 TFLite and INT8 TFLite all consume normalized BGR, not legacy Edge inputs.
+Calibration uses one shared list of 64 FC2 TRAIN pairs. Default models consume
+normalized BGR; --edge-public preserves an adapted author's raw BGR and frozen BN.
 This exports pre-Vela graphs; it neither calibrates BN nor proves board fitness.
 """
 import argparse
@@ -57,14 +57,18 @@ def frozen_graph(session, g):
     """Freeze the exact accumulation and fix BN's switch to inference."""
     graph_def = tf.compat.v1.graph_util.convert_variables_to_constants(
         session, session.graph.as_graph_def(), [g['prediction'].op.name])
-    training = next(node for node in graph_def.node if node.name == g['training'].op.name)
-    if training.op != 'PlaceholderWithDefault':
-        raise ValueError('Unexpected BN switch: ' + training.op)
-    training.ClearField('input')
-    training.ClearField('attr')
-    training.op = 'Const'
-    training.attr['dtype'].type = tf.bool.as_datatype_enum
-    training.attr['value'].tensor.CopyFrom(tf.make_tensor_proto(False, dtype=tf.bool))
+    training = next((node for node in graph_def.node if node.name == g['training'].op.name), None)
+    if training is None:
+        if g['bn_mode'] != 'frozen':
+            raise ValueError('Missing training switch in a trainable-BN graph')
+    else:
+        if training.op != 'PlaceholderWithDefault':
+            raise ValueError('Unexpected BN switch: ' + training.op)
+        training.ClearField('input')
+        training.ClearField('attr')
+        training.op = 'Const'
+        training.attr['dtype'].type = tf.bool.as_datatype_enum
+        training.attr['value'].tensor.CopyFrom(tf.make_tensor_proto(False, dtype=tf.bool))
     node = next(node for node in graph_def.node if node.name == g['x'].op.name)
     node.attr['shape'].shape.CopyFrom(tf.TensorShape([1, *g['hw'], 6]).as_proto())
     for node in graph_def.node:
@@ -85,7 +89,11 @@ def main():
     parser.add_argument('--data', type=Path, required=True)
     parser.add_argument('--calibration-manifest', type=Path, required=True)
     parser.add_argument('--out', type=Path, required=True)
+    parser.add_argument('--edge-public', action='store_true',
+                        help='Preserve the adapted public Edge input and BN convention')
     args = parser.parse_args()
+    if args.edge_public and args.model != 'edge':
+        raise ValueError('--edge-public is only defined for Edge')
     if args.out.exists():
         raise FileExistsError(args.out)
     rows = json.loads(args.calibration_manifest.read_text(encoding='utf-8'))
@@ -98,14 +106,19 @@ def main():
     args.out.mkdir(parents=True)
     started = time.monotonic()
     source_hashes = checkpoint_hashes(args.checkpoint)
-    report = dict(status='running', model=args.model, checkpoint=str(args.checkpoint.resolve()),
+    report = dict(status='running', model=args.model, edge_public=args.edge_public,
+        checkpoint=str(args.checkpoint.resolve()),
         checkpoint_sha256=source_hashes, input_hw=[args.height, args.width], batch=1,
         tensorflow=tf.__version__, script_sha256=sha(__file__), command=sys.argv,
         calibration_manifest=str(args.calibration_manifest.resolve()),
         calibration_manifest_sha256=sha(args.calibration_manifest), calibration_pairs=64,
-        input_convention='Two full FC2 frames, BGR, AREA resize, concatenate, float32 /255*2-1',
+        input_convention=('Two full FC2 frames, BGR, AREA resize, concatenate, float32 0-255'
+                          if args.edge_public else
+                          'Two full FC2 frames, BGR, AREA resize, concatenate, float32 /255*2-1'),
         output_convention='Input-image pixel displacement u,v; no 12.5 multiplier; no clipping',
-        bn='Current training graph, momentum 0.9 epsilon 1e-5; inference fixed False; no BN update',
+        bn=('Adapted public Edge, momentum 0.99 epsilon 1e-3; author statistics frozen; no BN update'
+            if args.edge_public else
+            'Current training graph, momentum 0.9 epsilon 1e-5; inference fixed False; no BN update'),
         heads='Original four-channel heads and original accumulation retained; final u,v slice only',
         runtime='Pre-Vela TFLite; no board measurement',
         float_acceptance=dict(max_component_input_pixels=1e-3,
@@ -118,12 +131,14 @@ def main():
         cv2.setNumThreads(1)
         if not tf.config.list_physical_devices('GPU'):
             raise RuntimeError('Native export acceptance requires the configured GPU runtime')
-        g = graph(args.model, hw=(args.height, args.width))
+        g = graph(args.model, hw=(args.height, args.width), edge_public=args.edge_public,
+                  bn_mode='frozen' if args.edge_public else 'train')
         g['x'].set_shape([1, args.height, args.width, 6])
         pairs = []
         report['calibration'] = []
         for row in rows:
-            pair = read_sample(args.data, row, hw=g['hw'], images='normalized')[0][None]
+            pair = read_sample(args.data, row, hw=g['hw'],
+                               images='raw' if args.edge_public else 'normalized')[0][None]
             if pair.shape != (1, args.height, args.width, 6) or not np.isfinite(pair).all():
                 raise ValueError('Bad calibration input')
             pairs.append(pair)

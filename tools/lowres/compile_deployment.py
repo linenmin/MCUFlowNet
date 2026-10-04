@@ -35,6 +35,8 @@ def main():
     parser.add_argument('--audit', type=Path, required=True)
     parser.add_argument('--config', type=Path, required=True)
     parser.add_argument('--config-sha256', required=True)
+    parser.add_argument('--case', action='append', dest='case_ids',
+                        help='Compile selected accepted exports, including an adapted public reference')
     args = parser.parse_args()
     if sha(args.config) != args.config_sha256.lower():
         raise ValueError('Grove configuration SHA256 differs')
@@ -46,10 +48,16 @@ def main():
             or float(system['offchipflash_clock_scale']) != 0.015625
             or float(system['core_clock']) != 400e6):
         raise ValueError('Expected the previously checked 1.4 MiB/400 MHz Grove configuration')
-    cases = [case for case in json.loads((args.audit/'cases.json').read_text(encoding='utf-8'))
-             if case['geometry'] == 'random']
+    available = json.loads((args.audit/'cases.json').read_text(encoding='utf-8'))
+    cases = [case for case in available if case['id'] in args.case_ids] if args.case_ids else [
+        case for case in available if case['geometry'] == 'random']
     expected = {'random-edge-208','random-S-208','random-L-208','random-S-224','random-L-224'}
-    if len(cases) != 5 or {case['id'] for case in cases} != expected:
+    if args.case_ids:
+        if (len(set(args.case_ids)) != len(args.case_ids) or
+                {case['id'] for case in cases} != set(args.case_ids) or
+                any(not case.get('quantize', case['geometry'] == 'random') for case in cases)):
+            raise ValueError('Selected cases must be unique, present and quantized')
+    elif len(cases) != 5 or {case['id'] for case in cases} != expected:
         raise ValueError('Expected the five random-arm exports')
     root = args.audit/'vela'
     root.mkdir(parents=True, exist_ok=False)

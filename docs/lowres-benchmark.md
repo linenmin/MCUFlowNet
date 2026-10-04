@@ -204,6 +204,14 @@ HPC包装`adapt.sh`复用Mindwell已验收的TensorFlow25.02容器，先在服�
 
 比较固定末步、后五次验证中位数、各自相对起点的改善及三模型差距，不只比较最佳。板端新候选和已有更强Edge权重先行验收；较强旧Edge单列为已训练方法的部署参考，不能替换六条中的共同起点。Slurm时限与GPU选择须在提交前按实际资源和SAM余额核对；不把旧的4小时预留直接照搬。
 
+### 既有较强Edge与新权重的实机验收
+
+既有继承适配Edge的FT3D第1轮`best_monitor/model`单列为部署参考。`audit_deployment.py`的case设`edge_public:true`，导出增加`--edge-public`，保留作者0–255 BGR输入与固定BN；输出仍为真实输入像素位移。沿用共同1041／845／196对及64对FC2 TRAIN校准。`compile_deployment.py --case reference-edge-208`选择这一额外导出，不替换旧五配置；`summarize_reference.py`独立归约逐图记录，核对清单、源权重、浮点转换及Vela文件身份。训练历史不同，不能当作同预算架构对照。
+
+`board_fixtures.py`从640对FC2验证清单固定取第0／320／639对，生成量化输入与CPU TFLite INT8参考输出。标签不参与参考生成或量化校准。三个输入／输出顺序写入独立Flash槽，避免占用固件SRAM；SDK的`prepare_optical_bench.py --export-report ... --fixtures ...`读取实际量化参数及输入规则，不再仅按模型名猜测。输出乘数为1，不能继承旧MCU的12.5。
+
+板端先核对模型与固定输入CRC、INT8 I/O、三组输出差值，再在保留相机／JPEG内存配置的条件下，使用同一输入预热5次、计时20次纯Invoke。固定输入的统一初始数值界限为最大分量差不超过2个量化档位、平均不超过0.05档位；不通过就保留差值并排查，不能把失败改成通过。三组小样本接近不等于全部1041对的板端EPE已测；离线INT8 EPE、实机推理速度、相机总耗时和Vela估计分开报告。完整产物放在既有`geometry10k-20261004/deployment-followup`，不新增wiki实验页。
+
 ### 新权重的全量评分与PTQ验收（2026-10-04）
 
 `audit_deployment.py prepare`从本机完整Sintel构建1041对清单，核对原845对包含其中；六份取图对照末步权重各测208×160，随机组S/L另测224×160。评分继续使用中心416×1024全部像素，图片AREA缩放、BGR归一化，预测LINEAR还原并分别换算u/v；不乘旧12.5、不截断GT或预测、不更新BN或优化器。每图保存原图EPE，按场景及原始GT运动大小（<10、10–40、≥40）归约；845与额外196分别报告，均是开发评测，不称盲测。
