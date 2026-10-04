@@ -110,18 +110,20 @@ def main():
                   fixture_sha256=sha(blob), tensorflow=tf.__version__, comparisons=[])
     resolvers = [('builtin_no_delegate', tf.lite.experimental.OpResolverType.BUILTIN_WITHOUT_DEFAULT_DELEGATES),
                  ('reference_no_delegate', tf.lite.experimental.OpResolverType.BUILTIN_REF)]
+    cpu_outputs = {}
     for name, resolver in resolvers:
         it = tf.lite.Interpreter(model_path=str(a.model), num_threads=1,
                                 experimental_op_resolver_type=resolver)
         it.allocate_tensors()
         ii = it.get_input_details()[0]; oo = it.get_output_details()[0]
-        for item in meta['pairs']:
+        for position, item in enumerate(meta['pairs']):
             start = item['offset']; end = start + meta['input_bytes']
             value = np.frombuffer(blob[start:end], dtype=np.int8).reshape(ii['shape'])
             expected = np.frombuffer(blob[end:end+meta['output_bytes']], dtype=np.int8).reshape(oo['shape'])
             assert sha(value.tobytes()) == item['input_sha256']
             assert sha(expected.tobytes()) == item['output_sha256']
             it.set_tensor(ii['index'], value); it.invoke(); actual = it.get_tensor(oo['index'])
+            cpu_outputs[name, position] = actual
             difference = np.abs(actual.astype(np.int16)-expected.astype(np.int16))
             result['comparisons'].append(dict(resolver=name, pair_index=item['index'],
                 max_abs_q=int(difference.max()), mean_abs_q=float(difference.mean()),
@@ -157,10 +159,19 @@ def main():
             actual = np.frombuffer(data[position], dtype=np.int8).reshape(expected.shape)
             result['board']['comparisons'].append(dict(fixture=position, pair_index=item['index'],
                 crc32=f'{zlib.crc32(data[position]):08x}',
-                **compare_board_output(actual, expected, compiled_io['output']['scale'])))
-            (a.out.parent/f'board-output-{position}.bin').write_bytes(data[position])
+                **compare_board_output(actual, expected, compiled_io['output']['scale']),
+                cpu_kernel_comparisons={name: compare_board_output(
+                    actual, cpu_outputs[name, position], compiled_io['output']['scale'])
+                    for name, _ in resolvers}))
+            raw_path = a.out.parent/f'board-output-{position}.bin'
+            if raw_path.exists():
+                if raw_path.read_bytes() != data[position]:
+                    raise ValueError('Do not overwrite a different saved board output')
+            else:
+                raw_path.write_bytes(data[position])
         result['board']['limits'] = ('The firmware model CRC must be checked separately. '
-                                    'These are three fixed FC2 inputs, not a full Sintel board EPE measurement.')
+                                    'These are three fixed FC2 inputs, not a full Sintel board EPE measurement. '
+                                    'CPU kernel comparisons are diagnostic and do not change firmware acceptance limits.')
     a.out.parent.mkdir(parents=True, exist_ok=True)
     a.out.write_text(json.dumps(result, indent=2)+'\n')
     print(json.dumps(result), flush=True)
