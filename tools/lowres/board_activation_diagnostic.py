@@ -6,6 +6,7 @@ Activation differences are quantized feature codes, never optical-flow EPE.
 """
 import argparse
 import contextlib
+import copy
 import hashlib
 import io
 import json
@@ -16,6 +17,7 @@ import struct
 import tempfile
 from types import SimpleNamespace
 import zlib
+import flatbuffers
 
 os.environ['CUDA_VISIBLE_DEVICES'] = ''
 import numpy as np
@@ -246,6 +248,109 @@ def self_check(a):
     print(json.dumps(result),flush=True)
 
 
+def rewrite_sigmoid_reshape(a):
+    """Move an unchanged pointwise sigmoid after its following reshape.
+
+    The temporary tensor now stores reshaped logits, so it inherits the
+    original logits' quantization. All other tensor quantization and every
+    constant buffer stay unchanged. Keep the original optimized-CPU goldens.
+    """
+    if a.out.exists():
+        raise FileExistsError(a.out)
+    parent = json.loads((a.export/'export.json').read_text())
+    raw = (a.export/'model_int8.tflite').read_bytes()
+    meta = json.loads((a.fixtures/'fixtures.json').read_text())
+    blob = (a.fixtures/'fixtures.bin').read_bytes()
+    assert parent['status'] == meta['status'] == 'passed'
+    assert sha(raw) == parent['exports']['int8']['sha256'] == meta['source_sha256']
+    assert sha(blob) == meta['blob_sha256'] and f'{zlib.crc32(blob):08x}' == meta['blob_crc32']
+    original = schema.Model.GetRootAsModel(raw,0); og = original.Subgraphs(0)
+    assert a.reshape_op == a.sigmoid_op+1 and og.InputsLength() == og.OutputsLength() == 1
+    obj = schema.ModelT.InitFromObj(original); g = obj.subgraphs[0]
+    sig, resh = g.operators[a.sigmoid_op], g.operators[a.reshape_op]
+    assert original.OperatorCodes(sig.opcodeIndex).BuiltinCode() == schema.BuiltinOperator.LOGISTIC
+    assert original.OperatorCodes(resh.opcodeIndex).BuiltinCode() == schema.BuiltinOperator.RESHAPE
+    assert len(sig.inputs) == len(sig.outputs) == len(resh.outputs) == 1
+    logits, temporary, output = map(int,(sig.inputs[0],sig.outputs[0],resh.outputs[0]))
+    assert len({logits,temporary,output}) == 3 and int(resh.inputs[0]) == temporary
+    assert temporary not in list(g.inputs)+list(g.outputs)
+    assert all(temporary not in op.inputs for i,op in enumerate(g.operators) if i != a.reshape_op)
+    before, after = tensor_io(og,temporary), tensor_io(og,output)
+    assert np.prod(before['shape']) == np.prod(after['shape'])
+    assert {k:v for k,v in before.items() if k!='shape'} == {k:v for k,v in after.items() if k!='shape'}
+    new_reshape, new_sigmoid = copy.deepcopy(resh), copy.deepcopy(sig)
+    new_reshape.inputs[0] = logits; new_reshape.outputs[0] = temporary
+    new_sigmoid.inputs[0] = temporary; new_sigmoid.outputs[0] = output
+    g.operators[a.sigmoid_op],g.operators[a.reshape_op] = new_reshape,new_sigmoid
+    g.tensors[temporary].shape = copy.deepcopy(g.tensors[output].shape)
+    g.tensors[temporary].quantization = copy.deepcopy(g.tensors[logits].quantization)
+    builder = flatbuffers.Builder(len(raw)); offset = obj.Pack(builder)
+    builder.Finish(offset,file_identifier=b'TFL3'); rewritten = bytes(builder.Output())
+    model = schema.Model.GetRootAsModel(rewritten,0); ng = model.Subgraphs(0)
+    assert ng.OperatorsLength() == og.OperatorsLength() and ng.TensorsLength() == og.TensorsLength()
+    assert model.BuffersLength() == original.BuffersLength()
+    for i in range(model.BuffersLength()):
+        x,y = original.Buffers(i),model.Buffers(i)
+        assert x.DataLength() == y.DataLength()
+        if x.DataLength():
+            assert np.array_equal(x.DataAsNumpy(),y.DataAsNumpy())
+    for i in range(ng.TensorsLength()):
+        x,y = og.Tensors(i),ng.Tensors(i)
+        assert x.Type() == y.Type() and x.Buffer() == y.Buffer()
+        if i != temporary:
+            assert np.array_equal(x.ShapeAsNumpy(),y.ShapeAsNumpy())
+            for name in ('ScaleAsNumpy','ZeroPointAsNumpy','MinAsNumpy','MaxAsNumpy'):
+                assert np.array_equal(getattr(x.Quantization(),name)(),getattr(y.Quantization(),name)())
+        else:
+            assert tensor_io(ng,i) == dict(tensor_io(og,logits),shape=after['shape'])
+    for i in range(ng.OperatorsLength()):
+        if i not in (a.sigmoid_op,a.reshape_op):
+            x,y = og.Operators(i),ng.Operators(i)
+            assert x.OpcodeIndex() == y.OpcodeIndex()
+            assert np.array_equal(x.InputsAsNumpy(),y.InputsAsNumpy())
+            assert np.array_equal(x.OutputsAsNumpy(),y.OutputsAsNumpy())
+    ii,oo = tensor_io(og,og.Inputs(0)),tensor_io(og,og.Outputs(0))
+    assert ii == tensor_io(ng,ng.Inputs(0)) and oo == tensor_io(ng,ng.Outputs(0))
+    inputs = []
+    for pair in meta['pairs']:
+        value = blob[pair['offset']:pair['offset']+meta['input_bytes']]
+        assert sha(value) == pair['input_sha256']
+        inputs.append((f'FC2 pair {pair["index"]}',np.frombuffer(value,np.int8).reshape(ii['shape'])))
+    # Edge cases complement real fixtures; these are not benchmark samples.
+    inputs += [(f'synthetic constant {v}',np.full(ii['shape'],v,np.int8)) for v in (-128,-1,127)]
+    inputs.append(('synthetic random seed42',np.random.default_rng(42).integers(-128,128,ii['shape'],dtype=np.int8)))
+    checks = []
+    for name,resolver in [('BUILTIN_REF',tf.lite.experimental.OpResolverType.BUILTIN_REF),
+                         ('BUILTIN_WITHOUT_DEFAULT_DELEGATES',tf.lite.experimental.OpResolverType.BUILTIN_WITHOUT_DEFAULT_DELEGATES)]:
+        its = [tf.lite.Interpreter(model_content=data,num_threads=1,experimental_op_resolver_type=resolver)
+               for data in (raw,rewritten)]
+        for it in its: it.allocate_tensors()
+        for label,value in inputs:
+            values = []
+            for it in its:
+                it.set_tensor(it.get_input_details()[0]['index'],value);it.invoke()
+                values.append(it.get_tensor(it.get_output_details()[0]['index']))
+            assert np.array_equal(*values), f'Full CPU output changed: {name}, {label}'
+            checks.append(dict(resolver=name,input=label,byte_exact=True))
+    report = dict(status='passed',diagnostic_only=True,model=parent['model'],
+        edge_public=parent.get('edge_public',False),input_hw=parent['input_hw'],
+        scope='Equivalent sigmoid/reshape order diagnostic; no training, calibration or benchmark replacement',
+        output_convention=parent['output_convention'],parent_source_sha256=sha(raw),
+        constant_buffers_byte_exact=True,unchanged_quantization_except_reshaped_logits_tensor=temporary,
+        operators_before=og.OperatorsLength(),operators_after=ng.OperatorsLength(),
+        reordered_operator_positions=[a.sigmoid_op,a.reshape_op],cpu_checks=checks,
+        original_fixture_blob_unchanged=True,acceptance_limits_unchanged=True,
+        exports=dict(int8=dict(sha256=sha(rewritten),input=ii,output=oo)))
+    meta.update(source_sha256=sha(rewritten),parent_source_sha256=sha(raw),diagnostic_only=True,
+                original_fixture_blob_unchanged=True,performance=dict(meta['performance'],enabled=False))
+    a.out.mkdir(parents=True);(a.out/'fixtures').mkdir()
+    (a.out/'model_int8.tflite').write_bytes(rewritten)
+    (a.out/'export.json').write_text(json.dumps(report,indent=2)+'\n')
+    (a.out/'fixtures/fixtures.bin').write_bytes(blob)
+    (a.out/'fixtures/fixtures.json').write_text(json.dumps(meta,indent=2)+'\n')
+    print(json.dumps(report),flush=True)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__); sub = p.add_subparsers(dest='action',required=True)
     q = sub.add_parser('prepare')
@@ -260,8 +365,14 @@ def main():
     q = sub.add_parser('self-check',help='Validate feature readback with synthetic logs, not board results')
     for name in ('export','compiled','out'):
         q.add_argument('--'+name,type=Path,required=True)
+    q = sub.add_parser('reshape-before-sigmoid',help='Equivalent full-model order diagnostic; preserve original goldens')
+    for name in ('export','fixtures','out'):
+        q.add_argument('--'+name,type=Path,required=True)
+    q.add_argument('--sigmoid-op',type=int,required=True)
+    q.add_argument('--reshape-op',type=int,required=True)
     a = p.parse_args()
-    {'prepare':prepare,'check':check,'self-check':self_check}[a.action](a)
+    {'prepare':prepare,'check':check,'self-check':self_check,
+     'reshape-before-sigmoid':rewrite_sigmoid_reshape}[a.action](a)
 
 
 if __name__ == '__main__':
