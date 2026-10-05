@@ -216,6 +216,18 @@ HPC包装`adapt.sh`复用Mindwell已验收的TensorFlow25.02容器，先在服�
 
 板端先核对模型与固定输入CRC、INT8 I/O、三组输出差值，再在保留相机／JPEG内存配置的条件下，使用同一输入预热5次、计时20次纯Invoke。固定输入的统一初始数值界限为最大分量差不超过2个量化档位、平均不超过0.05档位；不通过就保留差值并排查，不能把失败改成通过。三组小样本接近不等于全部1041对的板端EPE已测；离线INT8 EPE、实机推理速度、相机总耗时和Vela估计分开报告。完整产物放在既有`geometry10k-20261004/deployment-followup`，不新增wiki实验页。
 
+### ECA部署偏差的等价调整与核验（2026-10-05）
+
+共同训练S208的三组板端输出与两套CPU均有大幅差异。中间输出诊断发现：编码器、通道平均值、通道卷积及恢复形状前的sigmoid均精确，恢复形状后的系数异常。`board_activation_diagnostic.py prepare/check`可截取两个内部输出并校验完整UART；内部整数档不能当成光流EPE。额外输出会改变编译布局，定位后须回到完整模型验证。
+
+`reshape-before-sigmoid`将ECA中的`sigmoid→reshape`改为`reshape→sigmoid`。全部常量、输入输出量化及原测试数据保留；临时张量现在保存变形后的卷积值，继承原卷积量化。两套CPU各用三对真实输入和四个额外输入验证，14份完整光流输出逐字节相同。该工具要求显式算子编号并检查连接关系，不按模型名称猜编号；输出目录须不存在。
+
+```text
+python tools/lowres/board_activation_diagnostic.py reshape-before-sigmoid --export <original-export-directory> --fixtures <original-fixtures-directory> --sigmoid-op 16 --reshape-op 17 --out <new-export-directory>
+```
+
+上述16／17仅适用于已核验的这份S208图。全图重新Vela编译并烧录后，`check_board_reference.py --board-log <uart.bin>`核对模型CRC、全部输入CRC及完整输出，再分别比较两套CPU。该S208三对与`BUILTIN_REF`逐字节相同，大幅偏差消除；原优化CPU参考仍有小差异，原2／0.05档门槛仍失败。保留两项事实及原失败，不换参考后覆盖旧结果。证据在`deployment-followup/board/random-S-208/sigmoid-reshape-reorder-v1/`；该局部验收不能证明所有模型、尺寸或全量Sintel都已通过，也不能解释FP32训练排名。
+
 ### 新权重的全量评分与PTQ验收（2026-10-04）
 
 `audit_deployment.py prepare`从本机完整Sintel构建1041对清单，核对原845对包含其中；六份取图对照末步权重各测208×160，随机组S/L另测224×160。评分继续使用中心416×1024全部像素，图片AREA缩放、BGR归一化，预测LINEAR还原并分别换算u/v；不乘旧12.5、不截断GT或预测、不更新BN或优化器。每图保存原图EPE，按场景及原始GT运动大小（<10、10–40、≥40）归约；845与额外196分别报告，均是开发评测，不称盲测。
