@@ -32,11 +32,14 @@ def main():
     p.add_argument('--data',type=Path,required=True)
     p.add_argument('--parent',required=True)
     p.add_argument('--phase',choices=['fc2','ft3d'],default='fc2')
+    p.add_argument('--cluster',choices=['mindwell','wice'],default='mindwell')
     a=p.parse_args(); assert a.parent.isdigit()
-    c=a.root/'control'; result=dict(parent=a.parent,checked_at=datetime.datetime.now(datetime.timezone.utc).isoformat())
+    partition={'mindwell':'gpu_b200','wice':'gpu_a100'}[a.cluster]
+    c=a.root/'control'; result=dict(parent=a.parent,cluster=a.cluster,
+        checked_at=datetime.datetime.now(datetime.timezone.utc).isoformat())
     states={}
     for attempt in range(15):
-        text=subprocess.check_output(['sacct','--clusters=mindwell','-X','-nP','-j',a.parent,'-o','JobID%40,State%40'],text=True)
+        text=subprocess.check_output(['sacct','--clusters='+a.cluster,'-X','-nP','-j',a.parent,'-o','JobID%40,State%40'],text=True)
         for line in text.splitlines():
             fields=line.split('|'); name=fields[0].strip()
             if name.startswith(a.parent+'_') and name[len(a.parent)+1:].isdigit():
@@ -52,17 +55,18 @@ def main():
         return 1 if attention else 0
     recipe=json.loads((c/'submission.json').read_text());repo=recipe['checkout']
     assert recipe.get('phase','fc2') == a.phase
+    assert recipe.get('cluster','mindwell') == a.cluster
     controller=c/'geometry_compare.controller-v2.sh'
     assert controller.is_file() and subprocess.check_output(['git','-C',repo,'rev-parse','HEAD'],text=True).strip()==recipe['code_commit']
     name='flow-geometry-recovery-'+a.parent
     attempts=[];deadline=time.monotonic()+8*60
     while time.monotonic()<deadline:
-        existing=subprocess.check_output(['squeue','--clusters=mindwell','-h','-u','vsc37996','--name='+name,'-o','%A'],text=True).strip()
+        existing=subprocess.check_output(['squeue','--clusters='+a.cluster,'-h','-u','vsc37996','--name='+name,'-o','%A'],text=True).strip()
         if existing:
             # No ambiguous repeated submission after a lost reply.
             raise RuntimeError('Existing recovery job requires inspection: '+existing)
         for minutes in (60,40,30,20):
-            cmd=['sbatch','--parsable','--clusters=mindwell','--account=lp_embaivision','--partition=gpu_b200',
+            cmd=['sbatch','--parsable','--clusters='+a.cluster,'--account=lp_embaivision','--partition='+partition,
                  '--nodes=1','--ntasks=1','--gpus-per-node=1','--cpus-per-task=8','--mem=32G',
                  '--array='+','.join(map(str,indices)),'--time='+str(minutes),
                  '--kill-on-invalid-dep=yes','--export=ALL','--chdir='+repo,'--dependency=afterany:'+a.parent,

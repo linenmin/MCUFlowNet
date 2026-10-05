@@ -204,7 +204,9 @@ HPC包装`adapt.sh`复用Mindwell已验收的TensorFlow25.02容器，先在服�
 
 比较固定末步、后五次验证中位数、各自相对起点的改善及三模型差距，不只比较最佳。2026-10-05调整顺序：其余候选上板数值和速度复核放到最终选模后，不作为FT3D开训门槛；已有S部署修复和失败证据保留。训练前的来源、单位、第0步评分、GPU执行与恢复短跑检查仍须通过。较强旧Edge单列为已训练方法的部署参考，不能替换六条中的共同起点。Slurm时限与GPU选择须在提交前按实际资源和SAM余额核对；不把旧的4小时预留直接照搬。
 
-同一包装入口也支持Sofia已经验收的TensorFlow25.02环境，路径为`$HOME/Software/MCUFlowNet/environments/tf2502-v2`；拒绝未知集群，恢复查询使用实际集群。H200任务按官方规则申请每卡24 CPU、不覆盖内存、不传`--export=ALL`。若从Mindwell换到Sofia，六条正式对照统一使用H200，先重新通过三模型服务器短跑；硬件和实际任务号写运行回执，不改变取图、损失或更新预算。原`geometry_recovery.py`仅用于Mindwell；Sofia只能使用明确最多一次的同集群续跑，不能调用Tier2的计费与提交分支。
+同一包装入口也支持Sofia已经验收的TensorFlow25.02环境，路径为`$HOME/Software/MCUFlowNet/environments/tf2502-v2`；拒绝未知集群，恢复查询使用实际集群。H200任务按官方规则申请每卡24 CPU、不覆盖内存、不传`--export=ALL`。若从Mindwell换到Sofia，六条正式对照统一使用H200，先重新通过三模型服务器短跑；硬件和实际任务号写运行回执，不改变取图、损失或更新预算。`geometry_recovery.py`默认用于Mindwell，并支持下段所述wICE；Sofia只能使用明确最多一次的同集群续跑，不能调用Tier2的计费与提交分支。
+
+2026-10-05增加wICE A100入口：wICE与Mindwell均显式使用GPFS上的同份TensorFlow25.02容器及环境；实际节点访问与三模型恢复短跑通过后才启动正式任务，不改科学配方。`geometry_recovery.py --cluster wice`仅在wICE的`gpu_a100`续跑，省略仍为Mindwell/B200；核对提交记录中的集群，Sofia不使用此Tier2恢复器。按用户偏好在A100能较快分配时优先A100，一组六条保持同型号GPU，等待时间以实际队列为准。
 
 ### 既有较强Edge与新权重的实机验收
 

@@ -5,8 +5,8 @@ mode=$1 repo=$2 data=$3 root=$4 phase=${6:-fc2}
 [[ "$phase" == fc2 || "$phase" == ft3d ]]
 cluster=${SLURM_CLUSTER_NAME:?}
 case "$cluster" in
-    mindwell)
-        software="$VSC_SCRATCH/MCUFlowNet/software"
+    mindwell|wice)
+        software="${VSC_SCRATCH_GPFS1:?}/MCUFlowNet/software"
         environment="$software/tf2502"
         ready="$software/READY"
         ;;
