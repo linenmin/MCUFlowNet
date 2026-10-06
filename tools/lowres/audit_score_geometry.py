@@ -6,7 +6,6 @@ import datetime
 import importlib.util
 import json
 from pathlib import Path
-import subprocess
 import time
 
 import cv2
@@ -87,12 +86,18 @@ def run(a):
         cache = list(pool.map(lambda r: read_sample(a.data, r, sintel=True), rows))
     assert all(x.shape == (160, 208, 6) and y.shape == (160, 208, 2)
                and original.shape == (416, 1024, 2) for x, y, original in cache)
-    code_commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
-    assert code_commit == a.code_commit
+    # A mounted Windows worktree has host-only .git pointers. Verify the host's
+    # clean, committed runtime snapshot rather than resolving Git in Docker.
+    code = json.loads(a.code_manifest.read_text())
+    assert code['commit'] == a.code_commit and code['working_tree_clean']
+    for relative, expected_sha in code['runtime_files_sha256'].items():
+        assert digest(ROOT / relative) == expected_sha, 'Runtime source differs: ' + relative
+    code_commit = a.code_commit
     report = dict(started_at_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),
         code_commit=code_commit, script_sha256=digest(Path(__file__)),
         tensorflow=tf.__version__, smoke_only=a.smoke, pairs=len(rows),
         manifest_sha256=manifest_sha, plan_sha256=digest(a.plan), sources=sources,
+        code_manifest_sha256=digest(a.code_manifest),
         units=dict(input_epe='208x160 pixels', remaining_metrics='416x1024 pixels',
                    scale_xy=[1024 / 208, 416 / 160]),
         limits='Diagnostic score variants; official scoring unchanged. Round-trip GT is not an optimum or lower bound; EPE terms are not additive.',
@@ -152,6 +157,7 @@ def run(a):
                 write_json(a.out / 'results.partial.json', report)
                 print(json.dumps(dict(event='case_complete', case=name, **overall)), flush=True)
     assert digest(manifest) == manifest_sha
+    assert all(digest(ROOT / p) == sha for p, sha in code['runtime_files_sha256'].items())
     report.update(comparison=comparison(report['cases']), completed=True,
                   completed_at_utc=datetime.datetime.now(datetime.timezone.utc).isoformat())
     write_json(a.out / 'results.json', report)
@@ -160,7 +166,7 @@ def run(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    for name in ('data', 'experiment', 'domain-results', 'plan', 'out'):
+    for name in ('data', 'experiment', 'domain-results', 'plan', 'code-manifest', 'out'):
         p.add_argument('--' + name, type=Path, required=True)
     p.add_argument('--code-commit', required=True)
     p.add_argument('--workers', type=int, default=8)
