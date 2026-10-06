@@ -257,3 +257,18 @@ python tools/lowres/run_deployment_audit.py --data /datasets --audit /runs/LOWRE
 编译输出目录已存在时拒绝覆盖；各项失败独立保留。五配置的输入SHA必须与INT8评分一致，报告CPU算子、SRAM峰值及**估计**FPS，新模型的上板数值、内存与实测FPS另验。
 
 `summarize_deployment.py --audit <audit>`只做CPU归约，不导入TensorFlow或重新推理：重算全部18份逐图报告的1041／845／196对均值、场景与运动分组，核对样本、源权重、导出、转换验收；若已有Vela报告，也核对五份编译的身份及产物SHA。报告保存在同目录`summary.json`与`summary.md`，不以场景bootstrap代替独立训练种子。
+
+### FT3D参数与BN统计的固定离线诊断（2026-10-06）
+
+`audit_domain_bn.py`只对已有FC2随机第10,000步和整图FT3D第10,000步权重做推理。每个模型四个固定组合：A为FC2参数／FC2统计，B为FT3D参数／FT3D统计，C为FT3D参数／FC2统计，D为FC2参数／FT3D统计。只交换同一模型的moving_mean与moving_variance；gamma/beta、ECA、Gate和卷积属于参数组。所有赋值逐元素核验，推理前后检查全部模型和优化器变量指纹；不执行优化器，不保存新checkpoint，源文件SHA须不变。C/D仅作敏感性诊断，统计与特征可能不适配，不能自动替换正式benchmark。
+
+准备阶段冻结FC2 val640、Sintel monitor845原清单，从FT3D TEST左相机按Clean/Final×future/past各160对、固定seed20261006选640对。序列随机排序后轮流选取，避免前640对集中在少数序列；只按文件可读性、有限标签和540×960尺寸剔除，记录拒绝原因，不按EPE选图。与TRAIN清单不交叉，记录新TEST文件SHA、数量、来源及清单SHA。该子集是开发诊断，不声明盲测。FC2与FT3D主EPE为208×160输入像素；Sintel为原416×1024像素，另列输入像素EPE；运动分组统一在160×208输入网格上按GT <2、2–8、≥8像素计分，不能冒充原图分组贡献。
+
+`run --local-smoke`用本机两对FC2和两对Sintel逐项对照原生产评测入口，不含FT3D、不是实验成绩。服务器`run --smoke`再检查三个真实split；正式A/B须复现原完整FC2/Sintel记录至2e-5。使用不含CUPTI采样的执行分区信息核验GPU卷积。准备、probe和正式三个阶段必须依次成功；程序保留失败目录并拒绝覆盖输出。
+
+```text
+python tools/lowres/audit_domain_bn.py prepare --data /datasets --experiment /audit/experiment-source --out /audit/prepared --code-commit <pinned-commit>
+python tools/lowres/audit_domain_bn.py run --data /datasets --prepared /audit/prepared --model S --out /audit/results/S --code-commit <pinned-commit>
+```
+
+`domain_bn.sh`复用Sofia已验收的home软件环境，数据、代码及源权重均只读绑定。按每卡24CPU、不覆盖内存、不传export=ALL申请H200；具体账户、任务号和排队情况写运行回执，不写成实时环境说明。三模型各一条、每条四组合，可并行评测，完整结果存LOWRES-BENCH-01/bn-domain-20261006，wiki维护原4n，不另开页面。
