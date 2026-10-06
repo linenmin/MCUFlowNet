@@ -35,6 +35,8 @@ def main():
     p.add_argument('--probe', action='store_true')
     p.add_argument('--stop-after-steps', type=int)
     p.add_argument('--code-commit')
+    p.add_argument('--fc2-source-step',type=int,choices=[10000])
+    p.add_argument('--direction-weights',type=float,nargs=2)
     a = p.parse_args()
     if a.initial_lr is None:
         a.initial_lr = 3e-6 if a.phase == 'ft3d' else 1e-5
@@ -51,8 +53,13 @@ def main():
               and cfg['hw'] == [160,208] and cfg['images'] == 'BGR_-1_1_area'
               and cfg['bn'] == 'training_on_eval_off_momentum0.9_epsilon1e-5')
     if a.phase == 'fc2':
-        valid = (common and parent['epoch'] == 400 and cfg['epochs'] == 400
-                 and cfg['phase'] == 'fc2' and cfg.get('init') is None)
+        if a.fc2_source_step is None:
+            valid = (common and parent['epoch'] == 400 and cfg['epochs'] == 400
+                     and cfg['phase'] == 'fc2' and cfg.get('init') is None)
+        else:
+            valid = (common and parent['step'] == status['step'] == cfg['steps'] == a.fc2_source_step
+                     and cfg.get('phase','fc2') == 'fc2' and cfg['geometry'] == 'random'
+                     and parent['checkpoint'] == 'step-010000/model' and a.geometry == 'random')
     else:
         valid = (common and parent['step'] == 10000 and status['step'] == 10000
                  and cfg['steps'] == 10000 and cfg['geometry'] == 'random'
@@ -61,6 +68,8 @@ def main():
                  and parent['best_fc2']['step'] == 10000)
     if not valid:
         raise ValueError('Not a matching verified parent for phase ' + a.phase)
+    if (a.direction_weights is not None and a.fc2_source_step is None) or (a.phase!='fc2' and a.fc2_source_step is not None):
+        raise ValueError('Direction control is confined to FC2 random10k parents')
     prefix = a.source/parent['checkpoint']
     source_sha = checkpoint_sha(prefix)
     files = [a.manifests/f'{n}.json' for n in ('fc2_train','fc2_val','sintel_monitor')]
@@ -96,7 +105,13 @@ def main():
                   images=cfg['images'],bn=cfg['bn'],flow_units='resized_pixels_no_clip',
                   loss=cfg['loss'],optimizer=cfg['optimizer'],probe=a.probe)
     if a.phase == 'fc2':
-        config['source_epoch'] = 400
+        if a.fc2_source_step is None:
+            config['source_epoch'] = 400
+        else:
+            config.update(source_step=a.fc2_source_step,
+                          direction_weights=a.direction_weights or [1.0,1.0],
+                          loss=cfg['loss']+'_complete_per_direction_weighting',
+                          direction_comparison=True)
     else:
         config.update(phase='ft3d',source_step=10000,source_hw=list(source_hw),
                       selection='fixed FC2 random step 10000; also FC2 validation minimum',
@@ -110,7 +125,7 @@ def main():
         state = dict(step=0,history=[],config=config,best=None,best_fc2=None)
     if not tf.config.list_physical_devices('GPU'):
         raise RuntimeError('GPU required')
-    g = graph(a.model,a.seed)
+    g = graph(a.model,a.seed,direction_weights=a.direction_weights)
     sc = tf.compat.v1.ConfigProto(intra_op_parallelism_threads=a.workers,inter_op_parallelism_threads=2,
                                   allow_soft_placement=False)
     sc.gpu_options.allow_growth = True
@@ -130,8 +145,14 @@ def main():
             atomic(a.out/'initialization-audit.json',restore_model(sess,g,prefix))
         def boundary(metric):
             before = sess.run(g['weights'])
-            metric.update(fc2_val_epe_pixels=evaluate(sess,g,val,a.data),
-                          sintel_epe_original_pixels=evaluate(sess,g,monitor,a.data,True))
+            if a.fc2_source_step is not None:
+                fc2=evaluate(sess,g,val,a.data,return_components=True)
+                sintel=evaluate(sess,g,monitor,a.data,True,return_components=True)
+                metric.update(fc2_val_epe_pixels=fc2['epe'],fc2_val_mae_xy_pixels=fc2['mae_xy'],
+                              sintel_epe_original_pixels=sintel['epe'],sintel_mae_xy_original_pixels=sintel['mae_xy'])
+            else:
+                metric.update(fc2_val_epe_pixels=evaluate(sess,g,val,a.data),
+                              sintel_epe_original_pixels=evaluate(sess,g,monitor,a.data,True))
             assert all(np.array_equal(v,w) for v,w in zip(before,sess.run(g['weights'])))
             assert int(sess.run(g['step'])) == metric['step']
             if metric['step']==0 and not a.probe:
@@ -164,8 +185,17 @@ def main():
                                   geometry=a.geometry,start_batch=offset,expected_source_hw=source_hw):
                 step = int(sess.run(g['step']))+1
                 lr = step_lr(step,a.steps,a.initial_lr,a.min_lr)
-                _, loss, epe = sess.run([g['train'],g['loss'],g['epe']],
-                    {g['x']:x,g['y']:y,g['training']:True,g['lr']:lr})
+                feed={g['x']:x,g['y']:y,g['training']:True,g['lr']:lr}
+                if a.fc2_source_step is not None and step==1:
+                    metadata=tf.compat.v1.RunMetadata()
+                    _,loss,epe=sess.run([g['train'],g['loss'],g['epe']],feed,
+                        options=tf.compat.v1.RunOptions(output_partition_graphs=True),run_metadata=metadata)
+                    gpu=[dict(name=n.name,op=n.op,device=n.device) for part in metadata.partition_graphs
+                         for n in part.node if 'GPU' in n.device and 'Conv2D' in n.op]
+                    assert any('Backprop' in n['op'] for n in gpu), 'No GPU convolution backprop executed'
+                    atomic(a.out/'gpu-execution.json',dict(step=1,convolutions=gpu))
+                else:
+                    _,loss,epe=sess.run([g['train'],g['loss'],g['epe']],feed)
                 if not np.isfinite([loss,epe]).all():
                     raise FloatingPointError((step,loss,epe))
                 assert int(sess.run(g['step'])) == step

@@ -17,6 +17,7 @@ def main():
         p.add_argument('--'+name,type=Path,required=True)
     p.add_argument('--code-commit')
     p.add_argument('--phase',choices=['fc2','ft3d'],default='fc2')
+    p.add_argument('--direction-compare',action='store_true')
     a=p.parse_args(); a.out.mkdir(parents=True,exist_ok=False)
     parent=json.loads((a.source/'current.json').read_text())
     source=a.source/parent['checkpoint']; before=checkpoint_sha(source)
@@ -24,15 +25,23 @@ def main():
           '--data',str(a.data),'--manifests',str(a.manifests),'--source',str(a.source),
           '--steps','5','--eval-every','1','--probe']
     base+=['--phase',a.phase]
+    if a.direction_compare:
+        assert a.phase=='fc2'
+        base+=['--fc2-source-step','10000','--initial-lr','3e-6','--min-lr','1e-6']
     if a.code_commit: base+=['--code-commit',a.code_commit]
     env=dict(os.environ,TF_DETERMINISTIC_OPS='1',CUBLAS_WORKSPACE_CONFIG=':4096:8')
     results={}; states={}
-    for arm in ('whole','random'):
+    arms=('original','weighted') if a.direction_compare else ('whole','random')
+    direction=(1.30879345603272,0.6912065439672802)
+    for arm in arms:
         continuous=a.out/arm/'continuous'; resumed=a.out/arm/'resumed'
         continuous.parent.mkdir()
         def run(label,extra):
             with (continuous.parent/(label+'.log')).open('w') as stream:
-                subprocess.run(base+['--geometry',arm]+extra,env=env,stdout=stream,stderr=subprocess.STDOUT,check=True)
+                flags=['--geometry','random' if a.direction_compare else arm]
+                if a.direction_compare:
+                    flags+=['--direction-weights',*[str(x) for x in (direction if arm=='weighted' else (1,1))]]
+                subprocess.run(base+flags+extra,env=env,stdout=stream,stderr=subprocess.STDOUT,check=True)
         run('continuous',['--out',str(continuous)])
         run('interrupted',['--out',str(resumed),'--stop-after-steps','3'])
         run('resumed',['--out',str(resumed),'--resume'])
@@ -58,18 +67,30 @@ def main():
         audit=json.loads((continuous/'initialization-audit.json').read_text())
         assert audit['model_bn_exact'] and audit['adam_slots_zero'] and audit['adam_beta_powers_reset']
         assert json.loads((continuous/'status.json').read_text())['completed']
+        if a.direction_compare:
+            execution=json.loads((continuous/'gpu-execution.json').read_text())
+            assert any('Backprop' in n['op'] and 'GPU' in n['device'] for n in execution['convolutions'])
         states[arm]=left
         results[arm]=dict(passed=True,all_resumed_variables_exact=True,steps=5,mid_sweep_resume=True,
                           source_model_bn_exact=True,adam_reset=True,bn_and_parameters_updated=True)
         del c1,c2,initial
-    assert states['whole']['history'][0]==states['random']['history'][0]
-    assert [r['order_sha'] for r in states['whole']['history'][1:]]==[r['order_sha'] for r in states['random']['history'][1:]]
-    assert [r['geometry_sha'] for r in states['whole']['history'][1:]]!=[r['geometry_sha'] for r in states['random']['history'][1:]]
+    left,right=[states[x] for x in arms]
+    assert left['history'][0]==right['history'][0]
+    assert [r['order_sha'] for r in left['history'][1:]]==[r['order_sha'] for r in right['history'][1:]]
+    boxes_equal=[r['geometry_sha'] for r in left['history'][1:]]==[r['geometry_sha'] for r in right['history'][1:]]
+    assert boxes_equal==a.direction_compare
+    if a.direction_compare:
+        lhs=tf.train.load_checkpoint(str(a.out/arms[0]/'continuous'/left['checkpoint']))
+        rhs=tf.train.load_checkpoint(str(a.out/arms[1]/'continuous'/right['checkpoint']))
+        assert any(not np.array_equal(lhs.get_tensor(n),rhs.get_tensor(n))
+                   for n in lhs.get_variable_to_shape_map() if n.endswith('/kernel'))
+        del lhs,rhs
     assert checkpoint_sha(source)==before
     result=dict(passed=True,probe_only=True,model=a.model,phase=a.phase,arms=results,source_unchanged=True,
-                initial_prediction_equal=True,paired_sample_order_equal=True,tensorflow=tf.__version__,
+                initial_prediction_equal=True,paired_sample_order_equal=True,
+                direction_comparison=a.direction_compare,paired_geometry_equal=boxes_equal,tensorflow=tf.__version__,
                 code_commit=a.code_commit,code_files_sha={n:__import__('hashlib').sha256(Path(__file__).with_name(n).read_bytes()).hexdigest()
-                    for n in ('geometry_compare.py','geometry.py','data.py','model.py','initialization.py','verify_geometry.py')})
+                    for n in ('geometry_compare.py','geometry.py','data.py','model.py','train.py','initialization.py','verify_geometry.py')})
     (a.out/'acceptance.json').write_text(json.dumps(result,indent=2)+'\n')
     print(json.dumps(result),flush=True)
 

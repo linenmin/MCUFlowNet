@@ -13,7 +13,7 @@ from efnas.engine.eval_step import accumulate_predictions
 ARCH={'S':[0]*11, 'L':[2,0,0,2,2,1,0,0,0,0,0]}
 
 
-def graph(name, seed=42, hw=(160,208), bn_mode='train', edge_public=False):
+def graph(name, seed=42, hw=(160,208), bn_mode='train', edge_public=False, direction_weights=None):
     # Legacy tf-keras uses randint(1, 1e9); Python 3.12 rejects that float.
     # Scope the compatibility adjustment to graph construction only.
     original = random.Random.randint
@@ -24,12 +24,12 @@ def graph(name, seed=42, hw=(160,208), bn_mode='train', edge_public=False):
     if sys.version_info >= (3, 12):
         random.Random.randint = integral_randint
     try:
-        return _graph(name, seed, hw, bn_mode, edge_public)
+        return _graph(name, seed, hw, bn_mode, edge_public, direction_weights)
     finally:
         random.Random.randint = original
 
 
-def _graph(name, seed=42, hw=(160,208), bn_mode='train', edge_public=False):
+def _graph(name, seed=42, hw=(160,208), bn_mode='train', edge_public=False, direction_weights=None):
     if len(hw)!=2 or any(n<=0 or n%16 for n in hw):
         raise ValueError('Input height/width must be positive multiples of 16')
     if bn_mode not in ('train','frozen') or (bn_mode=='frozen' and name!='edge'):
@@ -66,7 +66,7 @@ def _graph(name, seed=42, hw=(160,208), bn_mode='train', edge_public=False):
             preds=FixedArchModelV3(x,training,ARCH[name]).build()
     weights=list(tf.compat.v1.global_variables())
     prediction=accumulate_predictions(preds)[...,:2]
-    terms=build_multiscale_uncertainty_loss(preds,y,2,return_terms=True)
+    terms=build_multiscale_uncertainty_loss(preds,y,2,return_terms=True,direction_weights=direction_weights)
     step=tf.compat.v1.train.get_or_create_global_step()
     optimizer=tf.compat.v1.train.AdamOptimizer(lr,beta1=0.9,beta2=0.999,epsilon=1e-8)
     grads=optimizer.compute_gradients(terms['total'])

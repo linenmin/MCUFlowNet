@@ -1,5 +1,6 @@
 """训练步图构建工具。"""  # 定义模块用途
 from typing import Dict, List, Optional  # 导入类型注解工具
+import math
 
 import tensorflow as tf  # 导入TensorFlow模块
 
@@ -41,6 +42,7 @@ def build_multiscale_uncertainty_loss(  # 定义多尺度不确定性损失函�
     return_terms: bool = False,  # 定义是否返回分项损失开关
     supervision_max_magnitude: Optional[float] = None,
     uncertainty_weight: float = 1.0,
+    direction_weights: Optional[List[float]] = None,
 ) -> tf.Tensor:  # 定义返回类型
     """构建与单模型训练对齐的LinearSoftplus多尺度损失。"""  # 说明函数用途
     valid = None
@@ -53,6 +55,15 @@ def build_multiscale_uncertainty_loss(  # 定义多尺度不确定性损失函�
         label_ph = tf.where(tf.broadcast_to(tf.cast(valid, tf.bool), tf.shape(label_ph)), safe_label, tf.zeros_like(label_ph))
     if uncertainty_weight not in (0.0, 1.0):
         raise ValueError("Only the paired uncertainty-on/off experiment is supported")
+    weights = None
+    if direction_weights is not None:
+        values = [float(x) for x in direction_weights]
+        if (len(values) != int(num_out) or any(not math.isfinite(x) or x <= 0 for x in values)
+                or not math.isclose(sum(values), float(num_out), rel_tol=0, abs_tol=1e-6)):
+            raise ValueError("Positive direction weights with mean one required")
+        # Unity retains the original graph and its numerical behavior exactly.
+        if any(x != 1.0 for x in values):
+            weights = tf.constant(values, dtype=label_ph.dtype, name="loss_direction_weights")
     loss_scales = [0.125, 0.25, 0.5, 1.0]  # 定义与原训练一致的尺度权重
     eps = 1e-3  # 定义稳定项避免除零
     flow_accum = None  # 初始化累计光流预测
@@ -77,6 +88,10 @@ def build_multiscale_uncertainty_loss(  # 定义多尺度不确定性损失函�
             support = _resize_like(valid, flow_accum, f"valid_resize_{idx}")
             mask_i = tf.cast(support >= 1.0 - 1e-6, tf.float32)
         def average(value, name):
+            # Weight the complete per-component loss, including the uncertainty
+            # regularizer; changing residual units alone would alter its meaning.
+            if weights is not None:
+                value = value * weights
             if mask_i is None:
                 return tf.reduce_mean(value, name=name)
             return tf.math.divide_no_nan(tf.reduce_sum(value * mask_i),

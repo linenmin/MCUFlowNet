@@ -22,9 +22,9 @@ def atomic(path, value):
     os.replace(temp,path)
 
 
-def evaluate(sess,g,rows,root,sintel=False):
+def evaluate(sess,g,rows,root,sintel=False,return_components=False):
     # Every sample once; validation never updates BN or optimizer.
-    errors=[]
+    errors=[]; components=[]
     for row in rows:
         x,small,original=read_sample(root,row,sintel,hw=g['hw'],images=g.get('images','normalized'))
         flow=sess.run(g['prediction'],{g['x']:x[None]})[0]
@@ -34,7 +34,10 @@ def evaluate(sess,g,rows,root,sintel=False):
             label=original
         else: label=small
         errors.append(float(np.linalg.norm(flow-label,axis=-1).mean(dtype=np.float64)))
-    return float(np.mean(errors))
+        if return_components:
+            components.append(np.abs(flow-label).mean(axis=(0,1),dtype=np.float64))
+    value=float(np.mean(errors))
+    return dict(epe=value,mae_xy=np.mean(components,axis=0).tolist()) if return_components else value
 
 
 def main():

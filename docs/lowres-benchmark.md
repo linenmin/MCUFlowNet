@@ -258,6 +258,12 @@ python tools/lowres/run_deployment_audit.py --data /datasets --audit /runs/LOWRE
 
 `summarize_deployment.py --audit <audit>`只做CPU归约，不导入TensorFlow或重新推理：重算全部18份逐图报告的1041／845／196对均值、场景与运动分组，核对样本、源权重、导出、转换验收；若已有Vela报告，也核对五份编译的身份及产物SHA。报告保存在同目录`summary.json`与`summary.md`，不以场景bootstrap代替独立训练种子。
 
+### FC2方向损失对照（2026-10-06）
+
+Edge/S/L从各自FC2随机取图10,000步端点开始，原损失和方向加权各一条、共六条5,000步。原组u/v=(1,1)，加权组=(1.30879345603272,0.6912065439672802)，按Sintel评分几何归一化；逐方向加权普通L1、不确定性重建与正则，三尺度权重不变。batch32、原FC2随机取图、逐步余弦3e-6→1e-6、Adam重置、FP32/TF32关闭、seed42，每1,000步正式计分和保存全部恢复状态。没有FT3D、结构变化或新的数据增强，两个损失的数值不能直接横比；输入EPE与原图EPE仍按共同协议。
+
+复用`geometry_compare.py --fc2-source-step 10000 --direction-weights ...`；旧入口默认行为和旧恢复配置保留。`test_direction_loss.py`用已知向量核完整损失/梯度，权重(1,1)必须与原图完全一致；`verify_geometry.py --direction-compare`核两组相同数据及裁剪、不同优化轨迹、模型/BN初始化、Adam重置、实际GPU反向及中断恢复所有变量。`direction_compare.sh`提供Tier2准备完成后的probe/train数组入口；三组probe全部通过才放行正式六条。
+
 ### 评分几何分解（2026-10-06）
 
 `tools/lowres/audit_score_geometry.py`对Edge/S/L的FC2随机10k及整图FT3D10k两个端点做六配置推理，沿用原845对Sintel Final监控。输出依次为输入网格EPE、同网格换原图单位的EPE、预测与缩小GT共同恢复后的EPE、正式原GT EPE，以及横纵MAE和场景均值。后三项为原图像素，第一项为208×160像素；缩小GT回放只是参照，不能当理论误差下界或直接相加分摊贡献。
