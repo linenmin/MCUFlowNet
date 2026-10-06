@@ -264,6 +264,8 @@ Edge/S/L从各自FC2随机取图10,000步端点开始，原损失和方向加权
 
 复用`geometry_compare.py --fc2-source-step 10000 --direction-weights ...`；旧入口默认行为和旧恢复配置保留。`test_direction_loss.py`用已知向量核完整损失/梯度，权重(1,1)必须与原图完全一致；`verify_geometry.py --direction-compare`核两组相同数据及裁剪、不同优化轨迹、模型/BN初始化、Adam重置、实际GPU反向及中断恢复所有变量。`direction_compare.sh`提供Tier2准备完成后的probe/train数组入口；三组probe全部通过才放行正式六条。
 
+`geometry_recovery.py --direction-compare`在首段释放后检查六条：已完成不提交；仅TIMEOUT/NODE_FAIL/PREEMPTED且未完成才提交一次剩余步数的续段；训练错误、取消或记账不明交人工检查。GPU分区沿用首次提交，方向对照的总目标保持5,000步，续段不重置学习率或Adam。
+
 ### 评分几何分解（2026-10-06）
 
 `tools/lowres/audit_score_geometry.py`对Edge/S/L的FC2随机10k及整图FT3D10k两个端点做六配置推理，沿用原845对Sintel Final监控。输出依次为输入网格EPE、同网格换原图单位的EPE、预测与缩小GT共同恢复后的EPE、正式原GT EPE，以及横纵MAE和场景均值。后三项为原图像素，第一项为208×160像素；缩小GT回放只是参照，不能当理论误差下界或直接相加分摊贡献。

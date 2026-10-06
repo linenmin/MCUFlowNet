@@ -38,6 +38,25 @@ elif [[ "$mode" == train ]]; then
     if [[ -f "$out/status.json" ]] && python3 -c 'import json,sys; a=json.load(open(sys.argv[1])); assert a["completed"] and a["step"]==a["total_steps"]==5000' "$out/status.json"; then
         printf 'All 5000 updates already complete.\n'; exit 0
     fi
+    if [[ -n "${5:-}" ]]; then
+        [[ "$5" =~ ^[0-9]+$ ]]
+        previous="${5}_${index}"
+        state=$(sacct --clusters="$cluster" -X -nP -j "$previous" -o JobID,State | awk -F'|' -v id="$previous" '$1==id {print $2}')
+        case "$state" in
+            TIMEOUT*|NODE_FAIL*|PREEMPTED*) ;;
+            *) printf 'No retry for %s state=%s\n' "$previous" "$state"; exit 2 ;;
+        esac
+        python3 - "$root" "$out" "$previous" <<'PY'
+from pathlib import Path
+import sys
+root=Path(sys.argv[1]).resolve();out=Path(sys.argv[2]);previous=sys.argv[3]
+assert not out.is_symlink() and out.resolve().is_relative_to(root/'seed42') and out.name=='fc2'
+if out.exists() and not (out/'current.json').exists():
+    saved=out.with_name('fc2.incomplete-after-'+previous)
+    assert not saved.exists() and saved.resolve().is_relative_to(root/'seed42')
+    out.rename(saved)
+PY
+    fi
     args=(--model "$model" --geometry random --phase fc2 --fc2-source-step 10000 \
         --direction-weights "${weights[@]}" --data "$data" --manifests "$root/manifests" \
         --source "$root/source/$model/fc2" --out "$out" --steps 5000 --eval-every 1000 \

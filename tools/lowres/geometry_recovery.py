@@ -7,16 +7,18 @@ import subprocess
 import time
 
 
-def classify(root, states, phase='fc2'):
+def classify(root, states, phase='fc2', direction_compare=False):
     if phase not in ('fc2','ft3d'):
         raise ValueError('Unknown recovery phase')
     pending=[]; attention=[]
-    for index,(arm,model) in enumerate([(a,m) for a in ('whole','random') for m in ('edge','S','L')]):
+    arms=('original','weighted') if direction_compare else ('whole','random')
+    goal=5000 if direction_compare else 10000
+    for index,(arm,model) in enumerate([(a,m) for a in arms for m in ('edge','S','L')]):
         out=root/'seed42'/arm/model/phase
         state=out/'current.json'; status=out/'status.json'
         if state.exists() and status.exists():
             v=json.loads(state.read_text()); s=json.loads(status.read_text())
-            if v['step']==10000 and s['completed'] and s['step']==10000:
+            if v['step']==goal and s['completed'] and s['step']==goal:
                 assert (out/(v['checkpoint']+'.index')).is_file()
                 continue
         if states.get(index) in ('TIMEOUT','NODE_FAIL','PREEMPTED'):
@@ -33,6 +35,7 @@ def main():
     p.add_argument('--parent',required=True)
     p.add_argument('--phase',choices=['fc2','ft3d'],default='fc2')
     p.add_argument('--cluster',choices=['mindwell','wice'],default='mindwell')
+    p.add_argument('--direction-compare',action='store_true')
     a=p.parse_args(); assert a.parent.isdigit()
     partition={'mindwell':'gpu_b200','wice':'gpu_a100'}[a.cluster]
     c=a.root/'control'; result=dict(parent=a.parent,cluster=a.cluster,
@@ -46,7 +49,7 @@ def main():
                 states[int(name[len(a.parent)+1:])]=fields[1].split()[0].rstrip('+')
         if len(states)==6: break
         time.sleep(2)
-    indices,attention=classify(a.root,states,a.phase)
+    indices,attention=classify(a.root,states,a.phase,a.direction_compare)
     result.update(states=states,recovery_indices=indices,needs_attention=attention)
     proof=c/'recovery-dispatch.json'
     def save(): proof.write_text(json.dumps(result,indent=2)+'\n')
@@ -56,9 +59,13 @@ def main():
     recipe=json.loads((c/'submission.json').read_text());repo=recipe['checkout']
     assert recipe.get('phase','fc2') == a.phase
     assert recipe.get('cluster','mindwell') == a.cluster
-    controller=c/'geometry_compare.controller-v2.sh'
+    if a.direction_compare:
+        assert a.phase=='fc2' and recipe['steps']==5000 and recipe['source_step']==10000
+        partition=recipe['partition']
+        assert partition in ({'gpu_b200'} if a.cluster=='mindwell' else {'gpu_a100','gpu_h100'})
+    controller=c/('direction_compare.controller.sh' if a.direction_compare else 'geometry_compare.controller-v2.sh')
     assert controller.is_file() and subprocess.check_output(['git','-C',repo,'rev-parse','HEAD'],text=True).strip()==recipe['code_commit']
-    name='flow-geometry-recovery-'+a.parent
+    name=('flow-direction-recovery-' if a.direction_compare else 'flow-geometry-recovery-')+a.parent
     attempts=[];deadline=time.monotonic()+8*60
     while time.monotonic()<deadline:
         existing=subprocess.check_output(['squeue','--clusters='+a.cluster,'-h','-u','vsc37996','--name='+name,'-o','%A'],text=True).strip()
@@ -71,7 +78,9 @@ def main():
                  '--array='+','.join(map(str,indices)),'--time='+str(minutes),
                  '--kill-on-invalid-dep=yes','--export=ALL','--chdir='+repo,'--dependency=afterany:'+a.parent,
                  '--job-name='+name,'--output='+str(a.root/'logs/train-%A_%a.out'),
-                 str(controller),'train',repo,str(a.data),str(a.root),a.parent,a.phase]
+                 str(controller),'train',repo,str(a.data),str(a.root),a.parent]
+            if not a.direction_compare:
+                cmd.append(a.phase)
             reply=subprocess.run(cmd,text=True,capture_output=True)
             attempts.append(dict(minutes=minutes,exit_code=reply.returncode,stdout=reply.stdout,stderr=reply.stderr))
             result['attempts']=attempts;save()
