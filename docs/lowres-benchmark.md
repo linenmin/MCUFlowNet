@@ -258,6 +258,12 @@ python tools/lowres/run_deployment_audit.py --data /datasets --audit /runs/LOWRE
 
 `summarize_deployment.py --audit <audit>`只做CPU归约，不导入TensorFlow或重新推理：重算全部18份逐图报告的1041／845／196对均值、场景与运动分组，核对样本、源权重、导出、转换验收；若已有Vela报告，也核对五份编译的身份及产物SHA。报告保存在同目录`summary.json`与`summary.md`，不以场景bootstrap代替独立训练种子。
 
+### 评分几何分解（2026-10-06）
+
+`tools/lowres/audit_score_geometry.py`对Edge/S/L的FC2随机10k及整图FT3D10k两个端点做六配置推理，沿用原845对Sintel Final监控。输出依次为输入网格EPE、同网格换原图单位的EPE、预测与缩小GT共同恢复后的EPE、正式原GT EPE，以及横纵MAE和场景均值。后三项为原图像素，第一项为208×160像素；缩小GT回放只是参照，不能当理论误差下界或直接相加分摊贡献。
+
+先以`--smoke`验收固定0/320/639三对，再全量执行。每份权重必须精确恢复、实际GPU卷积执行、独立原评测入口一致、BN及全部推理状态不变，完整845对的输入/原图端点评分均须复现至2e-5。输出留外部Runs，源权重不写入；结果只决定下一训练建议，不自动启动方向加权训练。
+
 ### FT3D参数与BN统计的固定离线诊断（2026-10-06）
 
 `audit_domain_bn.py`只对已有FC2随机第10,000步和整图FT3D第10,000步权重做推理。每个模型四个固定组合：A为FC2参数／FC2统计，B为FT3D参数／FT3D统计，C为FT3D参数／FC2统计，D为FC2参数／FT3D统计。只交换同一模型的moving_mean与moving_variance；gamma/beta、ECA、Gate和卷积属于参数组。所有赋值逐元素核验，推理前后检查全部模型和优化器变量指纹；不执行优化器，不保存新checkpoint，源文件SHA须不变。C/D仅作敏感性诊断，统计与特征可能不适配，不能自动替换正式benchmark。
