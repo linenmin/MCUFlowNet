@@ -4,10 +4,17 @@ set -euo pipefail
 mode=$1 repo=$2 data=$3 root=$4
 cluster=${SLURM_CLUSTER_NAME:?}
 case "$cluster" in
-    mindwell|wice) software="${VSC_SCRATCH_GPFS1:?}/MCUFlowNet/software"; environment="$software/tf2502"; ready="$software/READY" ;;
+    mindwell|wice)
+        # Login and clean batch shells expose different GPFS variable bases.
+        project="${root%/runs/LOWRES-BENCH-01/*}"
+        [[ "$project" != "$root" && "$project" = /* && "$(realpath "$project")" == "$project" ]]
+        software="$project/software"; environment="$software/tf2502"; ready="$software/READY" ;;
     *) printf 'Unverified training cluster: %s\n' "$cluster" >&2; exit 2 ;;
 esac
-[[ -f "$ready" && -f "$root/control/SOURCES_READY.json" ]]
+if [[ ! -f "$ready" || ! -f "$root/control/SOURCES_READY.json" ]]; then
+    printf 'Missing verified runtime or sources: %s; %s\n' "$ready" "$root/control/SOURCES_READY.json" >&2
+    exit 2
+fi
 cd "$repo"
 commit=$(git rev-parse HEAD)
 [[ "$commit" == "$(cat "$root/control/code-commit.txt")" && -z "$(git status --porcelain)" ]]

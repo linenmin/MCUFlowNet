@@ -57,6 +57,8 @@ def main():
         result.update(action='no_gpu_recovery_required');save();print(json.dumps(result),flush=True)
         return 1 if attention else 0
     recipe=json.loads((c/'submission.json').read_text());repo=recipe['checkout']
+    export_mode=recipe.get('slurm_export','ALL')
+    assert export_mode in ('ALL','NIL')
     assert recipe.get('phase','fc2') == a.phase
     assert recipe.get('cluster','mindwell') == a.cluster
     if a.direction_compare:
@@ -76,7 +78,7 @@ def main():
             cmd=['sbatch','--parsable','--clusters='+a.cluster,'--account=lp_embaivision','--partition='+partition,
                  '--nodes=1','--ntasks=1','--gpus-per-node=1','--cpus-per-task=8','--mem=32G',
                  '--array='+','.join(map(str,indices)),'--time='+str(minutes),
-                 '--kill-on-invalid-dep=yes','--export=ALL','--chdir='+repo,'--dependency=afterany:'+a.parent,
+                 '--kill-on-invalid-dep=yes','--export='+export_mode,'--chdir='+repo,'--dependency=afterany:'+a.parent,
                  '--job-name='+name,'--output='+str(a.root/'logs/train-%A_%a.out'),
                  str(controller),'train',repo,str(a.data),str(a.root),a.parent]
             if not a.direction_compare:
