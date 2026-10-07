@@ -22,6 +22,7 @@ def main():
     for name in ('checkpoint','data','manifests','reference-audit','out'):
         p.add_argument('--'+name,type=Path,required=True)
     p.add_argument('--code-commit',required=True)
+    p.add_argument('--quantize',action='store_true',help='Enable the same fixed64 FC2 PTQ audit; no adaptation')
     a=p.parse_args()
     if a.out.exists() or not re.fullmatch('[0-9a-f]{40}',a.code_commit):
         raise ValueError('A new destination and verified code commit are required')
@@ -59,7 +60,7 @@ def main():
     if source!=checkpoint_sha(a.checkpoint):
         raise AssertionError('Original checkpoint changed')
     case=dict(id='public-edge-208',model='edge',checkpoint=str(prefix),hw=[160,208],
-              geometry='public-original',edge_public=True,quantize=False,
+              geometry='public-original',edge_public=True,quantize=a.quantize,
               expected_monitor=None,expected_full=None)
     for name in ('sintel_full.json','sintel_monitor.json','calibration.json'):
         shutil.copy2(a.reference_audit/name,a.out/name)

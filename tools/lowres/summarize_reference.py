@@ -11,10 +11,22 @@ def main():
     p.add_argument('--audit',type=Path,required=True)
     p.add_argument('--comparison',type=Path,required=True)
     p.add_argument('--runs',type=Path,required=True)
+    p.add_argument('--public-original',action='store_true',help='Verify unchanged author weights rather than adapted selection')
     a=p.parse_args(); root=a.audit
     case,=json.loads((root/'cases.json').read_text())
-    require(case['id']=='reference-edge-208' and case['edge_public'], 'Not the selected public Edge reference')
-    selection=json.loads((root/'control/source-selection.json').read_text())
+    require(case['id']==('public-edge-208' if a.public_original else 'reference-edge-208')
+            and case['edge_public'], 'Not the selected public Edge reference')
+    if a.public_original:
+        proof=json.loads((root/'author-parity.json').read_text());protocol=json.loads((root/'protocol.json').read_text())
+        require(proof['passed'] and proof['no_training'] and proof['model_bn_values_exact']
+                and proof['original_author_prediction_parity'],'Original author parity missing')
+        original=a.runs/Path(protocol['source_checkpoint']).relative_to('/runs')
+        require(all(sha(original.parent/name)==digest for name,digest in proof['original_checkpoint_sha256'].items()),
+                'Original author source weights changed')
+        selection=dict(manifest_sha256={name:sha(root/name) for name in ('sintel_full.json','sintel_monitor.json','calibration.json')},
+                       checkpoint_files_sha256=proof['mapped_checkpoint_sha256'],expected_monitor=None)
+    else:
+        selection=json.loads((root/'control/source-selection.json').read_text())
     for name,digest in selection['manifest_sha256'].items():
         require(sha(root/name)==digest==sha(a.comparison/name), 'Common manifest differs: '+name)
     prefix=a.runs/Path(case['checkpoint']).relative_to('/runs')
@@ -43,7 +55,8 @@ def main():
             agree_tree(result[group],reduce_records(subset(rows,group)),kind+'/'+group)
         if kind=='native':
             require(result['restore_exact'] and result['inference_device']=='GPU','Native GPU/restore evidence missing')
-            require(abs(result['monitor']['epe']-selection['expected_monitor'])<1e-5,'Monitor not reproduced')
+            if selection['expected_monitor'] is not None:
+                require(abs(result['monitor']['epe']-selection['expected_monitor'])<1e-5,'Monitor not reproduced')
         else:
             file=root/'exports'/case['id']/f'model_{kind}.tflite'
             require(sha(file)==export['exports'][kind]['sha256']==result['tflite_sha256'],'TFLite identity differs')
@@ -67,6 +80,9 @@ def main():
         ptq_increase=scores['int8']['full']['epe']-scores['native']['full']['epe'],comparisons=table,
         vela=dict(sram_peak_kib=v['sram_peak_kib'],estimated_fps=v['estimated_fps'],compiled_sha256=v['compiled_sha256']),
         limitation='One existing adapted reference with different training history; not an equal-budget architecture comparison; no board validation here')
+    if a.public_original:
+        summary.update(public_original=True,author_parity_sha256=sha(root/'author-parity.json'),no_training=True,
+            limitation='Unchanged author public weights, same AREA protocol and64 FC2 calibration; no adaptation or new board test')
     summary['code_files_sha256']={name:sha(Path(__file__).with_name(name)) for name in (
         'model.py','data.py','export_deployment.py','audit_deployment.py','summarize_reference.py')}
     save(root/'summary.json',summary)
