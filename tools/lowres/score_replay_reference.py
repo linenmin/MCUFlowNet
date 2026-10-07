@@ -2,11 +2,15 @@
 import argparse
 import json
 from pathlib import Path
+import sys
 import numpy as np
 import tensorflow as tf
 from data import digest
 from initialization import checkpoint_sha,restore_model
 from model import graph
+# Model construction exposes EdgeFlowNet/code, which also contains train.py.
+# Keep the shared low-resolution evaluator first, as the training entry does.
+sys.path.insert(0,str(Path(__file__).resolve().parent))
 from train import atomic,evaluate
 
 
