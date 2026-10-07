@@ -38,7 +38,10 @@ def main():
     p.add_argument('--fc2-source-step',type=int,choices=[10000])
     p.add_argument('--direction-weights',type=float,nargs=2)
     p.add_argument('--replay-arm',choices=['fc2_only','mixture75_25','ft3d_only'])
+    p.add_argument('--select-full-sintel',action='store_true',help='Full1041 evaluation at every boundary and best-checkpoint selection')
     a = p.parse_args()
+    if a.select_full_sintel and a.replay_arm!='mixture75_25':
+        raise ValueError('Full-development selection is defined for the final mixed recipe')
     if a.replay_arm:
         assert a.direction_weights is None, 'Replay does not change the loss'
         assert (a.phase,a.geometry,a.fc2_source_step)==(
@@ -140,6 +143,9 @@ def main():
                       mixture_counts=[24,8] if a.replay_arm=='mixture75_25' else None,
                       mixed_source_sweeps='independent, cross-boundary without tail padding',
                       full_evaluation_steps=[0,3000,4000,5000],ft3d_test_samples=len(ft_test))
+        if a.select_full_sintel:
+            config.update(full_evaluation_steps='every_committed_boundary',
+                          best_criterion='sintel_full_epe_original_pixels')
     if a.resume:
         state = json.loads((a.out/'current.json').read_text())
         if state['config'] != config:
@@ -180,7 +186,7 @@ def main():
                               sintel_epe_original_pixels=evaluate(sess,g,monitor,a.data,True))
             if a.replay_arm:
                 metric['ft3d_test_epe_pixels']=evaluate(sess,g,ft_test,a.data)
-                if a.probe or metric['step'] in (0,3000,4000,5000):
+                if a.select_full_sintel or a.probe or metric['step'] in (0,3000,4000,5000):
                     extra=evaluate(sess,g,extra_sintel,a.data,True)
                     metric['sintel_full_epe_original_pixels']=(metric['sintel_epe_original_pixels']*len(monitor)+extra*len(extra_sintel))/(len(monitor)+len(extra_sintel))
             assert all(np.array_equal(v,w) for v,w in zip(before,sess.run(g['weights'])))
@@ -193,9 +199,12 @@ def main():
             folder.mkdir(exist_ok=True)
             g['saver'].save(sess,str(folder/'model'),write_meta_graph=False)
             state.update(step=metric['step'],checkpoint=str(folder.relative_to(a.out)/'model'),history=state['history']+[metric])
-            for key,column in [('best','sintel_epe_original_pixels'),('best_fc2','fc2_val_epe_pixels')]:
+            best_column='sintel_full_epe_original_pixels' if a.select_full_sintel else 'sintel_epe_original_pixels'
+            for key,column in [('best',best_column),('best_fc2','fc2_val_epe_pixels')]:
                 if state[key] is None or metric[column] < state[key]['epe']:
                     state[key] = dict(step=metric['step'],epe=metric[column],checkpoint=state['checkpoint'])
+                    if a.select_full_sintel:
+                        state[key].update(criterion=column,source_sha=checkpoint_sha(folder/'model'))
             atomic(a.out/'current.json',state)
             atomic(a.out/'metrics.json',state['history'])
             print(json.dumps(dict(event='evaluation',**metric)),flush=True)

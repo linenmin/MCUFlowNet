@@ -19,13 +19,16 @@ def main():
     p.add_argument('--phase',choices=['fc2','ft3d'],default='fc2')
     p.add_argument('--direction-compare',action='store_true')
     p.add_argument('--replay-compare',action='store_true')
+    p.add_argument('--final-sl',action='store_true',help='Verify one40k full-Sintel mixed recipe without adding comparison arms')
     p.add_argument('--reference-repo',type=Path)
     a=p.parse_args(); a.out.mkdir(parents=True,exist_ok=False)
+    assert not a.final_sl or (a.model in ('S','L') and a.phase=='fc2')
     parent=json.loads((a.source/'current.json').read_text())
     source=a.source/parent['checkpoint']; before=checkpoint_sha(source)
     base=[sys.executable,str(Path(__file__).with_name('geometry_compare.py')),'--model',a.model,
           '--data',str(a.data),'--manifests',str(a.manifests),'--source',str(a.source),
-          '--steps','5','--eval-every','1','--probe']
+          '--steps','40000' if a.final_sl else '5','--eval-every','1','--probe']
+    if a.final_sl:base+=['--stop-after-steps','5','--select-full-sintel']
     base+=['--phase',a.phase]
     if a.direction_compare:
         assert a.phase=='fc2'
@@ -33,8 +36,8 @@ def main():
     if a.code_commit: base+=['--code-commit',a.code_commit]
     env=dict(os.environ,TF_DETERMINISTIC_OPS='1',CUBLAS_WORKSPACE_CONFIG=':4096:8')
     results={}; states={}
-    assert not (a.direction_compare and a.replay_compare)
-    arms=('fc2_only','mixture75_25','ft3d_only') if a.replay_compare else (('original','weighted') if a.direction_compare else ('whole','random'))
+    assert sum((a.direction_compare,a.replay_compare,a.final_sl))<=1
+    arms=('mixture75_25',) if a.final_sl else (('fc2_only','mixture75_25','ft3d_only') if a.replay_compare else (('original','weighted') if a.direction_compare else ('whole','random')))
     direction=(1.30879345603272,0.6912065439672802)
     for arm in arms:
         continuous=a.out/arm/'continuous'; resumed=a.out/arm/'resumed'
@@ -42,7 +45,7 @@ def main():
         def run(label,extra):
             with (continuous.parent/(label+'.log')).open('w') as stream:
                 flags=['--geometry','random' if a.direction_compare else arm]
-                if a.replay_compare:
+                if a.replay_compare or a.final_sl:
                     flags=['--replay-arm',arm,'--phase','ft3d' if arm=='ft3d_only' else 'fc2',
                            '--geometry','whole' if arm=='ft3d_only' else 'random','--initial-lr','3e-6']
                     if arm!='ft3d_only': flags+=['--fc2-source-step','10000']
@@ -64,23 +67,44 @@ def main():
         initial=tf.train.load_checkpoint(str(continuous/'step-000000/model'))
         assert any(not np.array_equal(initial.get_tensor(n),c1.get_tensor(n)) for n in names if n.endswith('/kernel'))
         assert any(not np.array_equal(initial.get_tensor(n),c1.get_tensor(n)) for n in names if '/moving_' in n)
-        for key,column in [('best','sintel_epe_original_pixels'),('best_fc2','fc2_val_epe_pixels')]:
+        best_column='sintel_full_epe_original_pixels' if a.final_sl else 'sintel_epe_original_pixels'
+        for key,column in [('best',best_column),('best_fc2','fc2_val_epe_pixels')]:
             selected=min(left['history'],key=lambda r:r[column])
             assert left[key]['step']==selected['step'] and left[key]['epe']==selected[column]
             checkpoint=tf.train.load_checkpoint(str(continuous/left[key]['checkpoint']))
             assert int(checkpoint.get_tensor('global_step'))==selected['step']
             assert any('/Adam' in n for n in checkpoint.get_variable_to_shape_map())
+            if a.final_sl:
+                assert left[key]['criterion']==column
+                assert left[key]['source_sha']==checkpoint_sha(continuous/left[key]['checkpoint'])
             del checkpoint
         audit=json.loads((continuous/'initialization-audit.json').read_text())
         assert audit['model_bn_exact'] and audit['adam_slots_zero'] and audit['adam_beta_powers_reset']
-        assert json.loads((continuous/'status.json').read_text())['completed']
-        if a.direction_compare or a.replay_compare:
+        status=json.loads((continuous/'status.json').read_text())
+        assert status['completed']==(not a.final_sl)
+        if a.final_sl:assert status['step']==5 and status['total_steps']==40000 and status['pilot_completed']
+        if a.direction_compare or a.replay_compare or a.final_sl:
             execution=json.loads((continuous/'gpu-execution.json').read_text())
             assert any('Backprop' in n['op'] and 'GPU' in n['device'] for n in execution['convolutions'])
         states[arm]=left
         results[arm]=dict(passed=True,all_resumed_variables_exact=True,steps=5,mid_sweep_resume=True,
                           source_model_bn_exact=True,adam_reset=True,bn_and_parameters_updated=True)
         del c1,c2,initial
+    if a.final_sl:
+        from geometry import step_lr
+        from replay_data import verify_cursors
+        left=states['mixture75_25'];cursor=verify_cursors()
+        assert left['source_cursors']=={'fc2':[5,20],'ft3d':[5,4]}
+        assert all(x['last_batch']==x['samples']==32 for x in left['history'][1:])
+        assert left['config']['best_criterion']=='sintel_full_epe_original_pixels'
+        assert left['config']['full_evaluation_steps']=='every_committed_boundary'
+        assert all(x['lr']==step_lr(x['step'],40000,3e-6,1e-6) for x in left['history'][1:])
+        assert step_lr(1,40000,3e-6,1e-6)==3e-6 and step_lr(40000,40000,3e-6,1e-6)==1e-6
+        result=dict(passed=True,probe_only=True,model=a.model,arms=results,source_unchanged=checkpoint_sha(source)==before,
+                    full_sintel_best_selection=True,best_checkpoint_sha_matches=True,planned_steps=40000,
+                    continuous_resumed_all_variables_exact=True,actual_gpu_backprop=True,adam_reset_at_stage_start=True,
+                    mixed_cursor_acceptance=cursor,tensorflow=tf.__version__,code_commit=a.code_commit)
+        (a.out/'acceptance.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result),flush=True);return
     if a.replay_compare:
         from replay_data import verify_cursors
         cursor=verify_cursors()

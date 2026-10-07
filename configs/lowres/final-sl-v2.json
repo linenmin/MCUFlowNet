@@ -235,9 +235,9 @@
     "old_edge_7p7712_protocol": "historical resize pipeline; require matching AREA reevaluation before final shared table"
   },
   "selection_history": "Development feedback formed this proposal. Earlier FC2 stages reused; mixed40k schedule and checkpoint rule specified before execution. Not an independent-test result.",
-  "scope": "Propose S/L mixed40000 single cosine from existing FC2-random10k weights. No new FC2 training, restart sweep, seeds or baseline training. No Slurm job submitted.",
+  "scope": "Approved S/L mixed40000 single cosine from existing FC2-random10k weights. No FC2 rerun, LR restart sweep, seeds or baseline training; run admission requires real-data recovery/selection acceptance.",
   "config_kind": "frozen protocol and artifact registry; existing stage runners retain their documented interfaces",
-  "plan_state": "single_cosine_revision_proposed_not_submitted",
+  "plan_state": "approved_preflight_pending",
   "supersedes": "FINAL-SL-01",
   "baseline_artifacts": {
     "S": {

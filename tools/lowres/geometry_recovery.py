@@ -7,7 +7,7 @@ import subprocess
 import time
 
 
-def classify(root, states, phase='fc2', direction_compare=False, replay_compare=False, replay_end_step=5000, lr_compare=False):
+def classify(root, states, phase='fc2', direction_compare=False, replay_compare=False, replay_end_step=5000, lr_compare=False, final_sl=False):
     if phase not in ('fc2','ft3d'):
         raise ValueError('Unknown recovery phase')
     pending=[]; attention=[]
@@ -15,8 +15,10 @@ def classify(root, states, phase='fc2', direction_compare=False, replay_compare=
     goal=5000 if direction_compare or replay_compare else 10000
     if replay_compare:goal=replay_end_step
     if lr_compare:arms=('fixed','restart');goal=15000
-    for index,(arm,model) in enumerate([(a,m) for a in arms for m in ('edge','S','L')]):
-        out=root/'seed42'/arm/model/('replay' if replay_compare or lr_compare else phase)
+    if final_sl:arms=('mixture75_25',);goal=40000
+    models=('S','L') if final_sl else ('edge','S','L')
+    for index,(arm,model) in enumerate([(a,m) for a in arms for m in models]):
+        out=root/'seed42'/arm/model/('replay' if replay_compare or lr_compare or final_sl else phase)
         state=out/'current.json'; status=out/'status.json'
         if state.exists() and status.exists():
             v=json.loads(state.read_text()); s=json.loads(status.read_text())
@@ -42,6 +44,7 @@ def main():
     p.add_argument('--replay-compare',action='store_true')
     p.add_argument('--replay-end-step',type=int,choices=[5000,10000],default=5000)
     p.add_argument('--lr-compare',action='store_true')
+    p.add_argument('--final-sl',action='store_true')
     a=p.parse_args(); assert a.parent.isdigit()
     partition={'mindwell':'gpu_b200','wice':'gpu_a100'}[a.cluster]
     c=a.root/'control'
@@ -55,10 +58,10 @@ def main():
             fields=line.split('|'); name=fields[0].strip()
             if name.startswith(a.parent+'_') and name[len(a.parent)+1:].isdigit():
                 states[int(name[len(a.parent)+1:])]=fields[1].split()[0].rstrip('+')
-        if len(states)==6: break
+        if len(states)==(2 if a.final_sl else 6): break
         time.sleep(2)
-    assert sum((a.direction_compare,a.replay_compare,a.lr_compare))<=1
-    indices,attention=classify(a.root,states,a.phase,a.direction_compare,a.replay_compare,a.replay_end_step,a.lr_compare)
+    assert sum((a.direction_compare,a.replay_compare,a.lr_compare,a.final_sl))<=1
+    indices,attention=classify(a.root,states,a.phase,a.direction_compare,a.replay_compare,a.replay_end_step,a.lr_compare,a.final_sl)
     result.update(states=states,recovery_indices=indices,needs_attention=attention)
     proof=c/'recovery-dispatch.json'
     def save(): proof.write_text(json.dumps(result,indent=2)+'\n')
@@ -70,29 +73,34 @@ def main():
     assert export_mode in ('ALL','NIL')
     assert recipe.get('phase','fc2') == a.phase
     assert recipe.get('cluster','mindwell') == a.cluster
-    if a.direction_compare or a.replay_compare or a.lr_compare:
+    if a.direction_compare or a.replay_compare or a.lr_compare or a.final_sl:
         assert a.phase=='fc2' and recipe['source_step']==10000
-        if a.lr_compare:assert recipe['phase_steps']==10000 and recipe['pilot_steps']==5000
+        if a.final_sl:assert recipe['steps']==40000 and recipe['models']==['S','L']
+        elif a.lr_compare:assert recipe['phase_steps']==10000 and recipe['pilot_steps']==5000
         else:assert recipe['pilot_steps']==5000 and recipe['steps']==10000 if a.replay_compare else recipe['steps']==5000
         partition=recipe['partition']
         assert partition in ({'gpu_b200'} if a.cluster=='mindwell' else {'gpu_a100','gpu_h100'})
-    controller=c/('replay-lr.controller.sh' if a.lr_compare else ('replay.controller.sh' if a.replay_compare else ('direction_compare.controller.sh' if a.direction_compare else 'geometry_compare.controller-v2.sh')))
+    controller=c/('final-sl.controller.sh' if a.final_sl else ('replay-lr.controller.sh' if a.lr_compare else ('replay.controller.sh' if a.replay_compare else ('direction_compare.controller.sh' if a.direction_compare else 'geometry_compare.controller-v2.sh'))))
     assert controller.is_file() and subprocess.check_output(['git','-C',repo,'rev-parse','HEAD'],text=True).strip()==recipe['code_commit']
-    name=('flow-lr-recovery-' if a.lr_compare else ('flow-replay-recovery-' if a.replay_compare else ('flow-direction-recovery-' if a.direction_compare else 'flow-geometry-recovery-')))+a.parent
+    name=('flow-final-recovery-' if a.final_sl else ('flow-lr-recovery-' if a.lr_compare else ('flow-replay-recovery-' if a.replay_compare else ('flow-direction-recovery-' if a.direction_compare else 'flow-geometry-recovery-'))))+a.parent
     attempts=[];deadline=time.monotonic()+8*60
     while time.monotonic()<deadline:
         existing=subprocess.check_output(['squeue','--clusters='+a.cluster,'-h','-u','vsc37996','--name='+name,'-o','%A'],text=True).strip()
         if existing:
             # No ambiguous repeated submission after a lost reply.
             raise RuntimeError('Existing recovery job requires inspection: '+existing)
-        for minutes in (60,40,30,20):
+        for minutes in ((240,180,120,60) if a.final_sl else (60,40,30,20)):
             cmd=['sbatch','--parsable','--clusters='+a.cluster,'--account=lp_embaivision','--partition='+partition,
                  '--nodes=1','--ntasks=1','--gpus-per-node=1','--cpus-per-task=8','--mem=32G',
                  '--array='+','.join(map(str,indices)),'--time='+str(minutes),
                  '--kill-on-invalid-dep=yes','--no-requeue','--export='+export_mode,'--chdir='+repo,'--dependency=afterany:'+a.parent,
                  '--job-name='+name,'--output='+str(a.root/'logs/train-%A_%a.out'),
                  str(controller),'continue' if a.replay_compare and a.replay_end_step==10000 else 'train',repo,str(a.data),str(a.root),a.parent]
-            if not a.direction_compare and not a.replay_compare and not a.lr_compare:
+            if a.final_sl:
+                # Accounting has confirmed the whole parent array ended; old
+                # live Slurm dependency records may already have expired.
+                cmd.remove('--dependency=afterany:'+a.parent)
+            if not a.direction_compare and not a.replay_compare and not a.lr_compare and not a.final_sl:
                 cmd.append(a.phase)
             reply=subprocess.run(cmd,text=True,capture_output=True)
             attempts.append(dict(minutes=minutes,exit_code=reply.returncode,stdout=reply.stdout,stderr=reply.stderr))
