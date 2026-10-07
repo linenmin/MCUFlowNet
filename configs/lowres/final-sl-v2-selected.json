@@ -1,0 +1,63 @@
+{
+  "recipe": "FINAL-SL-02",
+  "selection": "Minimum full1041 original-pixel Sintel Final EPE on new0..40k path at208x160; earliest tie",
+  "training_commit": "cfedc77fcea288e31a0c8738283d3228fd4457d0",
+  "recipe_sha256": "3ce979e7667d7cf2d66210bf0f6d9b7eddc0a69ab2ab5da938d93f1953c352fc",
+  "experiment": "LOWRES-BENCH-01/final-sl40k-20261007",
+  "training_hw": [
+    160,
+    208
+  ],
+  "seed": 42,
+  "held_out_test": false,
+  "full_manifest_sha256": "755a35b08a3f215e3ded3cfcc967a78d04ed2c486fca1d570ba74a12ee9a4489",
+  "calibration_sha256": "064639d67c6f5cf7ec2a7b512c936bee16c12463c2711b5d9478141226fe0816",
+  "selected": [
+    {
+      "model": "S",
+      "step": 39000,
+      "selection_hw": [
+        160,
+        208
+      ],
+      "native_selection_epe": 6.581773283708489,
+      "checkpoint": "seed42/mixture75_25/S/replay/step-039000/model",
+      "checkpoint_sha256": {
+        "model.index": "2f03b647aabe9ed2bc62759f66a4e8c13e3ed23d4937728f09e5bdeece37ed99",
+        "model.data-00000-of-00001": "89344236ee97206d1117b011a5c301de01234a5c8e367874b99e936f0a7c4740"
+      },
+      "deploy_hw": [
+        160,
+        208
+      ],
+      "float_epe": 6.581772730691753,
+      "int8_epe": 6.674216508857439,
+      "export": "deployment-audit/exports/final-mixture-S-208",
+      "float_tflite_sha256": "37560526eaa14b056a06b0d3dc82fec60254e3b99d5f1ef5a4ba75a28d7b94ab",
+      "int8_tflite_sha256": "6024d251100d7527245f685744bb5672be3e017f08c1175427b0dd45dfbc7341"
+    },
+    {
+      "model": "L",
+      "step": 32000,
+      "selection_hw": [
+        160,
+        208
+      ],
+      "native_selection_epe": 6.512915195518966,
+      "checkpoint": "seed42/mixture75_25/L/replay/step-032000/model",
+      "checkpoint_sha256": {
+        "model.index": "cbeb664738868dd06b7c5caf7439b47196d7ac91aa201054b1f2916c9d6ce5a0",
+        "model.data-00000-of-00001": "fb95838cc0e9c67a88149c1653f29a265005d37b19ade36054b14c8529ca74e8"
+      },
+      "deploy_hw": [
+        160,
+        224
+      ],
+      "float_epe": 6.459000303628748,
+      "int8_epe": 6.55915095159765,
+      "export": "deployment-audit/exports/final-mixture-L-224",
+      "float_tflite_sha256": "660cbe0e1fe896910643561d1526162b523eb82ce763c3cbd96445e5f7695304",
+      "int8_tflite_sha256": "c3a15e4244599d26c3fb28627bc3b3d7d7f256cb24189354bed0e30b0540a54a"
+    }
+  ]
+}

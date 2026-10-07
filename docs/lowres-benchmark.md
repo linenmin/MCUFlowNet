@@ -10,6 +10,12 @@
 
 选择完成后，S208／L224都使用各自已选中的同一份权重及固定64FC2 PTQ，不再用INT8或224结果反向重新挑checkpoint；20k等较早候选若最好则正常保留。主benchmark继续使用作者公开权重，Edge不新增训练。Sintel已参与开发和选模，结果标注开发评测。原10k部署产物保留作已有验证参照。
 
+### 冻结的训练结果与候选
+
+两条40k训练和82份检查点已完成验收。共同208×160评分选中S第39k、L第32k；其原生FP32 EPE为6.5818／6.5129，40k末步为6.6307／6.5400。同一权重部署时，S208的TFLite FP32／INT8为6.5818／6.6742，L224为6.4590／6.5592。全部同1041对、原GT不截断，固定64FC2 TRAIN校准；完整逐图转换与Vela门槛通过，不以量化成绩再选轮次。
+
+权重及导出SHA固定在[final-sl-v2-selected.json](../configs/lowres/final-sl-v2-selected.json)。源checkpoint、全部恢复状态、逐点评分和曲线保存在`C:/00Work/Runs/MCUFlowNet/LOWRES-BENCH-01/final-sl40k-20261007`。Vela估计S208／L224为10.508／5.973 FPS、SRAM峰值1170／1260 KiB、CPU算子0；不是新权重实机测量。较强适配及共同训练Edge继续作补充参照，不把一个seed的开发选优描述为同预算架构显著优势。实时归档／收尾状态仍只维护wiki实验记录4o。
+
 ## 历史冻结配方：FINAL-SL-01（10k，2026-10-07）
 
 最终S/L采用已经完成评分、PTQ和Vela验收的混合第10,000步权重。配方与权重SHA固定在[final-sl-v1.json](../configs/lowres/final-sl-v1.json)，复用已有产物即可，不需要重新训练。15k学习率分支保留为探索证据。
