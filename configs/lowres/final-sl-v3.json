@@ -1,0 +1,374 @@
+{
+  "recipe_id": "FINAL-SL-03",
+  "frozen_date": "2026-10-08",
+  "purpose": "Deploy MCUFlowNet S/L and compare with released pretrained baselines",
+  "models": [
+    "S",
+    "L"
+  ],
+  "seed": 42,
+  "input_hw": [
+    160,
+    208
+  ],
+  "batch": 32,
+  "precision": "FP32",
+  "tf32": false,
+  "initialization": "random; do not inherit supernet weights",
+  "architecture_codes": {
+    "S": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "L": [
+      2,
+      0,
+      0,
+      2,
+      2,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "image_input": "BGR [-1,1]; AREA resize",
+  "flow_targets": "LINEAR resize; separate u/v ratios; resized pixels; no clipping or12.5 division",
+  "optimizer": {
+    "name": "Adam",
+    "beta1": 0.9,
+    "beta2": 0.999,
+    "epsilon": 1e-08,
+    "weight_decay": 0,
+    "gradient_clipping": false
+  },
+  "batch_normalization": {
+    "train": true,
+    "evaluation": false,
+    "momentum": 0.9,
+    "epsilon": 1e-05
+  },
+  "loss": "existing shared multiscale cumulative L1 + LinearSoftplus uncertainty; weights0.125/0.25/0.5",
+  "geometry": {
+    "full_image_probability": 0.2,
+    "crop_area_fraction": [
+      0.15,
+      1.0
+    ],
+    "source_aspect_ratio": [
+      1.3,
+      2.5
+    ],
+    "attempts": 10,
+    "seed_namespace": 20261004
+  },
+  "datasets": {
+    "fc2_train_pairs": 22232,
+    "ft3d_train_pairs": 80578,
+    "ft3d_renderings": [
+      "clean",
+      "final"
+    ],
+    "ft3d_directions": [
+      "future",
+      "past"
+    ],
+    "ft3d_camera": "left",
+    "manifest_sha": {
+      "fc2_train.json": "45c85bb372661ce89b1115159a378b7f091c1bde3496cccc1000940246024c55",
+      "fc2_val.json": "9fd3caad3c3d0abeb37933f7625495f7e1c6e04acd3efc366216d430bc304101",
+      "sintel_monitor.json": "c5e16eaf1a4a163227ccf08f5ca42d634b1048d24d47867513a1ae6885f72c06",
+      "ft3d_train.json": "7f78c28adcbd8e8c4be34b2ed82cd633b4b36dd7cfa2d2e598a7bd4e86c66b1f",
+      "ft3d_test.json": "93d848ed0166a7bb03abe648e014f3f5575fc89bdc602ef332e1c0b41facfd67",
+      "sintel_full.json": "755a35b08a3f215e3ded3cfcc967a78d04ed2c486fca1d570ba74a12ee9a4489"
+    }
+  },
+  "stages": [
+    {
+      "name": "FC2_base",
+      "epochs": 400,
+      "updates": 278000,
+      "geometry": "whole image",
+      "lr": {
+        "schedule": "constant",
+        "value": 0.0001
+      },
+      "optimizer_state": "initialize",
+      "checkpoint_selection": "fixed epoch400",
+      "tail_batch": 24
+    },
+    {
+      "name": "FC2_random",
+      "updates": 10000,
+      "geometry": "shared random region, then AREA resize",
+      "lr": {
+        "schedule": "cosine per update",
+        "initial": 1e-05,
+        "minimum": 1e-06
+      },
+      "optimizer_state": "reset Adam and step; inherit model and BN",
+      "checkpoint_selection": "fixed step10000"
+    },
+    {
+      "name": "FC2_FT3D_mixture",
+      "updates": 40000,
+      "batch_counts": {
+        "FC2": 24,
+        "FT3D": 8
+      },
+      "geometry": {
+        "FC2": "same random-region recipe",
+        "FT3D": "whole image AREA resize"
+      },
+      "lr": {
+        "schedule": "single per-update cosine",
+        "updates": 40000,
+        "initial": 3e-06,
+        "minimum": 1e-06,
+        "restarts": false
+      },
+      "optimizer_state": "reset only at mixed stage start; inherit model/BN; interrupted jobs restore ALL state and cursors",
+      "checkpoint_selection": "minimum shared208x160 full1041 Sintel development FP32 EPE among fixed1000-step candidates; tie keeps earliest",
+      "already_completed_updates": 0,
+      "additional_updates": 40000
+    },
+    {
+      "name": "FC2_FT3D_floor_continuation",
+      "updates": 40000,
+      "source_global_step": 40000,
+      "end_global_step": 80000,
+      "batch_counts": {
+        "FC2": 24,
+        "FT3D": 8
+      },
+      "lr": {
+        "schedule": "constant at reached cosine floor",
+        "value": 1e-06
+      },
+      "optimizer_state": "inherit ALL Adam slots/beta powers/global step and BN; preserve both dataset cursors",
+      "checkpoint_selection": "minimum full1041 original-pixel EPE across original0..40k and continued41..80k; earliest tie"
+    }
+  ],
+  "final_artifacts": {},
+  "deployment_input_hw": {
+    "S": [
+      160,
+      208
+    ],
+    "L": [
+      160,
+      224
+    ]
+  },
+  "ptq": {
+    "mode": "post_training_full_INT8",
+    "calibration": "existing fixed64 FC2 TRAIN whole-frame pairs; no Sintel",
+    "calibration_sha256": "064639d67c6f5cf7ec2a7b512c936bee16c12463c2711b5d9478141226fe0816",
+    "qat": false,
+    "checkpoint_selection": "Use the already selected FP32 best; same checkpoint at S208 or L224; do not select by INT8 score"
+  },
+  "evaluation": {
+    "dataset": "Sintel training Final development evaluation",
+    "pairs": 1041,
+    "scoring_hw": [
+      416,
+      1024
+    ],
+    "image_resize": "AREA for all final comparison rows",
+    "flow_restoration": "LINEAR and separate u/v ratios",
+    "ground_truth": "original center-region flow; all pixels; no clipping",
+    "hidden_test": false,
+    "interval_updates": 1000,
+    "selection_input_hw": [
+      160,
+      208
+    ],
+    "selection_candidate_steps": [
+      0,
+      1000,
+      2000,
+      3000,
+      4000,
+      5000,
+      6000,
+      7000,
+      8000,
+      9000,
+      10000,
+      11000,
+      12000,
+      13000,
+      14000,
+      15000,
+      16000,
+      17000,
+      18000,
+      19000,
+      20000,
+      21000,
+      22000,
+      23000,
+      24000,
+      25000,
+      26000,
+      27000,
+      28000,
+      29000,
+      30000,
+      31000,
+      32000,
+      33000,
+      34000,
+      35000,
+      36000,
+      37000,
+      38000,
+      39000,
+      40000
+    ],
+    "selection_rule": "Minimum full1041 development FP32 EPE on this new single-cosine path at0/1000/.../40000; ties keep earliest. Historical mixed10k/15k and other branches are references only.",
+    "secondary": "FC2val640 and fixed FT3D TEST640 monitoring; no performance-driven extension beyond40000"
+  },
+  "baseline_policy": {
+    "main": "released author checkpoints; no new retraining",
+    "edge_deployment_input_hw": [
+      160,
+      208
+    ],
+    "preserve_original_input_range_bn_and_flow_units": true,
+    "supplement": "retain existing adapted and same-training Edge results",
+    "old_edge_7p7712_protocol": "historical resize pipeline; require matching AREA reevaluation before final shared table"
+  },
+  "selection_history": "Development feedback formed this proposal. Earlier FC2 stages reused; mixed40k schedule and checkpoint rule specified before execution. Not an independent-test result.",
+  "scope": "Approved S/L mixed40000 single cosine from existing FC2-random10k weights. No FC2 rerun, LR restart sweep, seeds or baseline training; run admission requires real-data recovery/selection acceptance.",
+  "config_kind": "frozen protocol and artifact registry; existing stage runners retain their documented interfaces",
+  "plan_state": "approved_preflight_pending",
+  "supersedes": "FINAL-SL-01",
+  "baseline_artifacts": {
+    "S": {
+      "run": "LOWRES-BENCH-01/mixed-replay5k-20261007",
+      "checkpoint_relative": "seed42/mixture75_25/S/replay/step-010000/model",
+      "step": 10000,
+      "sha256": {
+        "model.index": "ae47c2a73629ffc00ab888f66b87be7bf652f1ae968b761f168538e535c0ca6e",
+        "model.data-00000-of-00001": "da40541ed9716495eb1696a54581e4ef1118f6d4c826484746a12d740be48bb6"
+      }
+    },
+    "L": {
+      "run": "LOWRES-BENCH-01/mixed-replay5k-20261007",
+      "checkpoint_relative": "seed42/mixture75_25/L/replay/step-010000/model",
+      "step": 10000,
+      "sha256": {
+        "model.index": "57ae6f11643e5062c6009beddeac6d72854012b06816a38ca1d4400b16596eef",
+        "model.data-00000-of-00001": "32578260386d4febbdcda5501e731cc7b6d446ee5805f87a646e3a2e5bbe40d7"
+      }
+    }
+  },
+  "exposure_budget": {
+    "fc2_pairs": 960000,
+    "ft3d_pairs": 320000,
+    "fc2_list_epochs": 43.18100035984167,
+    "ft3d_list_epochs": 3.9713073047233736
+  },
+  "historical_15k_sources": {
+    "S": {
+      "run_relative": "LOWRES-BENCH-01/mixed-lr5k-20261007/seed42/restart/S/replay",
+      "checkpoint": "step-015000/model",
+      "global_mixed_step": 15000,
+      "source_state_sha256": "4f0cacbbc1aed2ddecf65e097d1c09141311af051295f87a19fdb77529d19737",
+      "source_cursors": {
+        "fc2": [
+          17,
+          4288
+        ],
+        "ft3d": [
+          2,
+          39422
+        ]
+      },
+      "checkpoint_sha256": {
+        "model.index": "0a4ea9c4605ec6971dc9f77f292dc369cf084a70e0e8a50254aa280280b66352",
+        "model.data-00000-of-00001": "e4d813ac24ab0ace628d64c016d70c3ed2b7952f645676e72443a833563a29c2"
+      }
+    },
+    "L": {
+      "run_relative": "LOWRES-BENCH-01/mixed-lr5k-20261007/seed42/restart/L/replay",
+      "checkpoint": "step-015000/model",
+      "global_mixed_step": 15000,
+      "source_state_sha256": "222896a08a9beb6d53276a64c3826b99a928a4fb94871ceb2ef7ead3c8bee6a9",
+      "source_cursors": {
+        "fc2": [
+          17,
+          4288
+        ],
+        "ft3d": [
+          2,
+          39422
+        ]
+      },
+      "checkpoint_sha256": {
+        "model.index": "d145f340cd3e5ef5c64c2cdcc7be943929d9c3c0d80d0cf41b14991374f6d1fa",
+        "model.data-00000-of-00001": "9805fbc6033cbb9ea8155e882a9f42c21b0fd452b7082a3650319e2c6084a557"
+      }
+    }
+  },
+  "mixed_initialization_sources": {
+    "S": {
+      "run_relative": "LOWRES-BENCH-01/mixed-replay5k-20261007/source/S/fc2",
+      "checkpoint": "step-010000/model",
+      "source_fc2_step": 10000,
+      "source_state_sha256": "ea8402d0b02aa89d37b8527b341a336d4c6502fef87f5bcfdbd220d58af90ab0",
+      "checkpoint_sha256": {
+        "model.index": "964bceb6010851cf02d4b7ccd3ff9aad0051823436abe466e62c6b144b128954",
+        "model.data-00000-of-00001": "f9800d49a7b30fb944dd6477fdd625363cc8ceb696dc3500d2dfca67cc38f1f7"
+      },
+      "inherit": "model and BN",
+      "reset": "Adam slots, beta powers, mixed global_step and mixed source cursors"
+    },
+    "L": {
+      "run_relative": "LOWRES-BENCH-01/mixed-replay5k-20261007/source/L/fc2",
+      "checkpoint": "step-010000/model",
+      "source_fc2_step": 10000,
+      "source_state_sha256": "36488296764d1071db6efc4de15ecc817868c82c5ecd2b81d659e40eadccbd16",
+      "checkpoint_sha256": {
+        "model.index": "e65a58b9934ab9584c914c7e4db379c323821092587f9a210ab20820188ee13b",
+        "model.data-00000-of-00001": "5264662f4ba3d688eb106869be8efad1599493fc8006e21e24f7bab5d103cb29"
+      },
+      "inherit": "model and BN",
+      "reset": "Adam slots, beta powers, mixed global_step and mixed source cursors"
+    }
+  },
+  "plan_revision_note": "Four10k cycles withdrawn: preserving an existing short-run schedule was not evidence for optimal repeated restarts. Recommend one fixed40k mixed run from completed FC2-random weights.",
+  "source_40k_recipe_id": "FINAL-SL-02",
+  "source_40k_files_sha256": {
+    "source/S/replay/current.json": "005b048d6d14a297a230a918b58f5a7c735640476572528c2d22485ba5eb0cbb",
+    "source/S/replay/metrics.json": "0af2228a3a3328c6007976be1a8ba97be8de81fb945447cab83ba6168309a874",
+    "source/S/replay/status.json": "5121d20aeeddfb88bc96f306eb3a3af3adc4204fd2bc363b928b0a4cb000ef00",
+    "source/S/replay/step-039000/model.data-00000-of-00001": "89344236ee97206d1117b011a5c301de01234a5c8e367874b99e936f0a7c4740",
+    "source/S/replay/step-039000/model.index": "2f03b647aabe9ed2bc62759f66a4e8c13e3ed23d4937728f09e5bdeece37ed99",
+    "source/S/replay/step-040000/model.data-00000-of-00001": "f72a7d8d1da88253182b0a36f1c64d27db5dd8e0961da3d43652e112fc9c9b2a",
+    "source/S/replay/step-040000/model.index": "f3b0a1901b1fd30a37b059bd10d2948195c9ae03c58c9b4829360c1df7842119",
+    "source/L/replay/current.json": "7d1f0f75cff6b8a60f737053951009782ee811571394e6b4e28c710e1265578a",
+    "source/L/replay/metrics.json": "961c21bdc25fdb1980ad89492f80094fc8066428e46597107cd2681cb3ef06c9",
+    "source/L/replay/status.json": "bf6475a4e09ec5f36c09533b1a55c9df882df9278cb84bf4513bfcedc7930727",
+    "source/L/replay/step-032000/model.data-00000-of-00001": "fb95838cc0e9c67a88149c1653f29a265005d37b19ade36054b14c8529ca74e8",
+    "source/L/replay/step-032000/model.index": "cbeb664738868dd06b7c5caf7439b47196d7ac91aa201054b1f2916c9d6ce5a0",
+    "source/L/replay/step-040000/model.data-00000-of-00001": "2077cce06f722731424a86d2c38d9e79217ca02ea281d0066645bfcc431e5e3a",
+    "source/L/replay/step-040000/model.index": "d09890224fee21e1564ac4a81d9a389576e4590086860603f70cb2552eb3934d"
+  },
+  "continuation_source": "fixed global mixed_step40000 end states, not selected39k/32k",
+  "mixed_stage_total_updates": 80000,
+  "training_budget": "400epoch FC2 +10k random FC2 +40k mixed cosine +40k mixed fixed floor; no new Edge or independent seed",
+  "selection_scope": "Sintel training Final development selection; not a blind test"
+}

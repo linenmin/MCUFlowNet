@@ -1,5 +1,13 @@
 # LOWRES-BENCH-01：部署训练与历史对照
 
+## 当前批准方案：FINAL-SL-03（40k→80k续训，2026-10-08）
+
+S/L从各自FINAL-SL-02第40,000步末尾完整状态继续40,000步，混合总步数到80,000；不是从已选39k／32k开始。模型、BN、Adam累计值／beta powers、global_step和两份数据读取位置全部继承，学习率固定在原余弦已经达到的1e−6。保持208×160、seed42、batch32中的24FC2随机区域＋8FT3D整图，原几何／标签／损失不变。配置见[final-sl-v3.json](../configs/lowres/final-sl-v3.json)。
+
+每1k复评同1041对Sintel Final原GT、不截断、原图像素EPE，同时监控FC2val640和固定FT3D TEST640。最佳点在原0–40k加新增41–80k中选，平分取更早；旧混合10k／15k仍不混入选择。固定80k停止，并列报告末尾、最后10次中位数和最佳权重部署成绩；不因最佳靠近末尾自动加预算。旧40k原件与已验收PTQ保留，续训使用独立final-sl80k-20261008目录。
+
+恢复入口复用已有全状态学习率续训器的显式final-sl80模式；连续5步与中断3＋2逐变量验收、实际GPU反传和原40k评分复现必须通过后正式训练。源码冻结并双远端上传，source只读。最多一次TIMEOUT／NODE_FAIL／PREEMPTED资源续段；错误或取消需诊断。Sintel用于开发选优，只有seed42；新训练不包含Edge、比例扫描、独立seed或上板。
+
 ## 当前计划：FINAL-SL-02（混合40k、Sintel选优，2026-10-07）
 
 用户已批准S/L复用各自已完成FC2随机10k模型及BN，重新开始混合阶段，各40,000步、一次余弦3e−6→1e−6，采用Sintel最佳权重。FC2前两段不重训；四个10k周期的旧建议撤回。参数和源权重SHA登记在[final-sl-v2.json](../configs/lowres/final-sl-v2.json)。实时进度仅维护在wiki实验记录4o和同名Runs目录的提交回执。
