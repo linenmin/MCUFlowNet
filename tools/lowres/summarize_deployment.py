@@ -154,7 +154,8 @@ def paired(reference, other, bootstrap=0, seed=20261004):
 
 def markdown(summary):
     scores = summary['scores']
-    family = 'ft3d-whole' if summary['protocol'].get('phase') == 'ft3d' else 'random'
+    phase=summary['protocol'].get('phase')
+    family='ft3d-whole' if phase=='ft3d' else ('replay-mixture' if phase=='replay' else 'random')
     text = ['# 新权重完整评分与 INT8 验收', '',
             'EPE 越低越好。所有分数都按 Sintel Final 原图像素计算，未截断；输入为整图缩放。',
             '1041 对是完整评测，845 对是持续训练监控，另外 196 对也曾经评分，不能称为盲测。', '',
@@ -211,9 +212,10 @@ def markdown(summary):
         text.extend(['', '五份编译输入的 SHA 与本轮 INT8 评分文件相同，编译产物和日志已核对。',
                      '峰值符合编译配置预算；预算不等于芯片总 SRAM 或固件可用 arena，仍须用新模型上板验收。'])
     if summary.get('phase_comparisons'):
+        label='混合候选' if phase=='replay' else 'FT3D候选'
         text.extend(['', '## 与同尺寸FC2候选比较', '',
-                     '正数表示FT3D候选误差更高；两种精度分别比较同一批图像。', '',
-                     '| 模型/输入 | 类型 | FC2 EPE | FT3D EPE | FT3D减FC2 |',
+                     f'正数表示{label}误差更高；两种精度分别比较同一批图像。', '',
+                     f'| 模型/输入 | 类型 | FC2 EPE | {label} EPE | 候选减FC2 |',
                      '|---|---|---:|---:|---:|'])
         for item in summary['phase_comparisons']:
             group = item['groups']['full']
@@ -249,7 +251,9 @@ def main():
         'summarize_deployment.py', 'compile_deployment.py', 'model.py', 'data.py')}
     cases, protocol = read(audit / 'cases.json'), read(audit / 'protocol.json')
     ft3d = protocol.get('phase') == 'ft3d'
-    family = 'ft3d-whole' if ft3d else 'random'
+    replay = protocol.get('phase') == 'replay'
+    single_family=ft3d or replay
+    family = 'ft3d-whole' if ft3d else ('replay-mixture' if replay else 'random')
     full, monitor, calibration = (read(audit / filename) for filename in
                                   ('sintel_full.json', 'sintel_monitor.json', 'calibration.json'))
     expected_ids = {f'{geometry}-{model}-208' for geometry in ('whole', 'random') for model in MODELS}
@@ -258,7 +262,11 @@ def main():
         expected_ids = {f'ft3d-whole-{model}-208' for model in MODELS}
         expected_ids |= {'ft3d-whole-S-224', 'ft3d-whole-L-224'}
         require(protocol['checkpoint_step'] == 8000, 'Unexpected FT3D selection step')
-    require(len(cases) == (5 if ft3d else 8) and {case['id'] for case in cases} == expected_ids,
+    if replay:
+        expected_ids={f'replay-mixture-{model}-208' for model in MODELS}|{'replay-mixture-S-224','replay-mixture-L-224'}
+        require(set(protocol['selected_steps'])==set(MODELS) and all(v in (5000,10000) for v in protocol['selected_steps'].values()),
+                'Replay candidates must be fixed5k/10k endpoints')
+    require(len(cases) == (5 if single_family else 8) and {case['id'] for case in cases} == expected_ids,
             'Unexpected native case coverage')
     require(protocol['cases'] == cases, 'Protocol and cases differ')
     require(protocol['samples'] == 1041 and protocol['monitor_samples'] == 845
@@ -293,6 +301,10 @@ def main():
             expected_id = 'ft3d-' + expected_id
             require(case['phase'] == 'ft3d' and case['checkpoint_step'] == 8000
                     and case['geometry'] == 'whole' and case['quantize'], 'FT3D case identity differs')
+        if replay:
+            expected_id='replay-'+expected_id
+            require(case['phase']=='replay' and case['geometry']=='mixture' and case['quantize']
+                    and case['checkpoint_step']==protocol['selected_steps'][case['model']], 'Replay case identity differs')
         quantized = case.get('quantize', case['geometry'] == 'random')
         require(case_id == expected_id
                 and case['hw'] == [160, 224 if case_id.endswith('-224') else 208], 'Case model/dimension differs')
@@ -416,10 +428,10 @@ def main():
                               'checked by exporter; Sintel per-pixel prediction arrays were not saved')
             acceptance[case_id] = item
             require(item['passed'], 'Native/FP32 TFLite per-pair EPE exceeds tolerance: ' + repr(item))
-    require(len(scores) == (15 if ft3d else 18) and len(exports) == 5 and len(acceptance) == 5,
+    require(len(scores) == (15 if single_family else 18) and len(exports) == 5 and len(acceptance) == 5,
             'Expected complete native/FP32 TFLite/INT8 scores')
     canonical_bins = [tuple(row['motion_bins'][name]['pixels'] for name in MOTION)
-                      for row in records[('ft3d-whole-edge-208' if ft3d else 'whole-edge-208') + '-native']]
+                      for row in records[(family+'-edge-208' if single_family else 'whole-edge-208') + '-native']]
     for key, rows in records.items():
         require([tuple(row['motion_bins'][name]['pixels'] for name in MOTION) for row in rows]
                 == canonical_bins, 'Per-pair ground-truth motion counts differ: ' + key)
@@ -436,7 +448,7 @@ def main():
                    held_out_test=False,
                    output_saturated_fraction_definition='Fraction of INT8 output values equal to -128 or 127; '
                        'not the proportion of true FP32 values outside the quantized representable range')
-    if not ft3d:
+    if not single_family:
         for model in MODELS:
             summary['geometry'][model] = {group: paired(
                 subset(records[f'whole-{model}-208-native'], group),
@@ -444,7 +456,7 @@ def main():
                 for group in GROUPS}
     conditions = [('whole-208-native', 'whole', 'native'), ('random-208-native', 'random', 'native'),
                   ('random-208-float', 'random', 'float'), ('random-208-int8', 'random', 'int8')]
-    if ft3d:
+    if single_family:
         conditions = [(f'{family}-208-{kind}', family, kind) for kind in ('native', 'float', 'int8')]
     for condition, geometry, kind in conditions:
         for model in ('S', 'L'):
@@ -470,7 +482,7 @@ def main():
                       'and speed are not measured by this pre-Vela audit',
                 groups={group: paired(subset(records[f'{family}-edge-208-{kind}'], group),
                                       subset(records[second], group), args.bootstrap) for group in GROUPS}))
-    if ft3d:
+    if single_family:
         baseline = Path(protocol['reference_audit'])
         require(sha(baseline / 'summary.json') == protocol['reference_summary_sha256'],
                 'FC2 reference summary changed')
