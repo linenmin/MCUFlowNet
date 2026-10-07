@@ -1,4 +1,4 @@
-"""Choose fixed5k/10k mixture endpoints, preserving the existing PTQ protocol."""
+"""Choose verified mixture checkpoints, preserving the existing PTQ protocol."""
 import argparse
 import json
 from pathlib import Path
@@ -77,6 +77,8 @@ def main():
                    if a.final_sl else 'Per model choose lower original1041 EPE among fixed5k/10k mixture endpoints at208x160; tie chooses earlier. Same selected weights for224. No8k/9k or per-scene/PTQ selection; development set, not blind test'))
     protocol['source_stage_summary_sha256']=({'40k':sha(a.experiment/'control/checkpoints-verified.json')} if a.final_sl else
         {'5k':sha(a.experiment/'control/completion-metrics-verified.json'),'10k':sha(a.experiment/'control/continue10k/completion-metrics-verified.json')})
+    if a.final_sl:
+        protocol.update(final_sl=True,experiment=str(a.experiment))
     save(a.out/'cases.json',cases);save(a.out/'protocol.json',protocol);(a.out/'control').mkdir()
     save(a.out/'control/source-checkpoints.json',sources)
     print(json.dumps(dict(prepared=str(a.out),cases=len(cases),selected=selected,candidates=candidates)),flush=True)

@@ -155,7 +155,8 @@ def paired(reference, other, bootstrap=0, seed=20261004):
 def markdown(summary):
     scores = summary['scores']
     phase=summary['protocol'].get('phase')
-    family='ft3d-whole' if phase=='ft3d' else ('replay-mixture' if phase=='replay' else 'random')
+    final_sl=summary['protocol'].get('final_sl',False)
+    family='final-mixture' if final_sl else ('ft3d-whole' if phase=='ft3d' else ('replay-mixture' if phase=='replay' else 'random'))
     text = ['# 新权重完整评分与 INT8 验收', '',
             'EPE 越低越好。所有分数都按 Sintel Final 原图像素计算，未截断；输入为整图缩放。',
             '1041 对是完整评测，845 对是持续训练监控，另外 196 对也曾经评分，不能称为盲测。', '',
@@ -179,11 +180,12 @@ def markdown(summary):
     for model, groups in summary['geometry'].items():
         # Paired delta is random minus whole: flip for an improvement column.
         text.append('| ' + model + ' | ' + ' | '.join(f"{-groups[g]['delta']:+.4f}" for g in GROUPS) + ' |')
-    text.extend(['', '## 与 Edge 的配对差值', '',
+    if summary['model_comparisons']:
+        text.extend(['', '## 与 Edge 的配对差值', '',
                  '以下为 MCU 减 Edge，正数表示 MCU 误差更大。每一行都用相同图像配对；',
                  '`max224-vs-edge208` 使用 MCU 的 224×160 与 Edge 的 208×160，其余条目输入尺寸相同。', '',
                  '| 条件 | MCU | 完整 1041 对差值 | 845 对差值 | 196 对差值 |',
-                 '|---|---|---:|---:|---:|'])
+                     '|---|---|---:|---:|---:|'])
     for item in summary['model_comparisons']:
         text.append('| ' + item['condition'] + ' | ' + item['model'] + ' | ' +
                     ' | '.join(f"{item['groups'][g]['delta']:+.4f}" for g in GROUPS) + ' |')
@@ -199,7 +201,7 @@ def markdown(summary):
                  '| 模型 | 原图运动范围 | 像素占比 | 组内 EPE | 对总 EPE 的贡献 |',
                  '|---|---|---:|---:|---:|'])
     labels = {'below10': '<10 px', '10to40': '10–40 px', 'over40': '≥40 px'}
-    for model in MODELS:
+    for model in (('S','L') if final_sl else MODELS):
         for name, item in scores[f'{family}-{model}-208-native']['full']['motion_bins'].items():
             text.append(f"| {model} | {labels[name]} | {item['pixel_fraction']:.2%} | {item['epe']:.4f} | {item['contribution_to_total_epe']:.4f} |")
     if summary.get('vela'):
@@ -209,8 +211,8 @@ def markdown(summary):
                      '|---|---:|---:|---:|'])
         for item in summary['vela']['results']:
             text.append(f"| {item['case']['id']} | {item['sram_peak_kib']:.0f} | {item['cpu_operators']} | {item['estimated_fps']:.3f} |")
-        text.extend(['', '五份编译输入的 SHA 与本轮 INT8 评分文件相同，编译产物和日志已核对。',
-                     '峰值符合编译配置预算；预算不等于芯片总 SRAM 或固件可用 arena，仍须用新模型上板验收。'])
+        text.extend(['', f"{len(summary['vela']['results'])}份编译输入的 SHA 与本轮 INT8 评分文件相同，编译产物和日志已核对。",
+                     '峰值符合编译配置预算；预算不等于芯片总 SRAM 或固件可用 arena，本轮不新增板端测速。'])
     if summary.get('phase_comparisons'):
         label='混合候选' if phase=='replay' else 'FT3D候选'
         text.extend(['', '## 与同尺寸FC2候选比较', '',
@@ -252,8 +254,9 @@ def main():
     cases, protocol = read(audit / 'cases.json'), read(audit / 'protocol.json')
     ft3d = protocol.get('phase') == 'ft3d'
     replay = protocol.get('phase') == 'replay'
+    final_sl=protocol.get('final_sl',False)
     single_family=ft3d or replay
-    family = 'ft3d-whole' if ft3d else ('replay-mixture' if replay else 'random')
+    family = 'final-mixture' if final_sl else ('ft3d-whole' if ft3d else ('replay-mixture' if replay else 'random'))
     full, monitor, calibration = (read(audit / filename) for filename in
                                   ('sintel_full.json', 'sintel_monitor.json', 'calibration.json'))
     expected_ids = {f'{geometry}-{model}-208' for geometry in ('whole', 'random') for model in MODELS}
@@ -262,11 +265,27 @@ def main():
         expected_ids = {f'ft3d-whole-{model}-208' for model in MODELS}
         expected_ids |= {'ft3d-whole-S-224', 'ft3d-whole-L-224'}
         require(protocol['checkpoint_step'] == 8000, 'Unexpected FT3D selection step')
-    if replay:
+    if replay and not final_sl:
         expected_ids={f'replay-mixture-{model}-208' for model in MODELS}|{'replay-mixture-S-224','replay-mixture-L-224'}
         require(set(protocol['selected_steps'])==set(MODELS) and all(v in (5000,10000) for v in protocol['selected_steps'].values()),
                 'Replay candidates must be fixed5k/10k endpoints')
-    require(len(cases) == (5 if single_family else 8) and {case['id'] for case in cases} == expected_ids,
+    if final_sl:
+        expected_ids={'final-mixture-S-208','final-mixture-L-208','final-mixture-L-224'}
+        require(replay and set(protocol['selected_steps'])=={'S','L'},'Final S/L protocol differs')
+        training_audit_path=Path(protocol['experiment'])/'control/checkpoints-verified.json'
+        require(sha(training_audit_path)==protocol['source_stage_summary_sha256']['40k'],'Training audit changed')
+        training_audit=read(training_audit_path)
+        require(training_audit['passed'] and training_audit['checkpoint_count']==82
+                and training_audit['best_full1041_verified'],'Final40k checkpoint acceptance missing')
+        for model in ('S','L'):
+            candidates=protocol['selection_candidates'][model]
+            require([v['step'] for v in candidates]==list(range(0,40001,1000)),'Final40k selection coverage differs')
+            require(all(math.isfinite(v['full_epe']) for v in candidates),'Invalid selection score')
+            best=min(candidates,key=lambda v:(v['full_epe'],v['step']))
+            actual=next(v for v in training_audit['runs'] if v['model']==model)['best']
+            require(best['step']==protocol['selected_steps'][model]==actual['step']
+                    and best['full_epe']==actual['epe'],'Final40k best selection differs')
+    require(len(cases) == (3 if final_sl else (5 if single_family else 8)) and {case['id'] for case in cases} == expected_ids,
             'Unexpected native case coverage')
     require(protocol['cases'] == cases, 'Protocol and cases differ')
     require(protocol['samples'] == 1041 and protocol['monitor_samples'] == 845
@@ -301,15 +320,23 @@ def main():
             expected_id = 'ft3d-' + expected_id
             require(case['phase'] == 'ft3d' and case['checkpoint_step'] == 8000
                     and case['geometry'] == 'whole' and case['quantize'], 'FT3D case identity differs')
-        if replay:
+        if replay and not final_sl:
             expected_id='replay-'+expected_id
             require(case['phase']=='replay' and case['geometry']=='mixture' and case['quantize']
                     and case['checkpoint_step']==protocol['selected_steps'][case['model']], 'Replay case identity differs')
+        if final_sl:
+            expected_id='final-'+expected_id
+            require(case['phase']=='replay' and case['geometry']=='mixture'
+                    and case['checkpoint_step']==protocol['selected_steps'][case['model']]
+                    and case['quantize']==(case['model']=='S' or case['hw'][1]==224),'Final case identity differs')
         quantized = case.get('quantize', case['geometry'] == 'random')
         require(case_id == expected_id
                 and case['hw'] == [160, 224 if case_id.endswith('-224') else 208], 'Case model/dimension differs')
         prefix = Path(case['checkpoint'])
         current_hashes = checkpoint_hashes(prefix)
+        if final_sl:
+            best=next(v for v in training_audit['runs'] if v['model']==case['model'])['best']
+            require(current_hashes==best['source_sha'],'Final selected checkpoint SHA differs')
         source_snapshot[str(prefix)] = current_hashes
         kinds = ('native', 'float', 'int8') if quantized else ('native',)
         if quantized:
@@ -408,6 +435,8 @@ def main():
                     difference = abs(result['monitor']['epe'] - case['expected_monitor'])
                     require(difference < 1e-5 and abs(result['monitor_reproduction_abs_difference'] - difference) < 1e-12,
                             'Training monitor reproduction differs: ' + key)
+                if final_sl and case['expected_full'] is not None:
+                    require(abs(result['full']['epe']-case['expected_full'])<2e-5,'Full1041 selected score reproduction differs: '+key)
             else:
                 require(result['tflite_sha256'] == exports[case_id]['exports'][kind]['sha256']
                         and result['inference_device'] == 'TFLite CPU', 'TFLite runtime SHA differs: ' + key)
@@ -428,10 +457,11 @@ def main():
                               'checked by exporter; Sintel per-pixel prediction arrays were not saved')
             acceptance[case_id] = item
             require(item['passed'], 'Native/FP32 TFLite per-pair EPE exceeds tolerance: ' + repr(item))
-    require(len(scores) == (15 if single_family else 18) and len(exports) == 5 and len(acceptance) == 5,
+    require(len(scores) == (7 if final_sl else (15 if single_family else 18))
+            and len(exports) == (2 if final_sl else 5) and len(acceptance) == (2 if final_sl else 5),
             'Expected complete native/FP32 TFLite/INT8 scores')
     canonical_bins = [tuple(row['motion_bins'][name]['pixels'] for name in MOTION)
-                      for row in records[(family+'-edge-208' if single_family else 'whole-edge-208') + '-native']]
+                      for row in records[(family+'-S-208' if final_sl else (family+'-edge-208' if single_family else 'whole-edge-208')) + '-native']]
     for key, rows in records.items():
         require([tuple(row['motion_bins'][name]['pixels'] for name in MOTION) for row in rows]
                 == canonical_bins, 'Per-pair ground-truth motion counts differ: ' + key)
@@ -458,6 +488,8 @@ def main():
                   ('random-208-float', 'random', 'float'), ('random-208-int8', 'random', 'int8')]
     if single_family:
         conditions = [(f'{family}-208-{kind}', family, kind) for kind in ('native', 'float', 'int8')]
+    if final_sl:
+        conditions=[]  # Edge references are separate; no new Edge training was approved.
     for condition, geometry, kind in conditions:
         for model in ('S', 'L'):
             summary['model_comparisons'].append(dict(condition=condition, model=model,
@@ -466,8 +498,8 @@ def main():
                     subset(records[f'{geometry}-edge-208-{kind}'], group),
                     subset(records[f'{geometry}-{model}-208-{kind}'], group), args.bootstrap)
                     for group in GROUPS}))
-    for model in ('S', 'L'):
-        for kind in ('native', 'float', 'int8'):
+    for model in (('L',) if final_sl else ('S','L')):
+        for kind in (('native',) if final_sl else ('native','float','int8')):
             first, second = f'{family}-{model}-208-{kind}', f'{family}-{model}-224-{kind}'
             require(scores[first]['checkpoint_sha256'] == scores[second]['checkpoint_sha256'],
                     'Resolution comparison source weights differ')
@@ -475,7 +507,8 @@ def main():
                 reference_case=first, other_case=second, change='224x160 minus 208x160, same weights',
                 groups={group: paired(subset(records[first], group), subset(records[second], group), args.bootstrap)
                         for group in GROUPS}))
-            summary['model_comparisons'].append(dict(condition=family+'-max224-vs-edge208-' + kind,
+            if not final_sl:
+                summary['model_comparisons'].append(dict(condition=family+'-max224-vs-edge208-' + kind,
                 model=model, reference_case=f'{family}-edge-208-{kind}', other_case=second,
                 same_input_resolution=False,
                 scope='Configured maximum input sizes verified using older weights; new INT8 board fitness '
@@ -492,7 +525,7 @@ def main():
             require(sha(audit / name) == sha(baseline / name), 'Phase comparison manifest differs: ' + name)
         summary['phase_comparisons'] = []
         for case in cases:
-            for kind in ('native', 'float', 'int8'):
+            for kind in (('native','float','int8') if case.get('quantize',True) else ('native',)):
                 key, ref_key = case['id'] + '-' + kind, case['reference_fc2'] + '-' + kind
                 report_path = baseline / 'scores' / ref_key / 'result.json'
                 pair_path = report_path.with_name('per_pair.jsonl')
@@ -526,7 +559,7 @@ def main():
                 and int(vela['memory']['arena_cache_size']) == 1468006
                 and float(vela['system']['core_clock']) == 400e6,
                 'Vela Grove configuration differs')
-        require(len(vela['results']) == 5 and
+        require(len(vela['results']) == (2 if final_sl else 5) and
                 {item['case']['id'] for item in vela['results']} == set(acceptance),
                 'Vela compilation case coverage differs')
         for item in vela['results']:
