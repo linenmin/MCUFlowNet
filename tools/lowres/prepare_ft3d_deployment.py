@@ -26,8 +26,10 @@ def main():
     require(sha(a.reference_audit / 'sintel_full.json') == protocol['full_manifest_sha256']
             and sha(a.reference_audit / 'calibration.json') == protocol['calibration_sha256'],
             'Reference manifests changed')
-    require(sha(a.experiment / 'manifests/sintel_monitor.json') ==
-            sha(a.reference_audit / 'sintel_monitor.json'), 'Training monitor differs')
+    training_monitor = a.experiment / 'manifests/sintel_monitor.json'
+    reference_monitor = a.reference_audit / 'sintel_monitor.json'
+    require(json.loads(training_monitor.read_text()) == json.loads(reference_monitor.read_text()),
+            'Training monitor rows or order differ')
     fc2 = json.loads((a.experiment / 'manifests/fc2_train.json').read_text())
     calibration = json.loads((a.reference_audit / 'calibration.json').read_text())
     require(calibration == [fc2[i] for i in protocol['calibration_indices']],
@@ -69,6 +71,7 @@ def main():
         preparation_script_sha256=sha(__file__),
         script_sha256=sha(Path(__file__).with_name('audit_deployment.py')),
         reference_audit=str(a.reference_audit), reference_summary_sha256=sha(a.reference_audit / 'summary.json'),
+        training_monitor_sha256=sha(training_monitor), reference_monitor_sha256=sha(reference_monitor),
         selection='All three whole-frame FT3D pilots have monitor minimum at fixed step8000; '
                   'Sintel train monitor was used for selection, not a blind test')
     save(a.out / 'cases.json', cases)
