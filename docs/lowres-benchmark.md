@@ -316,3 +316,7 @@ python tools/lowres/geometry_compare.py --model S --geometry random --phase fc2 
 原训练器仍只在0／3／4／5k补全1041评分，保证恢复配置完全相同；10k阶段按`replay.sh score10k`另对六条新权重及三模型旧纯FT的8／9／10k点统一评分。`score_replay_reference.py --folder <completed-run> --steps 8000 9000 10000`读取冻结模型并复现对应845分数，不更新参数或BN。`summarize_replay.py --end-step 10000`核完整曲线与全量评分，用后三点和末步比较，不拿5k三点代替10k结果。旧默认5k汇总可从冻结快照读取。
 
 资源恢复使用`geometry_recovery.py --replay-compare --replay-end-step 10000`，只恢复至已经批准的10k终点；10k完成标记不能由5k的pilot_completed代替。`audit_replay_checkpoints.py --end-step 10000`在CPU检查66份保存状态和六条末步完整恢复。代码、结果验收和全量归档完成后，再按共同的64对FC2 TRAIN校准及现有Vela预算核候选，不把原生FP32成绩当作INT8部署成绩。
+
+`prepare_replay_deployment.py`以通过验收的5k/10k固定末尾候选，在208×160完整1041原生FP32中选每模型较低误差的权重，平手用较早端点；不选8k/9k、场景最佳或INT8最佳。S/L224沿同一选中权重。它复用原FC2部署审计的完整／监控／64校准清单与源父权重指纹，冻结选择、代码提交和源检查点，再沿既有原生、导出、浮点／INT8评分、Vela与配对归约入口执行。`summarize_deployment.py`的replay分支仍核15份逐图报告、5导出及5同量化文件编译，原转换门槛、预算与零CPU要求不变；旧FC2与FT3D结果的归约和显示保留。
+
+部署比较同时保留公开适配Edge和纯FT8k增强Edge，同1041逐图身份必须匹配；不同尺寸和训练历史单列，FP32与INT8不能分别取不同权重拼成一行。Vela速度是估计、配置内存不是固件可用arena，新模型编译通过不代替板端精度或计时。原S/L图在板端的ECA问题须按等价修复流程另验，不能仅凭电脑端INT8成绩跳过。
