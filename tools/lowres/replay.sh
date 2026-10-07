@@ -1,5 +1,5 @@
 #!/bin/bash -l
-# A bounded six-arm pilot. No automatic scientific continuation beyond 5000.
+# Six-arm pilot or explicitly approved continuation; the optimizer code is shared.
 set -euo pipefail
 mode=$1 repo=$2 data=$3 root=$4
 [[ "${SLURM_CLUSTER_NAME:?}" == mindwell ]]
@@ -11,7 +11,15 @@ reference_experiment="$project/runs/LOWRES-BENCH-01/ft3d-geometry10k-20261004"
 [[ -f "$software/READY" && -f "$root/control/SOURCES_READY.json" ]]
 cd "$repo"
 commit=$(git rev-parse HEAD)
-[[ "$commit" == "$(cat "$root/control/code-commit.txt")" && -z "$(git status --porcelain)" ]]
+control="$root/control"
+if [[ "$mode" == continue || "$mode" == score10k ]];then
+    control="$root/control/continue10k"
+    python3 - "$control/READY.json" "$commit" <<'PY'
+import json,sys
+a=json.load(open(sys.argv[1]));assert a['passed'] and a['learning_core_unchanged'] and a['code_commit']==sys.argv[2]
+PY
+fi
+[[ "$commit" == "$(cat "$control/code-commit.txt")" && -z "$(git status --porcelain)" ]]
 run_python() {
     apptainer exec --nv --cleanenv \
         --bind "$software:$software" --bind "$repo:$repo:ro" --bind "$reference_repo:$reference_repo:ro" --bind "$data:$data:ro" \
@@ -23,7 +31,7 @@ run_python() {
         "$software/containers/tensorflow-25.02.sif" "$software/tf2502/bin/python" "$@"
 }
 index=${SLURM_ARRAY_TASK_ID:?}
-models=(edge S L edge S L)
+models=(edge S L edge S L edge S L)
 if [[ "$mode" == probe ]]; then
     [[ "$index" =~ ^[0-2]$ ]];model=${models[$index]}
     run_python tools/lowres/verify_geometry.py --replay-compare --model "$model" --data "$data" \
@@ -38,17 +46,40 @@ PY
     run_python tools/lowres/score_replay_reference.py --model "$model" --data "$data" \
         --manifests "$root/manifests" --experiment "$reference_experiment" \
         --out "$root/reference/$model" --code-commit "$commit"
-elif [[ "$mode" == train ]]; then
+elif [[ "$mode" == score10k ]];then
+    [[ "$index" =~ ^[0-8]$ ]];model=${models[$index]}
+    arms=(fc2_only fc2_only fc2_only mixture75_25 mixture75_25 mixture75_25 ft3d_only ft3d_only ft3d_only)
+    arm=${arms[$index]};folder="$root/seed42/$arm/$model/replay"
+    [[ "$arm" != ft3d_only ]] || folder="$reference_experiment/seed42/whole/$model/ft3d"
+    run_python tools/lowres/score_replay_reference.py --model "$model" --data "$data" \
+        --manifests "$root/manifests" --folder "$folder" --steps 8000 9000 10000 \
+        --out "$control/full-scores/$arm/$model" --code-commit "$commit"
+elif [[ "$mode" == train || "$mode" == continue ]]; then
     [[ "$index" =~ ^[0-5]$ ]];model=${models[$index]}
     arms=(fc2_only fc2_only fc2_only mixture75_25 mixture75_25 mixture75_25);arm=${arms[$index]}
-    python3 - "$root/probe/$model/acceptance.json" "$commit" <<'PY'
+    accepted_commit="$commit"
+    [[ "$mode" != continue ]] || accepted_commit=$(cat "$root/control/code-commit.txt")
+    python3 - "$root/probe/$model/acceptance.json" "$accepted_commit" <<'PY'
 import json,sys
 a=json.load(open(sys.argv[1]));assert a['passed'] and a['source_unchanged'] and a['code_commit']==sys.argv[2]
 assert a['pure_ft_regression_all_variables_exact'] and a['tensorflow']=='2.17.0'
 PY
     out="$root/seed42/$arm/$model/replay"
-    if [[ -f "$out/status.json" ]] && python3 -c 'import json,sys;a=json.load(open(sys.argv[1]));assert a["pilot_completed"] and a["step"]==5000 and a["total_steps"]==10000' "$out/status.json";then
-        printf 'Pilot already complete; no automatic continuation.\n';exit 0
+    stop=5000;[[ "$mode" != continue ]] || stop=10000
+    if [[ -f "$out/status.json" ]] && python3 - "$out/status.json" "$stop" <<'PY'
+import json,sys
+a=json.load(open(sys.argv[1]));goal=int(sys.argv[2])
+assert a['step']==goal and a['total_steps']==10000
+assert a['completed'] if goal==10000 else a['pilot_completed']
+PY
+    then
+        printf 'Approved stage already complete.\n';exit 0
+    fi
+    if [[ "$mode" == continue ]];then
+        python3 - "$out/current.json" <<'PY'
+import json,sys
+a=json.load(open(sys.argv[1]));assert 5000<=a['step']<10000 and a['config']['steps']==10000
+PY
     fi
     if [[ -n "${5:-}" ]];then
         [[ "$5" =~ ^[0-9]+$ ]];previous="${5}_${index}"
@@ -57,7 +88,7 @@ PY
     fi
     args=(--model "$model" --geometry random --phase fc2 --fc2-source-step 10000 \
         --replay-arm "$arm" --data "$data" --manifests "$root/manifests" \
-        --source "$root/source/$model/fc2" --out "$out" --steps 10000 --stop-after-steps 5000 \
+        --source "$root/source/$model/fc2" --out "$out" --steps 10000 --stop-after-steps "$stop" \
         --eval-every 1000 --initial-lr 3e-6 --min-lr 1e-6 --seed 42 --workers 8 --code-commit "$commit")
     [[ ! -f "$out/current.json" ]] || args+=(--resume)
     run_python tools/lowres/geometry_compare.py "${args[@]}"

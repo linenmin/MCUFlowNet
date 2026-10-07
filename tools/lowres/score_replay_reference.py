@@ -17,14 +17,21 @@ from train import atomic,evaluate
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--model',choices=['edge','S','L'],required=True)
-    for key in ('data','manifests','experiment','out'):
+    for key in ('data','manifests','out'):
         p.add_argument('--'+key,type=Path,required=True)
+    source_arg=p.add_mutually_exclusive_group(required=True)
+    source_arg.add_argument('--experiment',type=Path)
+    source_arg.add_argument('--folder',type=Path,help='Completed common-recipe model directory')
+    p.add_argument('--steps',type=int,nargs=3,default=[3000,4000,5000])
     p.add_argument('--code-commit',required=True)
     a=p.parse_args();a.out.mkdir(parents=True,exist_ok=False)
-    source=a.experiment/'seed42/whole'/a.model/'ft3d'
+    source=a.folder or a.experiment/'seed42/whole'/a.model/'ft3d'
+    assert a.steps in ([3000,4000,5000],[8000,9000,10000])
     parent=json.loads((source/'current.json').read_text())
     assert parent['step']==10000 and json.loads((source/'status.json').read_text())['completed']
     assert parent['config']['initial_lr']==3e-6 and parent['config']['steps']==10000
+    assert parent['config']['model']==a.model and parent['config']['hw']==[160,208]
+    assert parent['config']['flow_units']=='resized_pixels_no_clip' and parent['config']['images']=='BGR_-1_1_area'
     rows={k:json.loads((a.manifests/(k+'.json')).read_text()) for k in ('fc2_val','ft3d_test','sintel_monitor','sintel_full')}
     assert [len(rows[k]) for k in rows]==[640,640,845,1041]
     monitored=set(map(tuple,rows['sintel_monitor']))
@@ -32,7 +39,7 @@ def main():
     g=graph(a.model);sc=tf.compat.v1.ConfigProto(intra_op_parallelism_threads=8,inter_op_parallelism_threads=2,allow_soft_placement=False)
     sc.gpu_options.allow_growth=True
     result=[]
-    for step in (3000,4000,5000):
+    for step in a.steps:
         prefix=source/f'step-{step:06d}/model';sha=checkpoint_sha(prefix)
         with tf.compat.v1.Session(config=sc) as sess:
             sess.run(tf.compat.v1.global_variables_initializer());restore_model(sess,g,prefix)
@@ -44,6 +51,8 @@ def main():
             metric=dict(step=step,sintel_epe_original_pixels=mon,sintel_full_epe_original_pixels=full,
                         fc2_val_epe_pixels=evaluate(sess,g,rows['fc2_val'],a.data),
                         ft3d_test_epe_pixels=evaluate(sess,g,rows['ft3d_test'],a.data),source_sha=sha)
+            for key in ('fc2_val_epe_pixels','ft3d_test_epe_pixels'):
+                if key in reference:np.testing.assert_allclose(metric[key],reference[key],rtol=0,atol=2e-5)
             assert all(np.array_equal(x,y) for x,y in zip(before,sess.run(g['weights'])))
             assert checkpoint_sha(prefix)==sha
         result.append(metric);atomic(a.out/'metrics.json',result);print(json.dumps(metric),flush=True)

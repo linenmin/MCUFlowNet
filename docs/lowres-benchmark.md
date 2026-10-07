@@ -310,3 +310,9 @@ python tools/lowres/geometry_compare.py --model S --geometry random --phase fc2 
 每1,000步验证FC2 val640、Sintel monitor845及锁定FT3D TEST640；第0／3,000／4,000／5,000步补评分清单中其余196对，按845＋196合并为同1041对原图EPE。`score_replay_reference.py`仅推理旧纯FT3D 3k／4k／5k权重，复现原845分数并补同两套验证和全量评分，不更新参数或BN。提交前必须核验**全部**验证文件，不能只检查前若干项就假定1041对齐全。
 
 `replay.sh`提供三模型验收、六条训练及三条旧参照评分入口。`geometry_recovery.py --replay-compare`至多为TIMEOUT/NODE_FAIL/PREEMPTED安排一次续段，目标仍为5,000步；训练错误或取消不自动重跑。配置、权重及完整日志放外部Runs，Git仅保存代码与方法说明；wiki沿用实验记录4o。独立seed43／44按用户决定暂缓，本次实现核验的重放不作为科学实验重复。
+
+用户批准后，`replay.sh continue`在原六个输出目录用`--resume --stop-after-steps 10000`继续；模型、BN、Adam、global_step及混合数据游标都继承，逐步余弦仍是原10k日程。训练器与数据／模型／损失代码必须逐文件匹配5k提交；只新增调度与离线评分。准备阶段将原current/status/metrics及来源指纹冻结到`control/continue10k/pilot-snapshot`，保留5k结果，旧检查点不覆盖。新调度代码、回执及READY独立留`control/continue10k`，不改旧提交记录。
+
+原训练器仍只在0／3／4／5k补全1041评分，保证恢复配置完全相同；10k阶段按`replay.sh score10k`另对六条新权重及三模型旧纯FT的8／9／10k点统一评分。`score_replay_reference.py --folder <completed-run> --steps 8000 9000 10000`读取冻结模型并复现对应845分数，不更新参数或BN。`summarize_replay.py --end-step 10000`核完整曲线与全量评分，用后三点和末步比较，不拿5k三点代替10k结果。旧默认5k汇总可从冻结快照读取。
+
+资源恢复使用`geometry_recovery.py --replay-compare --replay-end-step 10000`，只恢复至已经批准的10k终点；10k完成标记不能由5k的pilot_completed代替。`audit_replay_checkpoints.py --end-step 10000`在CPU检查66份保存状态和六条末步完整恢复。代码、结果验收和全量归档完成后，再按共同的64对FC2 TRAIN校准及现有Vela预算核候选，不把原生FP32成绩当作INT8部署成绩。

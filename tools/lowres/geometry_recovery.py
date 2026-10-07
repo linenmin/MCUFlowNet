@@ -7,18 +7,19 @@ import subprocess
 import time
 
 
-def classify(root, states, phase='fc2', direction_compare=False, replay_compare=False):
+def classify(root, states, phase='fc2', direction_compare=False, replay_compare=False, replay_end_step=5000):
     if phase not in ('fc2','ft3d'):
         raise ValueError('Unknown recovery phase')
     pending=[]; attention=[]
     arms=('fc2_only','mixture75_25') if replay_compare else (('original','weighted') if direction_compare else ('whole','random'))
     goal=5000 if direction_compare or replay_compare else 10000
+    if replay_compare:goal=replay_end_step
     for index,(arm,model) in enumerate([(a,m) for a in arms for m in ('edge','S','L')]):
         out=root/'seed42'/arm/model/('replay' if replay_compare else phase)
         state=out/'current.json'; status=out/'status.json'
         if state.exists() and status.exists():
             v=json.loads(state.read_text()); s=json.loads(status.read_text())
-            if v['step']==goal and s.get('pilot_completed' if replay_compare else 'completed') and s['step']==goal:
+            if v['step']==goal and s.get('pilot_completed' if replay_compare and goal==5000 else 'completed') and s['step']==goal:
                 assert (out/(v['checkpoint']+'.index')).is_file()
                 continue
         if states.get(index) in ('TIMEOUT','NODE_FAIL','PREEMPTED'):
@@ -37,9 +38,12 @@ def main():
     p.add_argument('--cluster',choices=['mindwell','wice'],default='mindwell')
     p.add_argument('--direction-compare',action='store_true')
     p.add_argument('--replay-compare',action='store_true')
+    p.add_argument('--replay-end-step',type=int,choices=[5000,10000],default=5000)
     a=p.parse_args(); assert a.parent.isdigit()
     partition={'mindwell':'gpu_b200','wice':'gpu_a100'}[a.cluster]
-    c=a.root/'control'; result=dict(parent=a.parent,cluster=a.cluster,
+    c=a.root/'control'
+    if a.replay_compare and a.replay_end_step==10000:c=c/'continue10k'
+    result=dict(parent=a.parent,cluster=a.cluster,
         checked_at=datetime.datetime.now(datetime.timezone.utc).isoformat())
     states={}
     for attempt in range(15):
@@ -51,7 +55,7 @@ def main():
         if len(states)==6: break
         time.sleep(2)
     assert not (a.direction_compare and a.replay_compare)
-    indices,attention=classify(a.root,states,a.phase,a.direction_compare,a.replay_compare)
+    indices,attention=classify(a.root,states,a.phase,a.direction_compare,a.replay_compare,a.replay_end_step)
     result.update(states=states,recovery_indices=indices,needs_attention=attention)
     proof=c/'recovery-dispatch.json'
     def save(): proof.write_text(json.dumps(result,indent=2)+'\n')
@@ -81,9 +85,9 @@ def main():
             cmd=['sbatch','--parsable','--clusters='+a.cluster,'--account=lp_embaivision','--partition='+partition,
                  '--nodes=1','--ntasks=1','--gpus-per-node=1','--cpus-per-task=8','--mem=32G',
                  '--array='+','.join(map(str,indices)),'--time='+str(minutes),
-                 '--kill-on-invalid-dep=yes','--export='+export_mode,'--chdir='+repo,'--dependency=afterany:'+a.parent,
+                 '--kill-on-invalid-dep=yes','--no-requeue','--export='+export_mode,'--chdir='+repo,'--dependency=afterany:'+a.parent,
                  '--job-name='+name,'--output='+str(a.root/'logs/train-%A_%a.out'),
-                 str(controller),'train',repo,str(a.data),str(a.root),a.parent]
+                 str(controller),'continue' if a.replay_compare and a.replay_end_step==10000 else 'train',repo,str(a.data),str(a.root),a.parent]
             if not a.direction_compare and not a.replay_compare:
                 cmd.append(a.phase)
             reply=subprocess.run(cmd,text=True,capture_output=True)
