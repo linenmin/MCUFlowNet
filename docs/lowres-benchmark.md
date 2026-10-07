@@ -294,3 +294,19 @@ python tools/lowres/audit_domain_bn.py run --data /datasets --prepared /audit/pr
 ```
 
 `domain_bn.sh`复用Sofia已验收的home软件环境，数据、代码及源权重均只读绑定。按每卡24CPU、不覆盖内存、不传export=ALL申请H200；具体账户、任务号和排队情况写运行回执，不写成实时环境说明。三模型各一条、每条四组合，可并行评测，完整结果存LOWRES-BENCH-01/bn-domain-20261006，wiki维护原4n，不另开页面。
+
+### FC2保留与FT3D混合微调（2026-10-07）
+
+每个模型继承自己的FC2随机取图第10,000步模型与BN，重置Adam。六条新训练为Edge/S/L各一条纯FC2和一条混合；混合每次更新固定24对FC2＋8对FT3D，FC2沿用随机取图、FT3D沿用整图缩放。两套数据独立洗牌，读完一遍后接下一遍，不补复制样本；混合批次始终32对。纯FC2保留原尾批处理，每遍最后24对；旧纯FT3D参照保留原末尾合并34对，不能声称所有单数据集批次都恰好32。
+
+208×160、FP32、TF32关闭、真实缩放像素标签不截断，共同原损失与正常训练BN。学习率按固定10,000步余弦从3e−6降至1e−6，**先停止于5,000步**，此时约2e−6。`--stop-after-steps`不改变完整日程；`status.json`的`pilot_completed`表示获批阶段结束，`completed`仍为false。后续至10,000步须审阅，不由资源恢复脚本决定。
+
+```text
+python tools/lowres/geometry_compare.py --model S --geometry random --phase fc2 --fc2-source-step 10000 --replay-arm mixture75_25 --data /datasets --manifests <frozen-manifests> --source <S-FC2-random10k> --out <new-run> --steps 10000 --stop-after-steps 5000 --eval-every 1000 --initial-lr 3e-6 --min-lr 1e-6 --seed 42 --code-commit <host-verified-commit>
+```
+
+`replay_data.py`预读一批，交付的是当前已消费批次后的两套游标；保存状态不能提前包含下一批。`verify_geometry.py --replay-compare --reference-repo <10ef4f0-checkout>`用真实数据核三配方的连续5步与3＋2恢复，跨过两套小清单末尾；要求所有变量、历史数值、顺序及裁剪指纹精确一致，并核模型／BN继承、Adam重置、实际GPU反向。纯FT3D短跑还须与旧提交的全部变量相同，才复用旧训练参照。
+
+每1,000步验证FC2 val640、Sintel monitor845及锁定FT3D TEST640；第0／3,000／4,000／5,000步补评分清单中其余196对，按845＋196合并为同1041对原图EPE。`score_replay_reference.py`仅推理旧纯FT3D 3k／4k／5k权重，复现原845分数并补同两套验证和全量评分，不更新参数或BN。提交前必须核验**全部**验证文件，不能只检查前若干项就假定1041对齐全。
+
+`replay.sh`提供三模型验收、六条训练及三条旧参照评分入口。`geometry_recovery.py --replay-compare`至多为TIMEOUT/NODE_FAIL/PREEMPTED安排一次续段，目标仍为5,000步；训练错误或取消不自动重跑。配置、权重及完整日志放外部Runs，Git仅保存代码与方法说明；wiki沿用实验记录4o。独立seed43／44按用户决定暂缓，本次实现核验的重放不作为科学实验重复。
