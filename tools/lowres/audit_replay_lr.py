@@ -28,7 +28,7 @@ def main():
     a=p.parse_args();r=a.run;c=r/'control';recipe=read(c/'submission.json')
     assert not tf.config.list_physical_devices('GPU'), 'Checkpoint audit must run on CPU'
     assert recipe['source_step']==recipe['phase_steps']==10000 and recipe['pilot_steps']==5000
-    assert recipe['seed']==42 and recipe['batch']==32 and recipe['hw']==[160,208]
+    assert recipe['seed']==42 and recipe['batch']==32 and recipe['input_hw']==[160,208]
     assert read(c/'startup-verified.json')['passed']
     assert read(c/'READY.json')['source_files_sha']==recipe['source_files']
     for name,value in recipe['source_files'].items():assert sha(r/name)==value,name
