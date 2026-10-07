@@ -1,4 +1,4 @@
-"""Paired LR continuations from a full mixed10k state; no optimizer reset."""
+"""Full-state mixed continuations, including final40k to80k at the LR floor."""
 import argparse
 import copy
 import hashlib
@@ -37,15 +37,24 @@ def main():
     p.add_argument('--probe',action='store_true')
     p.add_argument('--resume',action='store_true')
     p.add_argument('--code-commit',required=True)
-    a=p.parse_args();assert a.phase_steps==10000 and 0<a.stop_after<=a.phase_steps
+    p.add_argument('--final-sl80',action='store_true')
+    a=p.parse_args();start_step=40000 if a.final_sl80 else 10000
+    assert a.phase_steps==(40000 if a.final_sl80 else 10000) and 0<a.stop_after<=a.phase_steps
+    if a.final_sl80:assert a.model in ('S','L') and a.policy=='fixed'
     assert a.stop_after%a.eval_every==0 and a.workers>0
     parent=json.loads((a.source/'current.json').read_text());status=json.loads((a.source/'status.json').read_text())
     cfg=parent['config']
-    assert status['completed'] and status['source_unchanged'] and parent['step']==status['step']==10000
+    assert status['completed'] and status['source_unchanged'] and parent['step']==status['step']==start_step
     assert cfg['model']==a.model and cfg['hw']==[160,208] and cfg['seed']==42 and cfg['replay_arm']=='mixture75_25'
     assert cfg['flow_units']=='resized_pixels_no_clip' and cfg['optimizer']=='Adam_0.9_0.999_1e-8'
     assert cfg['images']=='BGR_-1_1_area' and cfg['bn']=='training_on_eval_off_momentum0.9_epsilon1e-5'
-    assert parent['source_cursors']=={'fc2':[11,17680],'ft3d':[1,80000]}
+    assert parent['source_cursors']==({'fc2':[44,4024],'ft3d':[4,78266]} if a.final_sl80 else {'fc2':[11,17680],'ft3d':[1,80000]})
+    if a.final_sl80:
+        assert cfg['best_criterion']=='sintel_full_epe_original_pixels' and cfg['steps']==40000
+        assert [r['step'] for r in parent['history']]==list(range(0,40001,1000))
+        choice=min(parent['history'],key=lambda r:(r['sintel_full_epe_original_pixels'],r['step']))
+        assert parent['best']['step']==choice['step'] and parent['best']['epe']==choice['sintel_full_epe_original_pixels']
+        assert checkpoint_sha(a.source/parent['best']['checkpoint'])==parent['best']['source_sha']
     prefix=a.source/parent['checkpoint'];source_sha=checkpoint_sha(prefix)
     names=('fc2_train','ft3d_train','fc2_val','ft3d_test','sintel_monitor','sintel_full')
     hashes={n+'.json':digest(a.manifests/(n+'.json')) for n in names};assert hashes==cfg['manifest_sha']
@@ -54,25 +63,37 @@ def main():
     monitor_ids=set(map(tuple,rows['sintel_monitor']))
     assert monitor_ids<=set(map(tuple,rows['sintel_full']))
     extra=[r for r in rows['sintel_full'] if tuple(r) not in monitor_ids];assert len(extra)==196
-    baseline=json.loads(a.baseline_score.read_text());assert baseline['passed'] and baseline['model']==a.model
-    reference=next(r for r in baseline['metrics'] if r['step']==10000);assert reference['source_sha']==source_sha
+    baseline=json.loads(a.baseline_score.read_text());assert baseline['passed']
+    if a.final_sl80:
+        assert baseline['checkpoint_count']==82 and baseline['best_full1041_verified']
+        verified=next(r for r in baseline['runs'] if r['model']==a.model)
+        assert verified['step']==40000 and verified['final_all_variables_restored_exact']
+        reference=verified['final'];assert reference==parent['history'][-1]
+    else:
+        assert baseline['model']==a.model
+        reference=next(r for r in baseline['metrics'] if r['step']==10000);assert reference['source_sha']==source_sha
     cursor=copy.deepcopy(parent['source_cursors'])
     if a.probe:
         rows['fc2_train']=rows['fc2_train'][:25];rows['ft3d_train']=rows['ft3d_train'][:9]
         for n in ('fc2_val','ft3d_test','sintel_monitor'):rows[n]=rows[n][:2]
         extra=extra[:2]
         cursor={k:[value[0],value[1]%len(rows[k+'_train'])] for k,value in cursor.items()}
-    config=dict(model=a.model,policy=a.policy,source_step=10000,phase_steps=10000,seed=42,
+    config=dict(model=a.model,policy=a.policy,source_step=start_step,phase_steps=a.phase_steps,seed=42,
         hw=[160,208],batch=32,counts=[24,8],eval_every=a.eval_every,workers=a.workers,
         source=str(a.source.resolve()),source_sha=source_sha,source_state_sha=digest(a.source/'current.json'),
         manifest_sha=hashes,baseline_score_sha=digest(a.baseline_score),source_cursors=cursor,
         images=cfg['images'],bn=cfg['bn'],flow_units=cfg['flow_units'],loss=cfg['loss'],optimizer=cfg['optimizer'],
         state_transfer='all model/BN/Adam/beta powers/globalstep/cursors; no reset',probe=a.probe)
+    if a.final_sl80:config.update(final_sl80=True,best_criterion='sintel_full_epe_original_pixels',
+        schedule='original40k cosine retained; next40k fixed1e-6',parent_history_sha=digest(a.source/'metrics.json'))
     if a.resume:
         state=json.loads((a.out/'current.json').read_text());assert state['config']==config
     else:
         a.out.mkdir(parents=True,exist_ok=False)
-        state=dict(step=10000,phase_step=0,history=[],source_cursors=copy.deepcopy(cursor),config=config)
+        state=dict(step=start_step,phase_step=0,history=[],source_cursors=copy.deepcopy(cursor),config=config)
+        if a.final_sl80:
+            state['parent_history']=copy.deepcopy(parent['history']) if not a.probe else []
+            state['best']=None if a.probe else dict(parent['best'],checkpoint=str((a.source/parent['best']['checkpoint']).resolve()),origin='original0to40k')
     assert tf.config.list_physical_devices('GPU'),'GPU required'
     g=graph(a.model,42);sc=tf.compat.v1.ConfigProto(intra_op_parallelism_threads=a.workers,inter_op_parallelism_threads=2,allow_soft_placement=False)
     sc.gpu_options.allow_growth=True
@@ -105,16 +126,21 @@ def main():
             g['saver'].save(sess,str(folder/'model'),write_meta_graph=False)
             state.update(step=metric['step'],phase_step=metric['phase_step'],checkpoint=str(folder.relative_to(a.out)/'model'),
                          history=state['history']+[metric])
+            if a.final_sl80 and (a.probe or metric['phase_step']>0):
+                if state['best'] is None or metric['sintel_full_epe_original_pixels']<state['best']['epe']:
+                    state['best']=dict(step=metric['step'],epe=metric['sintel_full_epe_original_pixels'],
+                        checkpoint=state['checkpoint'],criterion='sintel_full_epe_original_pixels',
+                        source_sha=checkpoint_sha(folder/'model'),origin='continued40to80k')
             atomic(a.out/'current.json',state);atomic(a.out/'metrics.json',state['history'])
             print(json.dumps(dict(event='evaluation',**metric)),flush=True)
-        if not a.resume:boundary(dict(step=10000,phase_step=0))
+        if not a.resume:boundary(dict(step=start_step,phase_step=0))
         assert state['phase_step']<=a.stop_after
         tick=time.monotonic();loss_sum=epe_sum=0.;seen=0;ids_hash=hashlib.sha256();box_hash=hashlib.sha256()
         bn_before=sess.run(g['bn'])
         stream=mixed_batches(rows['fc2_train'],rows['ft3d_train'],a.data,42,state['source_cursors'],a.workers)
         try:
             while state['phase_step']<a.stop_after:
-                x,y,tokens,committed=next(stream);step=int(sess.run(g['step']))+1;phase=step-10000
+                x,y,tokens,committed=next(stream);step=int(sess.run(g['step']))+1;phase=step-start_step
                 lr=phase_lr(a.policy,phase,a.phase_steps);feed={g['x']:x,g['y']:y,g['training']:True,g['lr']:lr}
                 if phase==1:
                     meta=tf.compat.v1.RunMetadata()
@@ -139,7 +165,7 @@ def main():
                         order_sha=ids_hash.hexdigest(),geometry_sha=box_hash.hexdigest()))
                     tick=time.monotonic();loss_sum=epe_sum=0.;seen=0;ids_hash=hashlib.sha256();box_hash=hashlib.sha256();bn_before=bn_after
         finally:stream.close()
-        assert checkpoint_sha(prefix)==source_sha
+        assert checkpoint_sha(prefix)==source_sha and digest(a.source/'current.json')==config['source_state_sha']
         atomic(a.out/'status.json',dict(completed=state['phase_step']==a.phase_steps,
             stage_completed=state['phase_step']==a.stop_after,step=state['step'],phase_step=state['phase_step'],
             phase_steps=a.phase_steps,source_unchanged=True,elapsed_seconds=time.monotonic()-started))
