@@ -32,7 +32,10 @@ def finalize(experiment,references):
     proof=json.loads((public/'author-parity.json').read_text());protocol=json.loads((public/'protocol.json').read_text())
     require(proof['passed'] and proof['no_training'] and proof['model_bn_values_exact']
             and proof['original_author_prediction_parity'],'Original author parity missing')
-    require(proof['original_checkpoint_sha256']==checkpoint_hashes(Path(protocol['source_checkpoint'])),
+    # Original restore_model binds index/data, not the unused author .meta graph.
+    original_now=checkpoint_hashes(Path(protocol['source_checkpoint']))
+    require(proof['original_checkpoint_sha256']=={name:digest for name,digest in original_now.items()
+                                                  if not name.endswith('.meta')},
             'Original public source changed')
     for name in ('sintel_full.json','sintel_monitor.json','calibration.json'):
         require(sha(public/name)==sha(audit/name),'Original Edge manifest differs: '+name)
