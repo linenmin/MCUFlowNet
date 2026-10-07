@@ -69,8 +69,8 @@ PY
     if [[ -f "$out/status.json" ]] && python3 - "$out/status.json" "$stop" <<'PY'
 import json,sys
 a=json.load(open(sys.argv[1]));goal=int(sys.argv[2])
-assert a['step']==goal and a['total_steps']==10000
-assert a['completed'] if goal==10000 else a['pilot_completed']
+finished=a['step']==goal and a['total_steps']==10000 and (a['completed'] if goal==10000 else a['pilot_completed'])
+sys.exit(0 if finished else 1)
 PY
     then
         printf 'Approved stage already complete.\n';exit 0
