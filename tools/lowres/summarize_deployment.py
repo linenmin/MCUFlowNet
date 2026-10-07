@@ -154,6 +154,7 @@ def paired(reference, other, bootstrap=0, seed=20261004):
 
 def markdown(summary):
     scores = summary['scores']
+    family = 'ft3d-whole' if summary['protocol'].get('phase') == 'ft3d' else 'random'
     text = ['# 新权重完整评分与 INT8 验收', '',
             'EPE 越低越好。所有分数都按 Sintel Final 原图像素计算，未截断；输入为整图缩放。',
             '1041 对是完整评测，845 对是持续训练监控，另外 196 对也曾经评分，不能称为盲测。', '',
@@ -169,10 +170,11 @@ def markdown(summary):
     for case, check in summary['conversion_acceptance'].items():
         f, q = scores[case + '-float'], scores[case + '-int8']
         text.append(f"| {case} | {f['full']['epe']:.4f} | {q['full']['epe']:.4f} | {q['full']['epe']-f['full']['epe']:+.4f} | {check['max_per_pair_epe_abs_difference']:.8f} | {q['output_saturated_fraction']:.3%} |")
-    text.extend(['', '输出边界值占比是 INT8 输出恰好等于 -128 或 127 的比例。它不能证明真实浮点输出超出量化范围的比例。', '',
-                 '## 随机取图带来的变化', '',
-                 '| 模型 | 完整 1041 对的改善 | 监控 845 对的改善 | 其余 196 对的改善 |',
-                 '|---|---:|---:|---:|'])
+    text.extend(['', '输出边界值占比是 INT8 输出恰好等于 -128 或 127 的比例。它不能证明真实浮点输出超出量化范围的比例。'])
+    if summary['geometry']:
+        text.extend(['', '## 随机取图带来的变化', '',
+                     '| 模型 | 完整 1041 对的改善 | 监控 845 对的改善 | 其余 196 对的改善 |',
+                     '|---|---:|---:|---:|'])
     for model, groups in summary['geometry'].items():
         # Paired delta is random minus whole: flip for an improvement column.
         text.append('| ' + model + ' | ' + ' | '.join(f"{-groups[g]['delta']:+.4f}" for g in GROUPS) + ' |')
@@ -192,12 +194,12 @@ def markdown(summary):
         text.append('| ' + item['model'] + ' | ' + item['kind'] + ' | ' +
                     ' | '.join(f"{item['groups'][g]['delta']:+.4f}" for g in GROUPS) + ' |')
     text.extend(['', '## 误差主要来自哪些运动', '',
-                 '下面仅列随机组、208×160 原生 FP32。误差贡献等于该组误差总和除以全部像素数，各组相加得到总 EPE。', '',
+                 '下面列主候选208×160原生FP32；各运动组贡献相加得到总EPE。', '',
                  '| 模型 | 原图运动范围 | 像素占比 | 组内 EPE | 对总 EPE 的贡献 |',
                  '|---|---|---:|---:|---:|'])
     labels = {'below10': '<10 px', '10to40': '10–40 px', 'over40': '≥40 px'}
     for model in MODELS:
-        for name, item in scores[f'random-{model}-208-native']['full']['motion_bins'].items():
+        for name, item in scores[f'{family}-{model}-208-native']['full']['motion_bins'].items():
             text.append(f"| {model} | {labels[name]} | {item['pixel_fraction']:.2%} | {item['epe']:.4f} | {item['contribution_to_total_epe']:.4f} |")
     if summary.get('vela'):
         text.extend(['', '## 同一量化文件的 Vela 编译', '',
@@ -208,6 +210,15 @@ def markdown(summary):
             text.append(f"| {item['case']['id']} | {item['sram_peak_kib']:.0f} | {item['cpu_operators']} | {item['estimated_fps']:.3f} |")
         text.extend(['', '五份编译输入的 SHA 与本轮 INT8 评分文件相同，编译产物和日志已核对。',
                      '峰值符合编译配置预算；预算不等于芯片总 SRAM 或固件可用 arena，仍须用新模型上板验收。'])
+    if summary.get('phase_comparisons'):
+        text.extend(['', '## 与同尺寸FC2候选比较', '',
+                     '正数表示FT3D候选误差更高；两种精度分别比较同一批图像。', '',
+                     '| 模型/输入 | 类型 | FC2 EPE | FT3D EPE | FT3D减FC2 |',
+                     '|---|---|---:|---:|---:|'])
+        for item in summary['phase_comparisons']:
+            group = item['groups']['full']
+            text.append(f"| {item['model']}/{item['width']}×160 | {item['kind']} | "
+                        f"{group['reference_epe']:.4f} | {group['other_epe']:.4f} | {group['delta']:+.4f} |")
     text.extend(['', '## 怎样使用这些结果', '',
                  '- 原生、转换与量化评分均已逐样本验收；源 checkpoint 在汇总时重新计算 SHA，与各评分及导出记录一致。',
                  '- 场景明细、运动分组、PTQ 增量、尺寸增量和来源 SHA 均保存在 `summary.json`。',
@@ -237,11 +248,18 @@ def main():
         'audit_deployment.py', 'export_deployment.py', 'run_deployment_audit.py',
         'summarize_deployment.py', 'compile_deployment.py', 'model.py', 'data.py')}
     cases, protocol = read(audit / 'cases.json'), read(audit / 'protocol.json')
+    ft3d = protocol.get('phase') == 'ft3d'
+    family = 'ft3d-whole' if ft3d else 'random'
     full, monitor, calibration = (read(audit / filename) for filename in
                                   ('sintel_full.json', 'sintel_monitor.json', 'calibration.json'))
     expected_ids = {f'{geometry}-{model}-208' for geometry in ('whole', 'random') for model in MODELS}
     expected_ids |= {'random-S-224', 'random-L-224'}
-    require(len(cases) == 8 and {case['id'] for case in cases} == expected_ids, 'Expected exactly eight native cases')
+    if ft3d:
+        expected_ids = {f'ft3d-whole-{model}-208' for model in MODELS}
+        expected_ids |= {'ft3d-whole-S-224', 'ft3d-whole-L-224'}
+        require(protocol['checkpoint_step'] == 8000, 'Unexpected FT3D selection step')
+    require(len(cases) == (5 if ft3d else 8) and {case['id'] for case in cases} == expected_ids,
+            'Unexpected native case coverage')
     require(protocol['cases'] == cases, 'Protocol and cases differ')
     require(protocol['samples'] == 1041 and protocol['monitor_samples'] == 845
             and protocol['independent_initialization_seeds'] == 1, 'Unexpected protocol counts')
@@ -270,13 +288,19 @@ def main():
     calibration_hashes = None
     for case in cases:
         case_id = case['id']
-        require(case_id == f"{case['geometry']}-{case['model']}-{case['hw'][1]}"
+        expected_id = f"{case['geometry']}-{case['model']}-{case['hw'][1]}"
+        if ft3d:
+            expected_id = 'ft3d-' + expected_id
+            require(case['phase'] == 'ft3d' and case['checkpoint_step'] == 8000
+                    and case['geometry'] == 'whole' and case['quantize'], 'FT3D case identity differs')
+        quantized = case.get('quantize', case['geometry'] == 'random')
+        require(case_id == expected_id
                 and case['hw'] == [160, 224 if case_id.endswith('-224') else 208], 'Case model/dimension differs')
         prefix = Path(case['checkpoint'])
         current_hashes = checkpoint_hashes(prefix)
         source_snapshot[str(prefix)] = current_hashes
-        kinds = ('native', 'float', 'int8') if case['geometry'] == 'random' else ('native',)
-        if case['geometry'] == 'random':
+        kinds = ('native', 'float', 'int8') if quantized else ('native',)
+        if quantized:
             exported = read(audit / 'exports' / case_id / 'export.json')
             require(exported['status'] == 'passed' and exported['model'] == case['model']
                     and exported['input_hw'] == case['hw'] and exported['batch'] == 1
@@ -376,7 +400,7 @@ def main():
                 require(result['tflite_sha256'] == exports[case_id]['exports'][kind]['sha256']
                         and result['inference_device'] == 'TFLite CPU', 'TFLite runtime SHA differs: ' + key)
             records[key], scores[key] = rows, result
-        if case['geometry'] == 'random':
+        if quantized:
             native, converted = records[case_id + '-native'], records[case_id + '-float']
             differences = [abs(a['original_epe'] - b['original_epe']) for a, b in zip(native, converted)]
             index = int(np.argmax(differences))
@@ -392,10 +416,10 @@ def main():
                               'checked by exporter; Sintel per-pixel prediction arrays were not saved')
             acceptance[case_id] = item
             require(item['passed'], 'Native/FP32 TFLite per-pair EPE exceeds tolerance: ' + repr(item))
-    require(len(scores) == 18 and len(exports) == 5 and len(acceptance) == 5,
-            'Expected 8 native, 5 FP32 TFLite and 5 INT8 scores')
+    require(len(scores) == (15 if ft3d else 18) and len(exports) == 5 and len(acceptance) == 5,
+            'Expected complete native/FP32 TFLite/INT8 scores')
     canonical_bins = [tuple(row['motion_bins'][name]['pixels'] for name in MOTION)
-                      for row in records['whole-edge-208-native']]
+                      for row in records[('ft3d-whole-edge-208' if ft3d else 'whole-edge-208') + '-native']]
     for key, rows in records.items():
         require([tuple(row['motion_bins'][name]['pixels'] for name in MOTION) for row in rows]
                 == canonical_bins, 'Per-pair ground-truth motion counts differ: ' + key)
@@ -412,13 +436,16 @@ def main():
                    held_out_test=False,
                    output_saturated_fraction_definition='Fraction of INT8 output values equal to -128 or 127; '
                        'not the proportion of true FP32 values outside the quantized representable range')
-    for model in MODELS:
-        summary['geometry'][model] = {group: paired(
-            subset(records[f'whole-{model}-208-native'], group),
-            subset(records[f'random-{model}-208-native'], group), args.bootstrap)
-            for group in GROUPS}
+    if not ft3d:
+        for model in MODELS:
+            summary['geometry'][model] = {group: paired(
+                subset(records[f'whole-{model}-208-native'], group),
+                subset(records[f'random-{model}-208-native'], group), args.bootstrap)
+                for group in GROUPS}
     conditions = [('whole-208-native', 'whole', 'native'), ('random-208-native', 'random', 'native'),
                   ('random-208-float', 'random', 'float'), ('random-208-int8', 'random', 'int8')]
+    if ft3d:
+        conditions = [(f'{family}-208-{kind}', family, kind) for kind in ('native', 'float', 'int8')]
     for condition, geometry, kind in conditions:
         for model in ('S', 'L'):
             summary['model_comparisons'].append(dict(condition=condition, model=model,
@@ -429,20 +456,46 @@ def main():
                     for group in GROUPS}))
     for model in ('S', 'L'):
         for kind in ('native', 'float', 'int8'):
-            first, second = f'random-{model}-208-{kind}', f'random-{model}-224-{kind}'
+            first, second = f'{family}-{model}-208-{kind}', f'{family}-{model}-224-{kind}'
             require(scores[first]['checkpoint_sha256'] == scores[second]['checkpoint_sha256'],
                     'Resolution comparison source weights differ')
             summary['resolution'].append(dict(model=model, kind=kind,
                 reference_case=first, other_case=second, change='224x160 minus 208x160, same weights',
                 groups={group: paired(subset(records[first], group), subset(records[second], group), args.bootstrap)
                         for group in GROUPS}))
-            summary['model_comparisons'].append(dict(condition='random-max224-vs-edge208-' + kind,
-                model=model, reference_case=f'random-edge-208-{kind}', other_case=second,
+            summary['model_comparisons'].append(dict(condition=family+'-max224-vs-edge208-' + kind,
+                model=model, reference_case=f'{family}-edge-208-{kind}', other_case=second,
                 same_input_resolution=False,
                 scope='Configured maximum input sizes verified using older weights; new INT8 board fitness '
                       'and speed are not measured by this pre-Vela audit',
-                groups={group: paired(subset(records[f'random-edge-208-{kind}'], group),
+                groups={group: paired(subset(records[f'{family}-edge-208-{kind}'], group),
                                       subset(records[second], group), args.bootstrap) for group in GROUPS}))
+    if ft3d:
+        baseline = Path(protocol['reference_audit'])
+        require(sha(baseline / 'summary.json') == protocol['reference_summary_sha256'],
+                'FC2 reference summary changed')
+        baseline_summary = read(baseline / 'summary.json')
+        require(baseline_summary['status'] == 'passed', 'FC2 comparison baseline failed')
+        for name in ('sintel_full.json', 'sintel_monitor.json', 'calibration.json'):
+            require(sha(audit / name) == sha(baseline / name), 'Phase comparison manifest differs: ' + name)
+        summary['phase_comparisons'] = []
+        for case in cases:
+            for kind in ('native', 'float', 'int8'):
+                key, ref_key = case['id'] + '-' + kind, case['reference_fc2'] + '-' + kind
+                report_path = baseline / 'scores' / ref_key / 'result.json'
+                pair_path = report_path.with_name('per_pair.jsonl')
+                for path in (report_path, pair_path):
+                    require(sha(path) == baseline_summary['source_sha256'][str(path)],
+                            'FC2 reference score changed: ' + str(path))
+                    sources[str(path)] = sha(path)
+                ref_report = read(report_path)
+                ref_rows = [json.loads(line) for line in pair_path.read_text().splitlines() if line.strip()]
+                for group in GROUPS:
+                    agree_tree(ref_report[group], reduce_records(subset(ref_rows, group)), 'FC2 reference/' + group)
+                summary['phase_comparisons'].append(dict(model=case['model'], width=case['hw'][1], kind=kind,
+                    reference_case=ref_key, other_case=key,
+                    groups={group: paired(subset(ref_rows, group), subset(records[key], group), args.bootstrap)
+                            for group in GROUPS}))
     for case in acceptance:
         summary['quantization'].append(dict(case=case, change='INT8 minus TFLite FP32',
             groups={group: paired(subset(records[case + '-float'], group),
