@@ -28,7 +28,12 @@ def finalize(experiment,references):
             agree_tree(result[group],reduce_records(subset(rows,group)),case['id']+'/'+kind+'/'+group)
         sources[str(report_path)]=sha(report_path);sources[str(pair_path)]=sha(pair_path)
         return result,rows
-    public=experiment/'public-edge-area'
+    public=experiment/'public-edge-deployment'
+    public_summary_path=public/'summary.json'
+    require(public_summary_path.is_file(),'Original Edge AREA FP32/INT8 acceptance must finish')
+    public_summary=json.loads(public_summary_path.read_text())
+    require(public_summary['status']=='passed' and public_summary['public_original']
+            and public_summary['no_training'],'Original Edge PTQ acceptance missing')
     proof=json.loads((public/'author-parity.json').read_text());protocol=json.loads((public/'protocol.json').read_text())
     require(proof['passed'] and proof['no_training'] and proof['model_bn_values_exact']
             and proof['original_author_prediction_parity'],'Original author parity missing')
@@ -45,8 +50,14 @@ def finalize(experiment,references):
             and raw['edge_public'] and raw['checkpoint_sha256']==proof['mapped_checkpoint_sha256'],
             'Original Edge inference semantics differ')
     sources[str(public/'author-parity.json')]=sha(public/'author-parity.json')
+    pf,_=load_score(public,case,'float');pq,_=load_score(public,case,'int8')
+    require(abs(raw['full']['epe']-public_summary['scores']['native']['full']['epe'])<1e-12
+            and public_summary['native_float_max_pair_epe_difference']<1e-3
+            and public_summary['native_float_mean_pair_epe_difference']<1e-4,
+            'Original Edge conversion acceptance differs')
+    sources[str(public_summary_path)]=sha(public_summary_path)
     table=[dict(model='edge',origin='author public original; AREA; no adaptation',case=case['id'],
-                input_hw=case['hw'],fp32=raw['full']['epe'],fp32_runtime='native TF',int8=None)]
+                input_hw=case['hw'],fp32=pf['full']['epe'],fp32_runtime='TFLite CPU',int8=pq['full']['epe'])]
     candidate_rows={}
     for name in ('final-mixture-S-208','final-mixture-L-224'):
         qcase=next(v for v in deployment['protocol']['cases'] if v['id']==name)
