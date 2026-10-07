@@ -132,18 +132,16 @@
         "FT3D": "whole image AREA resize"
       },
       "lr": {
-        "schedule": "four fixed per-update cosine cycles",
-        "cycle_updates": 10000,
-        "cycles": 4,
+        "schedule": "single per-update cosine",
+        "updates": 40000,
         "initial": 3e-06,
         "minimum": 1e-06,
-        "local_step_formula": "((global_mixed_step-1) %10000)+1",
-        "restart_optimizer": false
+        "restarts": false
       },
-      "optimizer_state": "reset only at mixed stage beginning; preserve ALL state and data cursors across cycles and resumption",
+      "optimizer_state": "reset only at mixed stage start; inherit model/BN; interrupted jobs restore ALL state and cursors",
       "checkpoint_selection": "minimum shared208x160 full1041 Sintel development FP32 EPE among fixed1000-step candidates; tie keeps earliest",
-      "already_completed_updates": 15000,
-      "additional_updates": 25000
+      "already_completed_updates": 0,
+      "additional_updates": 40000
     }
   ],
   "final_artifacts": {},
@@ -223,11 +221,7 @@
       39000,
       40000
     ],
-    "existing_candidate_paths": {
-      "steps0to10000": "LOWRES-BENCH-01/mixed-replay5k-20261007/seed42/mixture75_25/{model}/replay",
-      "steps11000to15000": "LOWRES-BENCH-01/mixed-lr5k-20261007/seed42/restart/{model}/replay"
-    },
-    "selection_rule": "Complete matching1041 scores for existing candidates; no fixed-LR branch, FC2-only branch or PTQ-driven checkpoint reselection",
+    "selection_rule": "Minimum full1041 development FP32 EPE on this new single-cosine path at0/1000/.../40000; ties keep earliest. Historical mixed10k/15k and other branches are references only.",
     "secondary": "FC2val640 and fixed FT3D TEST640 monitoring; no performance-driven extension beyond40000"
   },
   "baseline_policy": {
@@ -240,10 +234,10 @@
     "supplement": "retain existing adapted and same-training Edge results",
     "old_edge_7p7712_protocol": "historical resize pipeline; require matching AREA reevaluation before final shared table"
   },
-  "selection_history": "Development feedback formed this recipe. Prior10k/15k trajectories are preserved; future budget and best-checkpoint rule are fixed before continuing.",
-  "scope": "Specify only S/L mixed total40000 with Sintel-development best selection; existing earlier stages reused; no new seeds, branches or baseline retraining. No Slurm jobs submitted by this config.",
+  "selection_history": "Development feedback formed this proposal. Earlier FC2 stages reused; mixed40k schedule and checkpoint rule specified before execution. Not an independent-test result.",
+  "scope": "Propose S/L mixed40000 single cosine from existing FC2-random10k weights. No new FC2 training, restart sweep, seeds or baseline training. No Slurm job submitted.",
   "config_kind": "frozen protocol and artifact registry; existing stage runners retain their documented interfaces",
-  "plan_state": "specified_not_submitted",
+  "plan_state": "single_cosine_revision_proposed_not_submitted",
   "supersedes": "FINAL-SL-01",
   "baseline_artifacts": {
     "S": {
@@ -265,7 +259,13 @@
       }
     }
   },
-  "resume_sources": {
+  "exposure_budget": {
+    "fc2_pairs": 960000,
+    "ft3d_pairs": 320000,
+    "fc2_list_epochs": 43.18100035984167,
+    "ft3d_list_epochs": 3.9713073047233736
+  },
+  "historical_15k_sources": {
     "S": {
       "run_relative": "LOWRES-BENCH-01/mixed-lr5k-20261007/seed42/restart/S/replay",
       "checkpoint": "step-015000/model",
@@ -307,10 +307,31 @@
       }
     }
   },
-  "exposure_budget": {
-    "fc2_pairs": 960000,
-    "ft3d_pairs": 320000,
-    "fc2_list_epochs": 43.18100035984167,
-    "ft3d_list_epochs": 3.9713073047233736
-  }
+  "mixed_initialization_sources": {
+    "S": {
+      "run_relative": "LOWRES-BENCH-01/mixed-replay5k-20261007/source/S/fc2",
+      "checkpoint": "step-010000/model",
+      "source_fc2_step": 10000,
+      "source_state_sha256": "ea8402d0b02aa89d37b8527b341a336d4c6502fef87f5bcfdbd220d58af90ab0",
+      "checkpoint_sha256": {
+        "model.index": "964bceb6010851cf02d4b7ccd3ff9aad0051823436abe466e62c6b144b128954",
+        "model.data-00000-of-00001": "f9800d49a7b30fb944dd6477fdd625363cc8ceb696dc3500d2dfca67cc38f1f7"
+      },
+      "inherit": "model and BN",
+      "reset": "Adam slots, beta powers, mixed global_step and mixed source cursors"
+    },
+    "L": {
+      "run_relative": "LOWRES-BENCH-01/mixed-replay5k-20261007/source/L/fc2",
+      "checkpoint": "step-010000/model",
+      "source_fc2_step": 10000,
+      "source_state_sha256": "36488296764d1071db6efc4de15ecc817868c82c5ecd2b81d659e40eadccbd16",
+      "checkpoint_sha256": {
+        "model.index": "e65a58b9934ab9584c914c7e4db379c323821092587f9a210ab20820188ee13b",
+        "model.data-00000-of-00001": "5264662f4ba3d688eb106869be8efad1599493fc8006e21e24f7bab5d103cb29"
+      },
+      "inherit": "model and BN",
+      "reset": "Adam slots, beta powers, mixed global_step and mixed source cursors"
+    }
+  },
+  "plan_revision_note": "Four10k cycles withdrawn: preserving an existing short-run schedule was not evidence for optimal repeated restarts. Recommend one fixed40k mixed run from completed FC2-random weights."
 }
