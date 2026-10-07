@@ -7,19 +7,21 @@ import subprocess
 import time
 
 
-def classify(root, states, phase='fc2', direction_compare=False, replay_compare=False, replay_end_step=5000):
+def classify(root, states, phase='fc2', direction_compare=False, replay_compare=False, replay_end_step=5000, lr_compare=False):
     if phase not in ('fc2','ft3d'):
         raise ValueError('Unknown recovery phase')
     pending=[]; attention=[]
     arms=('fc2_only','mixture75_25') if replay_compare else (('original','weighted') if direction_compare else ('whole','random'))
     goal=5000 if direction_compare or replay_compare else 10000
     if replay_compare:goal=replay_end_step
+    if lr_compare:arms=('fixed','restart');goal=15000
     for index,(arm,model) in enumerate([(a,m) for a in arms for m in ('edge','S','L')]):
-        out=root/'seed42'/arm/model/('replay' if replay_compare else phase)
+        out=root/'seed42'/arm/model/('replay' if replay_compare or lr_compare else phase)
         state=out/'current.json'; status=out/'status.json'
         if state.exists() and status.exists():
             v=json.loads(state.read_text()); s=json.loads(status.read_text())
-            if v['step']==goal and s.get('pilot_completed' if replay_compare and goal==5000 else 'completed') and s['step']==goal:
+            flag='stage_completed' if lr_compare else ('pilot_completed' if replay_compare and goal==5000 else 'completed')
+            if v['step']==goal and s.get(flag) and s['step']==goal:
                 assert (out/(v['checkpoint']+'.index')).is_file()
                 continue
         if states.get(index) in ('TIMEOUT','NODE_FAIL','PREEMPTED'):
@@ -39,6 +41,7 @@ def main():
     p.add_argument('--direction-compare',action='store_true')
     p.add_argument('--replay-compare',action='store_true')
     p.add_argument('--replay-end-step',type=int,choices=[5000,10000],default=5000)
+    p.add_argument('--lr-compare',action='store_true')
     a=p.parse_args(); assert a.parent.isdigit()
     partition={'mindwell':'gpu_b200','wice':'gpu_a100'}[a.cluster]
     c=a.root/'control'
@@ -54,8 +57,8 @@ def main():
                 states[int(name[len(a.parent)+1:])]=fields[1].split()[0].rstrip('+')
         if len(states)==6: break
         time.sleep(2)
-    assert not (a.direction_compare and a.replay_compare)
-    indices,attention=classify(a.root,states,a.phase,a.direction_compare,a.replay_compare,a.replay_end_step)
+    assert sum((a.direction_compare,a.replay_compare,a.lr_compare))<=1
+    indices,attention=classify(a.root,states,a.phase,a.direction_compare,a.replay_compare,a.replay_end_step,a.lr_compare)
     result.update(states=states,recovery_indices=indices,needs_attention=attention)
     proof=c/'recovery-dispatch.json'
     def save(): proof.write_text(json.dumps(result,indent=2)+'\n')
@@ -67,14 +70,15 @@ def main():
     assert export_mode in ('ALL','NIL')
     assert recipe.get('phase','fc2') == a.phase
     assert recipe.get('cluster','mindwell') == a.cluster
-    if a.direction_compare or a.replay_compare:
+    if a.direction_compare or a.replay_compare or a.lr_compare:
         assert a.phase=='fc2' and recipe['source_step']==10000
-        assert recipe['pilot_steps']==5000 and recipe['steps']==10000 if a.replay_compare else recipe['steps']==5000
+        if a.lr_compare:assert recipe['phase_steps']==10000 and recipe['pilot_steps']==5000
+        else:assert recipe['pilot_steps']==5000 and recipe['steps']==10000 if a.replay_compare else recipe['steps']==5000
         partition=recipe['partition']
         assert partition in ({'gpu_b200'} if a.cluster=='mindwell' else {'gpu_a100','gpu_h100'})
-    controller=c/('replay.controller.sh' if a.replay_compare else ('direction_compare.controller.sh' if a.direction_compare else 'geometry_compare.controller-v2.sh'))
+    controller=c/('replay-lr.controller.sh' if a.lr_compare else ('replay.controller.sh' if a.replay_compare else ('direction_compare.controller.sh' if a.direction_compare else 'geometry_compare.controller-v2.sh')))
     assert controller.is_file() and subprocess.check_output(['git','-C',repo,'rev-parse','HEAD'],text=True).strip()==recipe['code_commit']
-    name=('flow-replay-recovery-' if a.replay_compare else ('flow-direction-recovery-' if a.direction_compare else 'flow-geometry-recovery-'))+a.parent
+    name=('flow-lr-recovery-' if a.lr_compare else ('flow-replay-recovery-' if a.replay_compare else ('flow-direction-recovery-' if a.direction_compare else 'flow-geometry-recovery-')))+a.parent
     attempts=[];deadline=time.monotonic()+8*60
     while time.monotonic()<deadline:
         existing=subprocess.check_output(['squeue','--clusters='+a.cluster,'-h','-u','vsc37996','--name='+name,'-o','%A'],text=True).strip()
@@ -88,7 +92,7 @@ def main():
                  '--kill-on-invalid-dep=yes','--no-requeue','--export='+export_mode,'--chdir='+repo,'--dependency=afterany:'+a.parent,
                  '--job-name='+name,'--output='+str(a.root/'logs/train-%A_%a.out'),
                  str(controller),'continue' if a.replay_compare and a.replay_end_step==10000 else 'train',repo,str(a.data),str(a.root),a.parent]
-            if not a.direction_compare and not a.replay_compare:
+            if not a.direction_compare and not a.replay_compare and not a.lr_compare:
                 cmd.append(a.phase)
             reply=subprocess.run(cmd,text=True,capture_output=True)
             attempts.append(dict(minutes=minutes,exit_code=reply.returncode,stdout=reply.stdout,stderr=reply.stderr))

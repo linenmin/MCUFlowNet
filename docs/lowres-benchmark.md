@@ -320,3 +320,11 @@ python tools/lowres/geometry_compare.py --model S --geometry random --phase fc2 
 `prepare_replay_deployment.py`以通过验收的5k/10k固定末尾候选，在208×160完整1041原生FP32中选每模型较低误差的权重，平手用较早端点；不选8k/9k、场景最佳或INT8最佳。S/L224沿同一选中权重。它复用原FC2部署审计的完整／监控／64校准清单与源父权重指纹，冻结选择、代码提交和源检查点，再沿既有原生、导出、浮点／INT8评分、Vela与配对归约入口执行。`summarize_deployment.py`的replay分支仍核15份逐图报告、5导出及5同量化文件编译，原转换门槛、预算与零CPU要求不变；旧FC2与FT3D结果的归约和显示保留。
 
 部署比较同时保留公开适配Edge和纯FT8k增强Edge，同1041逐图身份必须匹配；不同尺寸和训练历史单列，FP32与INT8不能分别取不同权重拼成一行。Vela速度是估计、配置内存不是固件可用arena，新模型编译通过不代替板端精度或计时。原S/L图在板端的ECA问题须按等价修复流程另验，不能仅凭电脑端INT8成绩跳过。
+
+### 混合10k之后的配对学习率对照（2026-10-07）
+
+`replay_lr_compare.py`从每模型已完成混合10k的完整checkpoint分为fixed/restart两条。完整模型、BN、Adam槽、beta powers、global_step及源游标精确继承；新阶段phase_step=global_step−10000，不重算旧日程。fixed恒1e−6，restart按预定新增10k余弦3e−6→1e−6；先各新增5k到global15000停止，不能默认接global20000。208×160、24FC2＋8FT3D、原几何、标签与损失不变；每1k按同1041原GT完整计分，另列原845，FC2val640和锁定FT3D TEST640，验证不更新BN。
+
+`verify_replay_lr.py`用真实25/9小清单和两对验证检查两政策的连续5步与3＋2恢复；游标仅在probe按源位置取模以跨小清单末尾，正式起点保留[FC2:11,17680;FT3D:1,80000]。要求所有初始变量与10k源完全相同、Adam保留非零状态、global_step从10000继续、两政策数据／几何相同、恢复全部变量和数值一致、实际GPU反向执行。小清单重放是实现检查，不是独立seed实验。正式第0步必须复现四项完整源分数至2e−5。
+
+`replay_lr.sh`验收三个模型后放行六条；输出在独立Runs实验根，原10k目录只读。`geometry_recovery.py --lr-compare`只为未完成TIMEOUT/NODE_FAIL/PREEMPTED安排一次剩余步数续段，止于global15000。完整配置、计分、恢复状态和回执留Runs，wiki继续原研究问题4o，不因政策或提交作业开页。
