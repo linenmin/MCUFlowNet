@@ -7,7 +7,7 @@ import subprocess
 import time
 
 
-def classify(root, states, phase='fc2', direction_compare=False, replay_compare=False, replay_end_step=5000, lr_compare=False, final_sl=False, final_sl_end_step=40000):
+def classify(root, states, phase='fc2', direction_compare=False, replay_compare=False, replay_end_step=5000, lr_compare=False, final_sl=False, final_sl_end_step=40000, final_sl_models=None):
     if phase not in ('fc2','ft3d'):
         raise ValueError('Unknown recovery phase')
     pending=[]; attention=[]
@@ -16,7 +16,8 @@ def classify(root, states, phase='fc2', direction_compare=False, replay_compare=
     if replay_compare:goal=replay_end_step
     if lr_compare:arms=('fixed','restart');goal=15000
     if final_sl:arms=('mixture75_25',);goal=final_sl_end_step
-    models=('S','L') if final_sl else ('edge','S','L')
+    models=(tuple(final_sl_models) if final_sl_models is not None else ('S','L')) if final_sl else ('edge','S','L')
+    if final_sl: assert models in (('S','L'),('edge',))
     for index,(arm,model) in enumerate([(a,m) for a in arms for m in models]):
         out=root/'seed42'/arm/model/('replay' if replay_compare or lr_compare or final_sl else phase)
         state=out/'current.json'; status=out/'status.json'
@@ -50,6 +51,11 @@ def main():
     partition={'mindwell':'gpu_b200','wice':'gpu_a100'}[a.cluster]
     c=a.root/'control'
     if a.replay_compare and a.replay_end_step==10000:c=c/'continue10k'
+    recipe=json.loads((c/'submission.json').read_text())
+    final_models=recipe['models'] if a.final_sl else None
+    if a.final_sl:
+        assert final_models in (['S','L'],['edge'])
+        assert (final_models==['edge'])==(recipe.get('recipe_id')=='FINAL-EDGE-04')
     if a.final_sl and a.final_sl_end_step==80000:
         assert not (c/'recovery-dispatch.json').exists(),'Inspect existing finite recovery receipt before retry'
     result=dict(parent=a.parent,cluster=a.cluster,
@@ -61,10 +67,10 @@ def main():
             fields=line.split('|'); name=fields[0].strip()
             if name.startswith(a.parent+'_') and name[len(a.parent)+1:].isdigit():
                 states[int(name[len(a.parent)+1:])]=fields[1].split()[0].rstrip('+')
-        if len(states)==(2 if a.final_sl else 6): break
+        if len(states)==(len(final_models) if a.final_sl else 6): break
         time.sleep(2)
     assert sum((a.direction_compare,a.replay_compare,a.lr_compare,a.final_sl))<=1
-    indices,attention=classify(a.root,states,a.phase,a.direction_compare,a.replay_compare,a.replay_end_step,a.lr_compare,a.final_sl,a.final_sl_end_step)
+    indices,attention=classify(a.root,states,a.phase,a.direction_compare,a.replay_compare,a.replay_end_step,a.lr_compare,a.final_sl,a.final_sl_end_step,final_models)
     result.update(states=states,recovery_indices=indices,needs_attention=attention)
     proof=c/'recovery-dispatch.json'
     def save(): proof.write_text(json.dumps(result,indent=2)+'\n')
@@ -78,16 +84,16 @@ def main():
     assert recipe.get('cluster','mindwell') == a.cluster
     if a.direction_compare or a.replay_compare or a.lr_compare or a.final_sl:
         source_step=40000 if a.final_sl and a.final_sl_end_step==80000 else 10000
-        if a.final_sl and recipe.get('recipe_id')=='FINAL-SL-04':
+        if a.final_sl and recipe.get('recipe_id') in ('FINAL-SL-04','FINAL-EDGE-04'):
             assert a.final_sl_end_step==80000 and recipe['initial_lr']==3e-5 and recipe['min_lr']==1e-6
             source_step=10000
         assert a.phase=='fc2' and recipe['source_step']==source_step
-        if a.final_sl:assert recipe['steps']==a.final_sl_end_step and recipe['models']==['S','L']
+        if a.final_sl:assert recipe['steps']==a.final_sl_end_step and recipe['models']==final_models
         elif a.lr_compare:assert recipe['phase_steps']==10000 and recipe['pilot_steps']==5000
         else:assert recipe['pilot_steps']==5000 and recipe['steps']==10000 if a.replay_compare else recipe['steps']==5000
         partition=recipe['partition']
         assert partition in ({'gpu_b200'} if a.cluster=='mindwell' else {'gpu_a100','gpu_h100'})
-    final_controller='final-sl.controller.sh' if recipe.get('recipe_id')=='FINAL-SL-04' else ('final-sl80.controller.sh' if a.final_sl_end_step==80000 else 'final-sl.controller.sh')
+    final_controller='final-sl.controller.sh' if recipe.get('recipe_id') in ('FINAL-SL-04','FINAL-EDGE-04') else ('final-sl80.controller.sh' if a.final_sl_end_step==80000 else 'final-sl.controller.sh')
     controller=c/(final_controller if a.final_sl else ('replay-lr.controller.sh' if a.lr_compare else ('replay.controller.sh' if a.replay_compare else ('direction_compare.controller.sh' if a.direction_compare else 'geometry_compare.controller-v2.sh'))))
     assert controller.is_file() and subprocess.check_output(['git','-C',repo,'rev-parse','HEAD'],text=True).strip()==recipe['code_commit']
     name=('flow-final-recovery-' if a.final_sl else ('flow-lr-recovery-' if a.lr_compare else ('flow-replay-recovery-' if a.replay_compare else ('flow-direction-recovery-' if a.direction_compare else 'flow-geometry-recovery-'))))+a.parent

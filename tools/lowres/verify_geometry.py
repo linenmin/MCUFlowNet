@@ -24,7 +24,7 @@ def main():
     p.add_argument('--final-sl-initial-lr',type=float,default=3e-6)
     p.add_argument('--reference-repo',type=Path)
     a=p.parse_args(); a.out.mkdir(parents=True,exist_ok=False)
-    assert not a.final_sl or (a.model in ('S','L') and a.phase=='fc2')
+    assert not a.final_sl or (a.model in ('edge','S','L') and a.phase=='fc2')
     parent=json.loads((a.source/'current.json').read_text())
     source=a.source/parent['checkpoint']; before=checkpoint_sha(source)
     base=[sys.executable,str(Path(__file__).with_name('geometry_compare.py')),'--model',a.model,

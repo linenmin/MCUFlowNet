@@ -5,9 +5,9 @@ parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--root',type=Path,required=True)
 args=parser.parse_args();r=args.root.resolve();c=r/'control'
 a=json.loads((c/'submission.json').read_text());reports=[]
-assert a['approved'] and a['models']==['S','L'] and a['source_step']==10000
-assert (a['recipe_id'],a['steps'],a.get('initial_lr',3e-6)) in [('FINAL-SL-02',40000,3e-6),('FINAL-SL-04',80000,3e-5)]
-for m in ('S','L'):
+assert a['approved'] and a['source_step']==10000
+assert (a['recipe_id'],a['steps'],a.get('initial_lr',3e-6),tuple(a['models'])) in [('FINAL-SL-02',40000,3e-6,('S','L')),('FINAL-SL-04',80000,3e-5,('S','L')),('FINAL-EDGE-04',80000,3e-5,('edge',))]
+for m in a['models']:
     out=r/'seed42/mixture75_25'/m/'replay'
     if not (out/'current.json').exists() or not (out/'gpu-execution.json').exists():
         raise SystemExit('First full evaluation or GPU backprop not yet committed: '+m)

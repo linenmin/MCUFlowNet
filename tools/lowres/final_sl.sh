@@ -8,13 +8,13 @@ software="$project/software"
 [[ -f "$software/READY" && -f "$root/control/READY.json" ]]
 cd "$repo";commit=$(git rev-parse HEAD)
 [[ "$commit" == "$(cat "$root/control/code-commit.txt")" && -z "$(git status --porcelain)" ]]
-read -r steps initial_lr < <(python3 - "$root/control/submission.json" <<'PY'
+read -r steps initial_lr models_csv < <(python3 - "$root/control/submission.json" <<'PY'
 import json,sys
-a=json.load(open(sys.argv[1]));assert a['approved'] and a['models']==['S','L'] and a['source_step']==10000
+a=json.load(open(sys.argv[1]));assert a['approved'] and a['source_step']==10000
 steps=a['steps'];initial=a.get('initial_lr',3e-6)
-assert (a['recipe_id'],steps,initial) in [('FINAL-SL-02',40000,3e-6),('FINAL-SL-04',80000,3e-5)]
+assert (a['recipe_id'],steps,initial,tuple(a['models'])) in [('FINAL-SL-02',40000,3e-6,('S','L')),('FINAL-SL-04',80000,3e-5,('S','L')),('FINAL-EDGE-04',80000,3e-5,('edge',))]
 assert a.get('min_lr',1e-6)==1e-6
-print(steps,initial)
+print(steps,initial,','.join(a['models']))
 PY
 )
 run_python() {
@@ -25,7 +25,8 @@ run_python() {
       --env OMP_NUM_THREADS=8 --env OPENBLAS_NUM_THREADS=1 --env "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:?}" \
       "$software/containers/tensorflow-25.02.sif" "$software/tf2502/bin/python" "$@"
 }
-index=${SLURM_ARRAY_TASK_ID:?};[[ "$index" =~ ^[01]$ ]];models=(S L);model=${models[$index]}
+IFS=',' read -r -a models <<< "$models_csv"
+index=${SLURM_ARRAY_TASK_ID:?};[[ "$index" =~ ^[0-9]+$ && "$index" -lt "${#models[@]}" ]];model=${models[$index]}
 if [[ "$mode" == probe ]];then
     run_python tools/lowres/verify_geometry.py --final-sl --model "$model" --data "$data" \
       --manifests "$root/manifests" --source "$root/source/$model/fc2" --out "$root/probe/$model" --code-commit "$commit" \
