@@ -17,8 +17,17 @@ def main():
     p.add_argument('--code-commit',required=True)
     p.add_argument('--final-sl',action='store_true',help='Use verified full-Sintel best on the new40k S/L path')
     p.add_argument('--final-sl80',action='store_true',help='Use combined0..80k best after the verified full-state continuation')
+    p.add_argument('--final-mixed80',action='store_true',help='Use audited independent80k S/L or Edge best, without combining histories')
     p.add_argument('--parent-experiment',type=Path,help='Original completed40k experiment for FC2 lineage')
     a=p.parse_args()
+    final_models=('S','L')
+    if a.final_mixed80:
+        require(not a.final_sl80,'Independent and continuation80k cannot be combined')
+        a.final_sl=True
+        recipe=read(a.experiment/'control/submission.json')
+        require((recipe['recipe_id'],recipe['models']) in (('FINAL-SL-04',['S','L']),('FINAL-EDGE-04',['edge'])),
+                'Expected approved independent80k model mapping')
+        final_models=tuple(recipe['models'])
     if a.final_sl80:
         require(a.parent_experiment is not None,'Original40k experiment is required')
         a.final_sl=True
@@ -27,7 +36,8 @@ def main():
     before=after=completed=None
     if a.final_sl:
         completed=read(a.experiment/'control/checkpoints-verified.json')
-        require(completed['passed'] and completed['checkpoint_count']==82 and completed['best_full1041_verified'],'Final40k audit must pass')
+        expected_count=81*len(final_models) if a.final_mixed80 else 82
+        require(completed['passed'] and completed['checkpoint_count']==expected_count and completed['best_full1041_verified'],'Final checkpoint audit must pass')
     else:
         before=read(a.experiment/'control/completion-metrics-verified.json')
         after=read(a.experiment/'control/continue10k/completion-metrics-verified.json')
@@ -41,10 +51,10 @@ def main():
     fc2=read(a.experiment/'manifests/fc2_train.json');calibration=read(a.reference_audit/'calibration.json')
     require(calibration==[fc2[i] for i in protocol['calibration_indices']],'Calibration must remain identical64FC2TRAIN pairs')
     cases=[];sources={};selected={};candidates={}
-    for model in (('S','L') if a.final_sl else ('edge','S','L')):
+    for model in (final_models if a.final_sl else ('edge','S','L')):
         run=a.experiment/'seed42/mixture75_25'/model/'replay';state=read(run/'current.json');status=read(run/'status.json');cfg=state['config']
         if a.final_sl:
-            require(state['step']==status['step']==(80000 if a.final_sl80 else 40000) and status['completed'] and status['source_unchanged'],'Expected complete final path')
+            require(state['step']==status['step']==(80000 if a.final_sl80 or a.final_mixed80 else 40000) and status['completed'] and status['source_unchanged'],'Expected complete final path')
             require(cfg['best_criterion']=='sintel_full_epe_original_pixels','Full1041 must select best')
             history=state['parent_history']+state['history'][1:] if a.final_sl80 else state['history']
             candidates[model]=[dict(step=s['step'],full_epe=s['sintel_full_epe_original_pixels']) for s in history]
@@ -75,9 +85,9 @@ def main():
         case_prefix='final-mixture' if a.final_sl else 'replay-mixture'
         cases.append(dict(id=f'{case_prefix}-{model}-208',model=model,checkpoint=str(prefix),hw=[160,208],
             geometry='mixture',phase='replay',training_arm='mixture75_25',checkpoint_step=step,
-            quantize=(model=='S' if a.final_sl else True),expected_monitor=metric['sintel_epe_original_pixels'],expected_full=choice['full_epe'],
+            quantize=(model in ('S','edge') if a.final_sl else True),expected_monitor=metric['sintel_epe_original_pixels'],expected_full=choice['full_epe'],
             reference_fc2=f'random-{model}-208'))
-    for model in (('L',) if a.final_sl else ('S','L')):
+    for model in (tuple(m for m in final_models if m=='L') if a.final_sl else ('S','L')):
         base=next(c for c in cases if c['model']==model)
         cases.append(dict(base,id=f'{case_prefix}-{model}-224',hw=[160,224],quantize=True,expected_monitor=None,
                           expected_full=None,reference_fc2=f'random-{model}-224'))
@@ -97,6 +107,10 @@ def main():
         protocol.update(final_sl80=True,parent_experiment=str(a.parent_experiment),
             source_stage_summary_sha256={'80k':sha(a.experiment/'control/checkpoints-verified.json')},
             selection='Minimum full1041 EPE across original0..40k and continued41..80k at208; earliest tie. Same weights for224, no PTQ reselection; development set')
+    if a.final_mixed80:
+        protocol.update(final_mixed80=True,final_models=list(final_models),
+            source_stage_summary_sha256={'80k':sha(a.experiment/'control/checkpoints-verified.json')},
+            selection='Minimum full1041 EPE on this independent0..80k single-cosine path at208; earliest tie. Same checkpoint for deployment, no PTQ reselection; development set')
     save(a.out/'cases.json',cases);save(a.out/'protocol.json',protocol);(a.out/'control').mkdir()
     save(a.out/'control/source-checkpoints.json',sources)
     print(json.dumps(dict(prepared=str(a.out),cases=len(cases),selected=selected,candidates=candidates)),flush=True)
