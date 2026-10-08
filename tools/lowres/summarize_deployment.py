@@ -273,13 +273,14 @@ def main():
         expected_ids={'final-mixture-S-208','final-mixture-L-208','final-mixture-L-224'}
         require(replay and set(protocol['selected_steps'])=={'S','L'},'Final S/L protocol differs')
         training_audit_path=Path(protocol['experiment'])/'control/checkpoints-verified.json'
-        require(sha(training_audit_path)==protocol['source_stage_summary_sha256']['40k'],'Training audit changed')
+        final_end=80000 if protocol.get('final_sl80') else 40000
+        require(sha(training_audit_path)==protocol['source_stage_summary_sha256']['80k' if protocol.get('final_sl80') else '40k'],'Training audit changed')
         training_audit=read(training_audit_path)
         require(training_audit['passed'] and training_audit['checkpoint_count']==82
                 and training_audit['best_full1041_verified'],'Final40k checkpoint acceptance missing')
         for model in ('S','L'):
             candidates=protocol['selection_candidates'][model]
-            require([v['step'] for v in candidates]==list(range(0,40001,1000)),'Final40k selection coverage differs')
+            require([v['step'] for v in candidates]==list(range(0,final_end+1,1000)),'Final selection coverage differs')
             require(all(math.isfinite(v['full_epe']) for v in candidates),'Invalid selection score')
             best=min(candidates,key=lambda v:(v['full_epe'],v['step']))
             actual=next(v for v in training_audit['runs'] if v['model']==model)['best']

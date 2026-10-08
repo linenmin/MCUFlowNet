@@ -16,7 +16,12 @@ def main():
     for key in ('experiment','reference-audit','out'):p.add_argument('--'+key,type=Path,required=True)
     p.add_argument('--code-commit',required=True)
     p.add_argument('--final-sl',action='store_true',help='Use verified full-Sintel best on the new40k S/L path')
+    p.add_argument('--final-sl80',action='store_true',help='Use combined0..80k best after the verified full-state continuation')
+    p.add_argument('--parent-experiment',type=Path,help='Original completed40k experiment for FC2 lineage')
     a=p.parse_args()
+    if a.final_sl80:
+        require(a.parent_experiment is not None,'Original40k experiment is required')
+        a.final_sl=True
     require(re.fullmatch(r'[0-9a-f]{40}',a.code_commit),'Expected host-verified commit')
     require(not a.out.exists(),'Never overwrite an earlier audit')
     before=after=completed=None
@@ -39,25 +44,34 @@ def main():
     for model in (('S','L') if a.final_sl else ('edge','S','L')):
         run=a.experiment/'seed42/mixture75_25'/model/'replay';state=read(run/'current.json');status=read(run/'status.json');cfg=state['config']
         if a.final_sl:
-            require(state['step']==status['step']==40000 and status['completed'] and status['source_unchanged'],'Expected complete40k path')
+            require(state['step']==status['step']==(80000 if a.final_sl80 else 40000) and status['completed'] and status['source_unchanged'],'Expected complete final path')
             require(cfg['best_criterion']=='sintel_full_epe_original_pixels','Full1041 must select best')
-            candidates[model]=[dict(step=s['step'],full_epe=s['sintel_full_epe_original_pixels']) for s in state['history']]
+            history=state['parent_history']+state['history'][1:] if a.final_sl80 else state['history']
+            candidates[model]=[dict(step=s['step'],full_epe=s['sintel_full_epe_original_pixels']) for s in history]
         else:
             old=next(s for s in before['scores'] if s['arm']=='mixture75_25' and s['model']==model)
             new=next(s for s in after['scores'] if s['arm']=='mixture75_25' and s['model']==model)
             candidates[model]=[dict(step=step,full_epe=s['final']['sintel_full_epe_original_pixels']) for step,s in ((5000,old),(10000,new))]
         choice=min(candidates[model],key=lambda x:(x['full_epe'],x['step']));step=choice['step'];selected[model]=step
         if not a.final_sl:require(state['step']==status['step']==10000 and status['completed'] and status['source_unchanged'],'Expected complete10k continuation')
-        require(cfg['model']==model and cfg['replay_arm']=='mixture75_25' and cfg['hw']==[160,208]
+        require(cfg['model']==model and (cfg.get('final_sl80') and cfg['counts']==[24,8] if a.final_sl80 else cfg['replay_arm']=='mixture75_25') and cfg['hw']==[160,208]
                 and cfg['seed']==42 and cfg['flow_units']=='resized_pixels_no_clip','Source lineage differs')
-        parent=a.experiment/'source'/model/'fc2/step-010000/model'
+        parent=(a.parent_experiment if a.final_sl80 else a.experiment)/'source'/model/'fc2/step-010000/model'
+        source_sha=cfg['source_sha']
+        if a.final_sl80:
+            original=read(a.parent_experiment/f'seed42/mixture75_25/{model}/replay/current.json')
+            require(original==read(a.experiment/f'source/{model}/replay/current.json'),'Original40k source metadata differs')
+            require(state['parent_history']==original['history'],'Combined parent curve differs')
+            source_sha=original['config']['source_sha']
         baseline=read(a.reference_audit/'scores'/f'random-{model}-208-native/result.json')
-        require(checkpoint_hashes(parent)==baseline['checkpoint_sha256']==cfg['source_sha'],'FC2 parent differs from baseline')
-        prefix=run/f'step-{step:06d}/model';sources[str(prefix)]=checkpoint_hashes(prefix);sources[str(parent)]=checkpoint_hashes(parent)
+        require(checkpoint_hashes(parent)==baseline['checkpoint_sha256']==source_sha,'FC2 parent differs from baseline')
+        prefix=run/f'step-{step:06d}/model'
+        if a.final_sl80 and state['best']['origin']=='original0to40k':prefix=a.experiment/f'source/{model}/replay'/original['best']['checkpoint']
+        sources[str(prefix)]=checkpoint_hashes(prefix);sources[str(parent)]=checkpoint_hashes(parent)
         if a.final_sl:
             require(step==state['best']['step'] and choice['full_epe']==state['best']['epe'],'Recorded best differs')
             require(sources[str(prefix)]==state['best']['source_sha'],'Selected checkpoint SHA differs')
-        metric=next(m for m in state['history'] if m['step']==step)
+        metric=next(m for m in (history if a.final_sl80 else state['history']) if m['step']==step)
         case_prefix='final-mixture' if a.final_sl else 'replay-mixture'
         cases.append(dict(id=f'{case_prefix}-{model}-208',model=model,checkpoint=str(prefix),hw=[160,208],
             geometry='mixture',phase='replay',training_arm='mixture75_25',checkpoint_step=step,
@@ -79,6 +93,10 @@ def main():
         {'5k':sha(a.experiment/'control/completion-metrics-verified.json'),'10k':sha(a.experiment/'control/continue10k/completion-metrics-verified.json')})
     if a.final_sl:
         protocol.update(final_sl=True,experiment=str(a.experiment))
+    if a.final_sl80:
+        protocol.update(final_sl80=True,parent_experiment=str(a.parent_experiment),
+            source_stage_summary_sha256={'80k':sha(a.experiment/'control/checkpoints-verified.json')},
+            selection='Minimum full1041 EPE across original0..40k and continued41..80k at208; earliest tie. Same weights for224, no PTQ reselection; development set')
     save(a.out/'cases.json',cases);save(a.out/'protocol.json',protocol);(a.out/'control').mkdir()
     save(a.out/'control/source-checkpoints.json',sources)
     print(json.dumps(dict(prepared=str(a.out),cases=len(cases),selected=selected,candidates=candidates)),flush=True)
