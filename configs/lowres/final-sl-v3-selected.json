@@ -1,0 +1,56 @@
+{
+  "recipe": "FINAL-SL-03",
+  "experiment": "LOWRES-BENCH-01/final-sl80k-20261008",
+  "training_commit": "2a9556cd6f70163f4fc3ecea3143ff9e144bd44c",
+  "selection": "Minimum full1041 original-pixel EPE across original0..40k and continued41..80k, common208; earliest tie",
+  "seed": 42,
+  "held_out_test": false,
+  "full_manifest_sha256": "755a35b08a3f215e3ded3cfcc967a78d04ed2c486fca1d570ba74a12ee9a4489",
+  "calibration_sha256": "064639d67c6f5cf7ec2a7b512c936bee16c12463c2711b5d9478141226fe0816",
+  "selected": [
+    {
+      "model": "S",
+      "step": 63000,
+      "checkpoint": "seed42/mixture75_25/S/replay/step-063000/model",
+      "checkpoint_sha256": {
+        "model.index": "d843f6fa201fe7506780332c0620a849094a706fb5e6c0213147d719a08ace17",
+        "model.data-00000-of-00001": "79b173dab479d0391bb5e5ee4f7c9f81260b12d8cb49220895c0fa1194a96ae5"
+      },
+      "selection_hw": [
+        160,
+        208
+      ],
+      "deploy_hw": [
+        160,
+        208
+      ],
+      "native_selection_epe": 6.566600692580508,
+      "float_epe": 6.566600715444789,
+      "int8_epe": 6.657555882311376,
+      "int8_tflite_sha256": "780082711122aacee50aec9604f838e0249debedbbd28b1d2b3cbd334d929745",
+      "float_tflite_sha256": "362389b51696941d0b39a5d996d472589e62789e7fd97b0d529f9441f7a4c5b0"
+    },
+    {
+      "model": "L",
+      "step": 47000,
+      "checkpoint": "seed42/mixture75_25/L/replay/step-047000/model",
+      "checkpoint_sha256": {
+        "model.index": "0b6b408641b9e985085b761eb9cfe8a77063a641f8f1a283b498c61e7cabd00a",
+        "model.data-00000-of-00001": "f91f5f1325e16914efa0accb8e3bac725cef1bad6bb45a529ac0bcf2a5a193c9"
+      },
+      "selection_hw": [
+        160,
+        208
+      ],
+      "deploy_hw": [
+        160,
+        224
+      ],
+      "native_selection_epe": 6.497959547099102,
+      "float_epe": 6.444903392061286,
+      "int8_epe": 6.529129325256184,
+      "int8_tflite_sha256": "aa5c09d3fcfafdbb72a9bcc71d64bfc9a9b9bfa524d36b47d52aa9f61281eee9",
+      "float_tflite_sha256": "62cbf51e7816cdc0399ca81ade783fd1d095c2916cd7f36a84ee9edc9b8d79b2"
+    }
+  ]
+}
