@@ -1,0 +1,45 @@
+{
+  "recipe": "FINAL-EDGE-04",
+  "experiment": "LOWRES-BENCH-01/final-sl-cos80k-20261008/edge-reference",
+  "training_commit": "40da67d967c38ae2040e6882a9fea9db1643230f",
+  "deployment_postprocessing_commit": "d73282cb724f5408fe6698b0ec121fbbe98f80dd",
+  "selection": "Minimum full1041 original-pixel EPE across independent0..80k path, common208; earliest tie; INT8 excluded",
+  "seed": 42,
+  "held_out_test": false,
+  "full_manifest_sha256": "755a35b08a3f215e3ded3cfcc967a78d04ed2c486fca1d570ba74a12ee9a4489",
+  "calibration_sha256": "064639d67c6f5cf7ec2a7b512c936bee16c12463c2711b5d9478141226fe0816",
+  "selected": [
+    {
+      "model": "edge",
+      "step": 50000,
+      "checkpoint": "seed42/mixture75_25/edge/replay/step-050000/model",
+      "checkpoint_sha256": {
+        "model.data-00000-of-00001": "d64153118d74af3d22f846fe513c0a0ede442c5b4c9ccf3e9b187ac3014d03ce",
+        "model.index": "d25984bbb7e39989f22a8bac3d93814a8b9c9933f0908d30a31f771f699c99a3"
+      },
+      "selection_hw": [
+        160,
+        208
+      ],
+      "deploy_hw": [
+        160,
+        208
+      ],
+      "native_selection_epe": 6.321970929995923,
+      "float_epe": 6.321970935204885,
+      "int8_epe": 6.416543645983788,
+      "int8_tflite_sha256": "f845bf2f0752950fd359cababecd11f8df89f8bfbc209c4c94ce3bfa089bcd6f",
+      "float_tflite_sha256": "0df2281b1e6be0299c836ecb708b177532f57c614b75a06526cb1dacdab8b149",
+      "vela_compiled_sha256": "721ccfcdfd363aa548696c7106985cc010c256165b35947cb8b288f3fa939b8f",
+      "vela_sram_peak_kib": 1430.0,
+      "vela_estimated_fps": 6.144518868734474,
+      "board_validated": false
+    }
+  ],
+  "evidence": {
+    "deployment_summary_sha256": "2230b002ac0bab722991f25864b229560e90d37c38976196f6cabd69c8366903",
+    "checkpoint_audit_sha256": "2e847c1820b083060747923ce0ef5dc371f56f67d6a2ad07fc6eccc2c1344cd4"
+  },
+  "no_new_training": true,
+  "no_board_testing": true
+}
