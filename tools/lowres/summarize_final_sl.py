@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 from summarize_deployment import sha,checkpoint_hashes,require,reduce_records,subset,agree_tree,paired
 
 
-def finalize(experiment,references):
+def finalize(experiment,references,parent_experiment=None):
     """Bind the verified deployment to unchanged public and stronger Edge rows."""
     control=experiment/'control';audit=experiment/'deployment-audit'
     deployment=json.loads((audit/'summary.json').read_text())
@@ -28,7 +28,7 @@ def finalize(experiment,references):
             agree_tree(result[group],reduce_records(subset(rows,group)),case['id']+'/'+kind+'/'+group)
         sources[str(report_path)]=sha(report_path);sources[str(pair_path)]=sha(pair_path)
         return result,rows
-    public=experiment/'public-edge-deployment'
+    public=(parent_experiment or experiment)/'public-edge-deployment'
     public_summary_path=public/'summary.json'
     require(public_summary_path.is_file(),'Original Edge AREA FP32/INT8 acceptance must finish')
     public_summary=json.loads(public_summary_path.read_text())
@@ -96,25 +96,28 @@ def finalize(experiment,references):
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--experiment',type=Path,required=True)
+    p.add_argument('--final-sl80',action='store_true')
+    p.add_argument('--parent-experiment',type=Path,help='Original40k run holding the unchanged public Edge audit')
     p.add_argument('--reference-audit',type=Path,action='append',default=[],help='Three preserved stronger Edge audits for final closure')
     a=p.parse_args();control=a.experiment/'control'
+    end=80000 if a.final_sl80 else 40000
     audit=json.loads((control/'checkpoints-verified.json').read_text())
     if not(audit['passed'] and audit['checkpoint_count']==82 and audit['best_full1041_verified']):
         raise ValueError('Completed checkpoint audit required')
     figure,axis=plt.subplots(figsize=(7,4))
     rows=[]
-    text=['# FINAL-SL-02：40k训练结果','',
+    text=[f'# {"FINAL-SL-03：80k续训结果" if a.final_sl80 else "FINAL-SL-02：40k训练结果"}','',
           '同208×160、同1041对Sintel Final、中心416×1024原图像素、不截断。下表为原生TF FP32。',
-          '每1000步评分，在新混合阶段0–40k选最低点；开发集选优，只有seed42。','',
-          '| 模型 | 起点FC2随机10k | 混合阶段最佳 | 最佳步数 | 40k末步 | 最佳相对起点改善 |',
+          f'每1000步评分，在混合阶段0–{end//1000}k选最低点；开发集选优，只有seed42。','',
+          f'| 模型 | 起点FC2随机10k | 混合阶段最佳 | 最佳步数 | {end//1000}k末步 | 最佳相对起点改善 |',
           '|---|---:|---:|---:|---:|---:|']
     for run in audit['runs']:
         model=run['model'];state=json.loads((a.experiment/f'seed42/mixture75_25/{model}/replay/current.json').read_text())
-        if not(state['step']==40000 and state['best']==run['best']):
+        if not(state['step']==end and state['best']==run['best']):
             raise ValueError('Training state and verified best differ')
-        history=state['history']
-        if [v['step'] for v in history]!=list(range(0,40001,1000)):
-            raise ValueError('Curve must have all41 boundaries')
+        history=state['parent_history']+state['history'][1:] if a.final_sl80 else state['history']
+        if [v['step'] for v in history]!=list(range(0,end+1,1000)):
+            raise ValueError('Curve coverage differs')
         steps=[v['step']/1000 for v in history];epes=[v['sintel_full_epe_original_pixels'] for v in history]
         line,=axis.plot(steps,epes,label=f'MCUFlowNet-{model}',linewidth=1.7)
         axis.scatter([run['best']['step']/1000],[run['best']['epe']],marker='*',s=100,color=line.get_color(),zorder=4)
@@ -122,22 +125,24 @@ def main():
             rows.append(dict(model=model,step=v['step'],sintel_full1041_epe=v['sintel_full_epe_original_pixels'],
                 sintel_monitor845_epe=v['sintel_epe_original_pixels'],fc2_val_epe=v['fc2_val_epe_pixels'],
                 ft3d_test_epe=v['ft3d_test_epe_pixels'],learning_rate=v.get('lr','')))
-        start=run['initial']['sintel_full_epe_original_pixels'];best=run['best'];final=run['final']
+        start=history[0]['sintel_full_epe_original_pixels'];best=run['best'];final=run['final']
         text.append(f"| {model} | {start:.4f} | {best['epe']:.4f} | {best['step']} | {final['sintel_full_epe_original_pixels']:.4f} | {start-best['epe']:.4f} |")
     axis.set(xlabel='Mixed-stage updates (thousands)',ylabel='Sintel Final EPE (original pixels)',
-        title='FINAL-SL-02: shared208x160; seed42; development selection')
+        title=f'{"FINAL-SL-03" if a.final_sl80 else "FINAL-SL-02"}: shared208x160; seed42; development selection')
+    if a.final_sl80:axis.axvline(40,color='gray',linestyle='--',linewidth=.8)
     axis.grid(alpha=.22);axis.legend();figure.tight_layout()
     for suffix in ('png','svg'):figure.savefig(control/f'training-curves.{suffix}',dpi=180)
     plt.close(figure)
     with (control/'training-curves.csv').open('w',newline='',encoding='utf-8') as f:
         writer=csv.DictWriter(f,fieldnames=list(rows[0]));writer.writeheader();writer.writerows(rows)
-    text.extend(['','两条均从FC2随机10k模型与BN开始；混合阶段开始重置Adam，一次余弦3e−6→1e−6。',
+    text.extend(['','两条均从FC2随机10k模型与BN开始；混合阶段开始重置Adam，一次余弦3e−6→1e−6。'+
+        ('40k之后继承全部变量及游标，固定1e−6续至80k。' if a.final_sl80 else ''),
         'batch32为24FC2随机区域＋8FT3D整图，源／清单及82份检查点验收通过。',
-        '部署使用S39k及L32k同一权重，S208、L224。量化或224分数不参与重新选优。',
+        '部署使用各自完整208评分选中的同一权重，S208、L224。量化或224分数不参与重新选优。',
         '曲线、检查点验收、全部逐点评分与完整配置保存在本运行目录。',''])
     (control/'results-summary.md').write_text('\n'.join(text),encoding='utf-8')
     print(json.dumps(dict(passed=True,models=2,curve_points=len(rows),summary=str(control/'results-summary.md'))),flush=True)
-    if a.reference_audit:finalize(a.experiment,a.reference_audit)
+    if a.reference_audit:finalize(a.experiment,a.reference_audit,a.parent_experiment)
 
 
 if __name__=='__main__':main()
