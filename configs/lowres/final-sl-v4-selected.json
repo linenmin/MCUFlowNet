@@ -1,0 +1,73 @@
+{
+  "recipe": "FINAL-SL-04",
+  "experiment": "LOWRES-BENCH-01/final-sl-cos80k-20261008",
+  "training_commit": "2dc6be53be4881266c9d839873cab963fcac3540",
+  "postprocessing_commit": "3a4598cb35e8ceb70f9a95fe18adec17562b5d5f",
+  "selection": "Minimum full1041 original-pixel EPE across this independent0..80k path, common208; earliest tie; 224 and INT8 excluded from selection",
+  "seed": 42,
+  "held_out_test": false,
+  "full_manifest_sha256": "755a35b08a3f215e3ded3cfcc967a78d04ed2c486fca1d570ba74a12ee9a4489",
+  "calibration_sha256": "064639d67c6f5cf7ec2a7b512c936bee16c12463c2711b5d9478141226fe0816",
+  "selected": [
+    {
+      "model": "S",
+      "step": 63000,
+      "checkpoint": "seed42/mixture75_25/S/replay/step-063000/model",
+      "checkpoint_sha256": {
+        "model.data-00000-of-00001": "94521053d8f20bbceaf89ff374a814e99914511144b68bab88aa27d365c06180",
+        "model.index": "e89c6ef265be89111227232c1194720bcea028f513602ba1372ae8c703e8e1d9"
+      },
+      "selection_hw": [
+        160,
+        208
+      ],
+      "deploy_hw": [
+        160,
+        208
+      ],
+      "native_selection_epe": 6.372572340971307,
+      "float_epe": 6.372572829576316,
+      "int8_epe": 6.464546472742519,
+      "int8_tflite_sha256": "c393d4584fb115f4a082693eb8c0fe47387e7188bdec2818cc42f94c413452eb",
+      "float_tflite_sha256": "296674675ae5fe25e790229c01dc26b4b5d7bfa1c8adb81e89b3c86021ec00cf",
+      "vela_compiled_sha256": "fb5b376908a2b24e6ed9c83989e5c1c86b9b463b38d34f47421663cc0ec709ee",
+      "vela_sram_peak_kib": 1170.0,
+      "vela_estimated_fps": 10.509063502408665,
+      "board_validated": false
+    },
+    {
+      "model": "L",
+      "step": 60000,
+      "checkpoint": "seed42/mixture75_25/L/replay/step-060000/model",
+      "checkpoint_sha256": {
+        "model.data-00000-of-00001": "cbbd4640f412a1638c2fd9ca1901ec6b166e3be8e68e5723173e17a555496467",
+        "model.index": "10a872fa96e22d5e92a1eb96178ae72b3c59428a221b1c159b0dab26d6701a21"
+      },
+      "selection_hw": [
+        160,
+        208
+      ],
+      "deploy_hw": [
+        160,
+        224
+      ],
+      "native_selection_epe": 6.2134687874579315,
+      "float_epe": 6.1462963786086,
+      "int8_epe": 6.243106550308528,
+      "int8_tflite_sha256": "abd4ebeaa32cb3791e94c95bab282abe75bbf91c3a5620282264e423bafd84f8",
+      "float_tflite_sha256": "d0ddc67efd5f84e13e03aa5842bf70bf8102b6fec375c7950063c6e846498c98",
+      "vela_compiled_sha256": "47c5e7c4292eb3b8294549232adb5fe1f500ee9d869dbf5801e808bdd69df416",
+      "vela_sram_peak_kib": 1260.0,
+      "vela_estimated_fps": 5.972874489151244,
+      "board_validated": false
+    }
+  ],
+  "evidence": {
+    "audit": "deployment-audit/summary.json",
+    "audit_sha256": "7cfbc02e7cb027de06680c7b32d515fd3777679baa38845758a642d55feb97b8",
+    "cpu_checkpoint_audit": "control/checkpoints-verified.json",
+    "cpu_checkpoint_audit_sha256": "b86dbd9b45dde12d8e2cb8855700bd30b702f0bdac308887cec7c99daa152e18"
+  },
+  "scope": "S/L fixed selections and offline PTQ/Vela passed; independently added Edge common80k and full-root archive pending",
+  "no_board_testing": true
+}
