@@ -96,7 +96,7 @@ def finalize(experiment,references,parent_experiment=None,edge_experiment=None):
         table.append(dict(model=qcase['model'],origin=recipe['recipe_id']+'; selected full1041 development EPE',case=name,
             input_hw=qcase['hw'],selected_step=qcase['checkpoint_step'],fp32=f['full']['epe'],
             fp32_runtime='TFLite CPU',int8=q['full']['epe'],**compiled_row(audit,qcase,q)))
-    comparisons=[]
+    comparisons=[];selected_steps=dict(deployment['protocol']['selected_steps'])
     if edge_experiment:
         eroot=edge_experiment/'deployment-audit';esummary=json.loads((eroot/'summary.json').read_text())
         ecpu=json.loads((edge_experiment/'control/checkpoints-verified.json').read_text())
@@ -112,6 +112,7 @@ def finalize(experiment,references,parent_experiment=None,edge_experiment=None):
         for name in ('sintel_full.json','sintel_monitor.json','calibration.json'):
             require(sha(eroot/name)==sha(audit/name),'Common Edge scoring/calibration manifest differs')
         ecase,=esummary['protocol']['cases']
+        selected_steps['edge']=ecase['checkpoint_step']
         ef,_=load_score(eroot,ecase,'float');eq,erows=load_score(eroot,ecase,'int8')
         require(ef['full']['epe']==esummary['scores'][ecase['id']+'-float']['full']['epe']
                 and eq['full']['epe']==esummary['scores'][ecase['id']+'-int8']['full']['epe'],
@@ -141,7 +142,7 @@ def finalize(experiment,references,parent_experiment=None,edge_experiment=None):
         for name,rows in candidate_rows.items():
             comparisons.append(dict(reference=refcase['id'],other=name,
                 same_resolution=(name.endswith('S-208')),int8=paired(qrows,rows)))
-    result=dict(passed=True,selected_steps=deployment['protocol']['selected_steps'],full_pairs=1041,
+    result=dict(passed=True,selected_steps=selected_steps,full_pairs=1041,
         seed=42,held_out_test=False,no_new_training=True,no_board_test=True,
         deployment_summary_sha256=sha(audit/'summary.json'),original_edge_unchanged_verified=True,
         full_manifest_sha256=sha(audit/'sintel_full.json'),calibration_sha256=sha(audit/'calibration.json'),
