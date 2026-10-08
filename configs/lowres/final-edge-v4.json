@@ -130,7 +130,7 @@
     "calibration": "existing fixed64 FC2 TRAIN whole-frame pairs; no Sintel",
     "calibration_sha256": "064639d67c6f5cf7ec2a7b512c936bee16c12463c2711b5d9478141226fe0816",
     "qat": false,
-    "checkpoint_selection": "Use the already selected FP32 best; same checkpoint at S208 or L224; do not select by INT8 score"
+    "checkpoint_selection": "Use the already selected shared208 FP32 best at Edge208; do not select by INT8 score"
   },
   "evaluation": {
     "dataset": "Sintel training Final development evaluation",
@@ -235,13 +235,13 @@
     "secondary": "FC2val640 and fixed FT3D TEST640 monitoring; no performance-driven extension beyond80000"
   },
   "baseline_policy": {
-    "main": "released author checkpoints; no new retraining",
+    "main": "Same-recipe Edge80k reference; preserve original public Edge as a separate published-weight reference",
     "edge_deployment_input_hw": [
       160,
       208
     ],
     "preserve_original_input_range_bn_and_flow_units": true,
-    "supplement": "retain existing adapted and same-training Edge results",
+    "supplement": "Retain stronger existing adapted/pureFT/mixed10k Edge variants; do not choose a weak reference to claim superiority",
     "old_edge_7p7712_protocol": "historical resize pipeline; require matching AREA reevaluation before final shared table"
   },
   "selection_history": "User approved adding Edge after S/L already started. Same80k budget, shared seed/data/geometry/optimizer/loss and full1041 candidate rule; starts later, compare matched steps.",
