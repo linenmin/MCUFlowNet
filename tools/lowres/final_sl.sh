@@ -8,6 +8,15 @@ software="$project/software"
 [[ -f "$software/READY" && -f "$root/control/READY.json" ]]
 cd "$repo";commit=$(git rev-parse HEAD)
 [[ "$commit" == "$(cat "$root/control/code-commit.txt")" && -z "$(git status --porcelain)" ]]
+read -r steps initial_lr < <(python3 - "$root/control/submission.json" <<'PY'
+import json,sys
+a=json.load(open(sys.argv[1]));assert a['approved'] and a['models']==['S','L'] and a['source_step']==10000
+steps=a['steps'];initial=a.get('initial_lr',3e-6)
+assert (a['recipe_id'],steps,initial) in [('FINAL-SL-02',40000,3e-6),('FINAL-SL-04',80000,3e-5)]
+assert a.get('min_lr',1e-6)==1e-6
+print(steps,initial)
+PY
+)
 run_python() {
     apptainer exec --nv --cleanenv --bind "$software:$software" --bind "$repo:$repo:ro" --bind "$data:$data:ro" \
       --bind "$root:$root" --bind "$root/source:$root/source:ro" --pwd "$repo" \
@@ -19,20 +28,22 @@ run_python() {
 index=${SLURM_ARRAY_TASK_ID:?};[[ "$index" =~ ^[01]$ ]];models=(S L);model=${models[$index]}
 if [[ "$mode" == probe ]];then
     run_python tools/lowres/verify_geometry.py --final-sl --model "$model" --data "$data" \
-      --manifests "$root/manifests" --source "$root/source/$model/fc2" --out "$root/probe/$model" --code-commit "$commit"
+      --manifests "$root/manifests" --source "$root/source/$model/fc2" --out "$root/probe/$model" --code-commit "$commit" \
+      --final-sl-steps "$steps" --final-sl-initial-lr "$initial_lr"
 elif [[ "$mode" == train ]];then
-    python3 - "$root/probe/$model/acceptance.json" "$commit" <<'PY'
+    python3 - "$root/probe/$model/acceptance.json" "$commit" "$steps" "$initial_lr" <<'PY'
 import json,sys
 a=json.load(open(sys.argv[1]));assert a['passed'] and a['source_unchanged'] and a['code_commit']==sys.argv[2]
-assert a['planned_steps']==40000 and a['full_sintel_best_selection'] and a['continuous_resumed_all_variables_exact']
+assert a['planned_steps']==int(sys.argv[3]) and a['full_sintel_best_selection'] and a['continuous_resumed_all_variables_exact']
+assert a['initial_lr']==float(sys.argv[4]) and a['min_lr']==1e-6
 assert a['actual_gpu_backprop'] and a['adam_reset_at_stage_start']
 PY
     out="$root/seed42/mixture75_25/$model/replay"
-    if [[ -f "$out/status.json" ]] && python3 - "$out/status.json" <<'PY'
+    if [[ -f "$out/status.json" ]] && python3 - "$out/status.json" "$steps" <<'PY'
 import json,sys
-a=json.load(open(sys.argv[1]));sys.exit(0 if a['completed'] and a['step']==40000 and a['total_steps']==40000 else 1)
+a=json.load(open(sys.argv[1]));sys.exit(0 if a['completed'] and a['step']==int(sys.argv[2]) and a['total_steps']==int(sys.argv[2]) else 1)
 PY
-    then printf 'Fixed40000 budget already completed.\n';exit 0;fi
+    then printf 'Fixed%s budget already completed.\n' "$steps";exit 0;fi
     if [[ -n "${5:-}" ]];then
         [[ "$5" =~ ^[0-9]+$ ]];previous="${5}_${index}"
         state=$(sacct --clusters="$SLURM_CLUSTER_NAME" -X -nP -j "$previous" -o JobID,State | awk -F'|' -v id="$previous" '$1==id {print $2}')
@@ -40,7 +51,7 @@ PY
     fi
     args=(--model "$model" --geometry random --phase fc2 --fc2-source-step 10000 --replay-arm mixture75_25 \
       --select-full-sintel --data "$data" --manifests "$root/manifests" --source "$root/source/$model/fc2" \
-      --out "$out" --steps 40000 --eval-every 1000 --initial-lr 3e-6 --min-lr 1e-6 --seed 42 --workers 8 --code-commit "$commit")
+      --out "$out" --steps "$steps" --eval-every 1000 --initial-lr "$initial_lr" --min-lr 1e-6 --seed 42 --workers 8 --code-commit "$commit")
     [[ ! -f "$out/current.json" ]] || args+=(--resume)
     run_python tools/lowres/geometry_compare.py "${args[@]}"
 else printf 'Unknown mode: %s\n' "$mode" >&2;exit 2;fi

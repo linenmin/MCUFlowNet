@@ -77,13 +77,18 @@ def main():
     assert recipe.get('phase','fc2') == a.phase
     assert recipe.get('cluster','mindwell') == a.cluster
     if a.direction_compare or a.replay_compare or a.lr_compare or a.final_sl:
-        assert a.phase=='fc2' and recipe['source_step']==(40000 if a.final_sl and a.final_sl_end_step==80000 else 10000)
+        source_step=40000 if a.final_sl and a.final_sl_end_step==80000 else 10000
+        if a.final_sl and recipe.get('recipe_id')=='FINAL-SL-04':
+            assert a.final_sl_end_step==80000 and recipe['initial_lr']==3e-5 and recipe['min_lr']==1e-6
+            source_step=10000
+        assert a.phase=='fc2' and recipe['source_step']==source_step
         if a.final_sl:assert recipe['steps']==a.final_sl_end_step and recipe['models']==['S','L']
         elif a.lr_compare:assert recipe['phase_steps']==10000 and recipe['pilot_steps']==5000
         else:assert recipe['pilot_steps']==5000 and recipe['steps']==10000 if a.replay_compare else recipe['steps']==5000
         partition=recipe['partition']
         assert partition in ({'gpu_b200'} if a.cluster=='mindwell' else {'gpu_a100','gpu_h100'})
-    controller=c/(('final-sl80.controller.sh' if a.final_sl_end_step==80000 else 'final-sl.controller.sh') if a.final_sl else ('replay-lr.controller.sh' if a.lr_compare else ('replay.controller.sh' if a.replay_compare else ('direction_compare.controller.sh' if a.direction_compare else 'geometry_compare.controller-v2.sh'))))
+    final_controller='final-sl.controller.sh' if recipe.get('recipe_id')=='FINAL-SL-04' else ('final-sl80.controller.sh' if a.final_sl_end_step==80000 else 'final-sl.controller.sh')
+    controller=c/(final_controller if a.final_sl else ('replay-lr.controller.sh' if a.lr_compare else ('replay.controller.sh' if a.replay_compare else ('direction_compare.controller.sh' if a.direction_compare else 'geometry_compare.controller-v2.sh'))))
     assert controller.is_file() and subprocess.check_output(['git','-C',repo,'rev-parse','HEAD'],text=True).strip()==recipe['code_commit']
     name=('flow-final-recovery-' if a.final_sl else ('flow-lr-recovery-' if a.lr_compare else ('flow-replay-recovery-' if a.replay_compare else ('flow-direction-recovery-' if a.direction_compare else 'flow-geometry-recovery-'))))+a.parent
     attempts=[];deadline=time.monotonic()+8*60

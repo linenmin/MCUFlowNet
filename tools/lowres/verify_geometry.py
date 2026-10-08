@@ -19,7 +19,9 @@ def main():
     p.add_argument('--phase',choices=['fc2','ft3d'],default='fc2')
     p.add_argument('--direction-compare',action='store_true')
     p.add_argument('--replay-compare',action='store_true')
-    p.add_argument('--final-sl',action='store_true',help='Verify one40k full-Sintel mixed recipe without adding comparison arms')
+    p.add_argument('--final-sl',action='store_true',help='Verify one full-Sintel mixed recipe without adding comparison arms')
+    p.add_argument('--final-sl-steps',type=int,choices=[40000,80000],default=40000)
+    p.add_argument('--final-sl-initial-lr',type=float,default=3e-6)
     p.add_argument('--reference-repo',type=Path)
     a=p.parse_args(); a.out.mkdir(parents=True,exist_ok=False)
     assert not a.final_sl or (a.model in ('S','L') and a.phase=='fc2')
@@ -27,7 +29,7 @@ def main():
     source=a.source/parent['checkpoint']; before=checkpoint_sha(source)
     base=[sys.executable,str(Path(__file__).with_name('geometry_compare.py')),'--model',a.model,
           '--data',str(a.data),'--manifests',str(a.manifests),'--source',str(a.source),
-          '--steps','40000' if a.final_sl else '5','--eval-every','1','--probe']
+          '--steps',str(a.final_sl_steps) if a.final_sl else '5','--eval-every','1','--probe']
     if a.final_sl:base+=['--stop-after-steps','5','--select-full-sintel']
     base+=['--phase',a.phase]
     if a.direction_compare:
@@ -47,7 +49,7 @@ def main():
                 flags=['--geometry','random' if a.direction_compare else arm]
                 if a.replay_compare or a.final_sl:
                     flags=['--replay-arm',arm,'--phase','ft3d' if arm=='ft3d_only' else 'fc2',
-                           '--geometry','whole' if arm=='ft3d_only' else 'random','--initial-lr','3e-6']
+                           '--geometry','whole' if arm=='ft3d_only' else 'random','--initial-lr',str(a.final_sl_initial_lr) if a.final_sl else '3e-6']
                     if arm!='ft3d_only': flags+=['--fc2-source-step','10000']
                 if a.direction_compare:
                     flags+=['--direction-weights',*[str(x) for x in (direction if arm=='weighted' else (1,1))]]
@@ -82,7 +84,7 @@ def main():
         assert audit['model_bn_exact'] and audit['adam_slots_zero'] and audit['adam_beta_powers_reset']
         status=json.loads((continuous/'status.json').read_text())
         assert status['completed']==(not a.final_sl)
-        if a.final_sl:assert status['step']==5 and status['total_steps']==40000 and status['pilot_completed']
+        if a.final_sl:assert status['step']==5 and status['total_steps']==a.final_sl_steps and status['pilot_completed']
         if a.direction_compare or a.replay_compare or a.final_sl:
             execution=json.loads((continuous/'gpu-execution.json').read_text())
             assert any('Backprop' in n['op'] and 'GPU' in n['device'] for n in execution['convolutions'])
@@ -98,10 +100,12 @@ def main():
         assert all(x['last_batch']==x['samples']==32 for x in left['history'][1:])
         assert left['config']['best_criterion']=='sintel_full_epe_original_pixels'
         assert left['config']['full_evaluation_steps']=='every_committed_boundary'
-        assert all(x['lr']==step_lr(x['step'],40000,3e-6,1e-6) for x in left['history'][1:])
-        assert step_lr(1,40000,3e-6,1e-6)==3e-6 and step_lr(40000,40000,3e-6,1e-6)==1e-6
+        assert all(x['lr']==step_lr(x['step'],a.final_sl_steps,a.final_sl_initial_lr,1e-6) for x in left['history'][1:])
+        assert step_lr(1,a.final_sl_steps,a.final_sl_initial_lr,1e-6)==a.final_sl_initial_lr
+        assert step_lr(a.final_sl_steps,a.final_sl_steps,a.final_sl_initial_lr,1e-6)==1e-6
         result=dict(passed=True,probe_only=True,model=a.model,arms=results,source_unchanged=checkpoint_sha(source)==before,
-                    full_sintel_best_selection=True,best_checkpoint_sha_matches=True,planned_steps=40000,
+                    full_sintel_best_selection=True,best_checkpoint_sha_matches=True,planned_steps=a.final_sl_steps,
+                    initial_lr=a.final_sl_initial_lr,min_lr=1e-6,
                     continuous_resumed_all_variables_exact=True,actual_gpu_backprop=True,adam_reset_at_stage_start=True,
                     mixed_cursor_acceptance=cursor,tensorflow=tf.__version__,code_commit=a.code_commit)
         (a.out/'acceptance.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result),flush=True);return
