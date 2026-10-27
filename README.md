@@ -1,3 +1,7 @@
+> [!IMPORTANT]
+> **This repository has moved to GitLab:** <https://gitlab.kuleuven.be/emedia-research-lab/esat-stadius/mcuflownet/mcuflownet>
+> It is archived here and no longer updated. The GitLab release contains the code, firmware, simulation setup and weights of the ISCAS 2027 paper.
+
 <div align="center">
 
 # MCUFlowNet

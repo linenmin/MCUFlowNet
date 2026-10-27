@@ -1,3 +1,7 @@
+> [!IMPORTANT]
+> **本仓库已迁移到 GitLab：** <https://gitlab.kuleuven.be/emedia-research-lab/esat-stadius/mcuflownet/mcuflownet>
+> 这里已归档，不再更新。GitLab 上的版本包含 ISCAS 2027 论文的代码、固件、仿真环境和权重。
+
 <div align="center">
 
 # MCUFlowNet
